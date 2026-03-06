@@ -3,7 +3,8 @@ use std::process;
 use clap::Parser;
 use exspec_core::config::ExspecConfig;
 use exspec_core::extractor::{FileAnalysis, LanguageExtractor};
-use exspec_core::output::{compute_exit_code, format_json, format_terminal};
+use exspec_core::metrics::compute_metrics;
+use exspec_core::output::{compute_exit_code, format_json, format_sarif, format_terminal};
 use exspec_core::rules::{evaluate_file_rules, evaluate_project_rules, evaluate_rules, Config};
 use exspec_lang_python::PythonExtractor;
 use exspec_lang_typescript::TypeScriptExtractor;
@@ -129,6 +130,17 @@ fn load_config(config_path: &str) -> Config {
 }
 
 const SUPPORTED_LANGUAGES: &[&str] = &["python", "typescript"];
+const SUPPORTED_FORMATS: &[&str] = &["terminal", "json", "sarif"];
+
+fn validate_format(format: &str) -> Result<(), String> {
+    if !SUPPORTED_FORMATS.contains(&format) {
+        return Err(format!(
+            "unsupported format: {format}. Supported: {}",
+            SUPPORTED_FORMATS.join(", ")
+        ));
+    }
+    Ok(())
+}
 
 fn validate_lang(lang: Option<&str>) -> Result<(), String> {
     if let Some(l) = lang {
@@ -146,6 +158,11 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = validate_lang(cli.lang.as_deref()) {
+        eprintln!("error: {e}");
+        process::exit(1);
+    }
+
+    if let Err(e) = validate_format(&cli.format) {
         eprintln!("error: {e}");
         process::exit(1);
     }
@@ -203,9 +220,12 @@ fn main() {
         &config,
     ));
 
+    let metrics = compute_metrics(&all_analyses, source_file_count);
+
     let output = match cli.format.as_str() {
-        "json" => format_json(&diagnostics, test_file_count, all_functions.len()),
-        _ => format_terminal(&diagnostics, test_file_count, all_functions.len()),
+        "json" => format_json(&diagnostics, test_file_count, all_functions.len(), &metrics),
+        "sarif" => format_sarif(&diagnostics),
+        _ => format_terminal(&diagnostics, test_file_count, all_functions.len(), &metrics),
     };
 
     if !output.is_empty() {
@@ -774,5 +794,63 @@ mod tests {
         let diags = evaluate_project_rules(5, 10, &Config::default());
         assert!(diags.iter().any(|d| d.rule.0 == "T007"));
         assert!(diags[0].message.contains("5/10"));
+    }
+
+    // --- --format validation ---
+
+    #[test]
+    fn validate_format_terminal_ok() {
+        assert!(validate_format("terminal").is_ok());
+    }
+
+    #[test]
+    fn validate_format_json_ok() {
+        assert!(validate_format("json").is_ok());
+    }
+
+    #[test]
+    fn validate_format_sarif_ok() {
+        assert!(validate_format("sarif").is_ok());
+    }
+
+    #[test]
+    fn validate_format_unknown_error() {
+        let err = validate_format("xml").unwrap_err();
+        assert!(err.contains("xml"), "should mention invalid format: {err}");
+        assert!(err.contains("terminal"), "should list supported: {err}");
+        assert!(err.contains("json"), "should list supported: {err}");
+        assert!(err.contains("sarif"), "should list supported: {err}");
+    }
+
+    #[test]
+    fn validate_format_ai_prompt_error() {
+        let err = validate_format("ai-prompt").unwrap_err();
+        assert!(err.contains("ai-prompt"));
+    }
+
+    // --- E2E: SARIF output ---
+
+    #[test]
+    fn e2e_sarif_output_valid_json() {
+        let output = exspec_core::output::format_sarif(&[]);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["version"], "2.1.0");
+    }
+
+    // --- E2E: JSON metrics ---
+
+    #[test]
+    fn e2e_json_metrics_has_values() {
+        let extractor = PythonExtractor::new();
+        let path = fixture_path("python", "t001_pass.py");
+        let source = std::fs::read_to_string(&path).unwrap();
+        let analyses = vec![extractor.extract_file_analysis(&source, &path)];
+        let metrics = exspec_core::metrics::compute_metrics(&analyses, 1);
+        let diags = evaluate_rules(&analyses[0].functions, &Config::default());
+        let output =
+            exspec_core::output::format_json(&diags, 1, analyses[0].functions.len(), &metrics);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert!(parsed["metrics"].is_object());
+        assert!(parsed["metrics"]["assertion_density_avg"].is_number());
     }
 }

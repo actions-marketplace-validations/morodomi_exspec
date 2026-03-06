@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 3B cleanup complete. Phase 3C (SARIF output + metrics) next.
+Phase 3C complete (MVP). Phase 4 (dev-crew hook integration) next.
 
 ## Progress
 
@@ -14,7 +14,7 @@ Phase 3B cleanup complete. Phase 3C (SARIF output + metrics) next.
 | 3A - TypeScript + inline suppression + output polish | DONE |
 | 3B - T004-T008 + .exspec.toml parsing | DONE |
 | 3B cleanup - Discovered items | DONE |
-| 3C - SARIF output + metrics | NOT STARTED |
+| 3C - SARIF output + metrics | DONE |
 | 4 - dev-crew hook integration | NOT STARTED |
 | 5 - Tier 2 + PHP/Rust support | NOT STARTED |
 | 6 - Tier 3 (AI Prompt generation) | NOT STARTED |
@@ -44,15 +44,25 @@ Phase 3B cleanup complete. Phase 3C (SARIF output + metrics) next.
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 168 passing | -- |
+| Tests | 203 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
+
+## Output Formats
+
+| Format | Status |
+|--------|--------|
+| terminal | Supported |
+| json | Supported |
+| sarif | Supported (v2.1.0) |
+| ai-prompt | Tier 3 (Phase 6) |
 
 ## Open Issues (v0.2)
 
 - pass_count semantic: rename to fn_pass or document scope
 - hidden directory skip: add test + document
-- --format validation: reject unknown values
 - NaN/Inf guard on ratio config
 - Performance: diagnostics single-pass, clone elimination
 - TestCase false positive filtering (tree-sitter query)
+- OutputFormat enum vs string dispatch sync (issue #5)
+- compute_metrics ratio clamp (issue #5)
