@@ -76,6 +76,7 @@ pub struct Config {
     pub mock_max: usize,
     pub mock_class_max: usize,
     pub test_max_lines: usize,
+    pub parameterized_min_ratio: f64,
     pub disabled_rules: Vec<RuleId>,
 }
 
@@ -85,6 +86,7 @@ impl Default for Config {
             mock_max: 5,
             mock_class_max: 3,
             test_max_lines: 50,
+            parameterized_min_ratio: 0.1,
             disabled_rules: Vec::new(),
         }
     }
@@ -152,6 +154,123 @@ pub fn evaluate_rules(functions: &[TestFunction], config: &Config) -> Vec<Diagno
                 details: None,
             });
         }
+    }
+
+    diagnostics
+}
+
+use crate::extractor::FileAnalysis;
+
+pub fn evaluate_file_rules(analyses: &[FileAnalysis], config: &Config) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    for analysis in analyses {
+        if analysis.functions.is_empty() {
+            continue;
+        }
+
+        // T006: low-assertion-density
+        // Total assertions / total functions < 1.0 → WARN
+        // Skip if ALL functions are assertion-free (T001 handles those entirely)
+        if !is_disabled(config, "T006") {
+            let has_any_asserting = analysis
+                .functions
+                .iter()
+                .any(|f| f.analysis.assertion_count > 0);
+
+            if has_any_asserting {
+                let total_assertions: usize = analysis
+                    .functions
+                    .iter()
+                    .map(|f| f.analysis.assertion_count)
+                    .sum();
+                let density = total_assertions as f64 / analysis.functions.len() as f64;
+
+                if density < 1.0 {
+                    diagnostics.push(Diagnostic {
+                        rule: RuleId::new("T006"),
+                        severity: Severity::Warn,
+                        file: analysis.file.clone(),
+                        line: None,
+                        message: format!(
+                            "low-assertion-density: {density:.2} assertions/test (threshold: 1.0)",
+                        ),
+                        details: None,
+                    });
+                }
+            }
+        }
+
+        // T004: no-parameterized
+        if !is_disabled(config, "T004") {
+            let total = analysis.functions.len();
+            let ratio = analysis.parameterized_count as f64 / total as f64;
+            if ratio < config.parameterized_min_ratio {
+                diagnostics.push(Diagnostic {
+                    rule: RuleId::new("T004"),
+                    severity: Severity::Info,
+                    file: analysis.file.clone(),
+                    line: None,
+                    message: format!(
+                        "no-parameterized: {}/{} ({:.0}%) parameterized, threshold: {:.0}%",
+                        analysis.parameterized_count,
+                        total,
+                        ratio * 100.0,
+                        config.parameterized_min_ratio * 100.0,
+                    ),
+                    details: None,
+                });
+            }
+        }
+
+        // T005: pbt-missing
+        if !is_disabled(config, "T005") && !analysis.has_pbt_import {
+            diagnostics.push(Diagnostic {
+                rule: RuleId::new("T005"),
+                severity: Severity::Info,
+                file: analysis.file.clone(),
+                line: None,
+                message: "pbt-missing: no property-based testing library imported".to_string(),
+                details: None,
+            });
+        }
+
+        // T008: no-contract
+        if !is_disabled(config, "T008") && !analysis.has_contract_import {
+            diagnostics.push(Diagnostic {
+                rule: RuleId::new("T008"),
+                severity: Severity::Info,
+                file: analysis.file.clone(),
+                line: None,
+                message: "no-contract: no contract/schema library imported".to_string(),
+                details: None,
+            });
+        }
+    }
+
+    diagnostics
+}
+
+pub fn evaluate_project_rules(
+    test_file_count: usize,
+    source_file_count: usize,
+    config: &Config,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    // T007: test-source-ratio
+    if !is_disabled(config, "T007") && source_file_count > 0 {
+        let ratio = test_file_count as f64 / source_file_count as f64;
+        diagnostics.push(Diagnostic {
+            rule: RuleId::new("T007"),
+            severity: Severity::Info,
+            file: "<project>".to_string(),
+            line: None,
+            message: format!(
+                "test-source-ratio: {test_file_count}/{source_file_count} ({ratio:.2})",
+            ),
+            details: None,
+        });
     }
 
     diagnostics
@@ -395,5 +514,314 @@ mod tests {
         let rule_ids: Vec<&str> = diags.iter().map(|d| d.rule.0.as_str()).collect();
         assert!(rule_ids.contains(&"T001"));
         assert!(rule_ids.contains(&"T003"));
+    }
+
+    // === File-level rules ===
+
+    fn make_file_analysis(
+        file: &str,
+        functions: Vec<TestFunction>,
+        has_pbt_import: bool,
+        has_contract_import: bool,
+        parameterized_count: usize,
+    ) -> FileAnalysis {
+        FileAnalysis {
+            file: file.to_string(),
+            functions,
+            has_pbt_import,
+            has_contract_import,
+            parameterized_count,
+        }
+    }
+
+    // --- T006: low-assertion-density ---
+
+    #[test]
+    fn t006_low_density_produces_warn() {
+        // density = total_assertions / total_functions (all functions, including assertion-free).
+        // Fires when density < 1.0 and at least one function has assertions.
+        // When ALL functions are assertion-free, T006 does not fire (T001 handles those).
+        let funcs = vec![
+            make_func(
+                "test_a",
+                TestAnalysis {
+                    assertion_count: 1,
+                    ..Default::default()
+                },
+            ),
+            make_func(
+                "test_b",
+                TestAnalysis {
+                    assertion_count: 0,
+                    ..Default::default()
+                },
+            ),
+            make_func(
+                "test_c",
+                TestAnalysis {
+                    assertion_count: 0,
+                    ..Default::default()
+                },
+            ),
+        ];
+        let analyses = vec![make_file_analysis("test.py", funcs, false, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(diags.iter().any(|d| d.rule.0 == "T006"));
+    }
+
+    #[test]
+    fn t006_high_density_no_diagnostic() {
+        let funcs = vec![
+            make_func(
+                "test_a",
+                TestAnalysis {
+                    assertion_count: 2,
+                    ..Default::default()
+                },
+            ),
+            make_func(
+                "test_b",
+                TestAnalysis {
+                    assertion_count: 1,
+                    ..Default::default()
+                },
+            ),
+        ];
+        let analyses = vec![make_file_analysis("test.py", funcs, false, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(!diags.iter().any(|d| d.rule.0 == "T006"));
+    }
+
+    #[test]
+    fn t006_all_assertion_free_no_diagnostic() {
+        let funcs = vec![
+            make_func(
+                "test_a",
+                TestAnalysis {
+                    assertion_count: 0,
+                    ..Default::default()
+                },
+            ),
+            make_func(
+                "test_b",
+                TestAnalysis {
+                    assertion_count: 0,
+                    ..Default::default()
+                },
+            ),
+        ];
+        let analyses = vec![make_file_analysis("test.py", funcs, false, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(
+            !diags.iter().any(|d| d.rule.0 == "T006"),
+            "T006 should not fire when all functions are assertion-free (T001 handles)"
+        );
+    }
+
+    #[test]
+    fn t006_empty_file_no_diagnostic() {
+        let analyses = vec![make_file_analysis("test.py", vec![], false, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(!diags.iter().any(|d| d.rule.0 == "T006"));
+    }
+
+    #[test]
+    fn t006_disabled_no_diagnostic() {
+        let funcs = vec![
+            make_func(
+                "test_a",
+                TestAnalysis {
+                    assertion_count: 1,
+                    ..Default::default()
+                },
+            ),
+            make_func(
+                "test_b",
+                TestAnalysis {
+                    assertion_count: 0,
+                    ..Default::default()
+                },
+            ),
+        ];
+        let analyses = vec![make_file_analysis("test.py", funcs, false, false, 0)];
+        let config = Config {
+            disabled_rules: vec![RuleId::new("T006")],
+            ..Config::default()
+        };
+        let diags = evaluate_file_rules(&analyses, &config);
+        assert!(!diags.iter().any(|d| d.rule.0 == "T006"));
+    }
+
+    // --- T004: no-parameterized ---
+
+    #[test]
+    fn t004_no_parameterized_produces_info() {
+        let funcs = vec![make_func(
+            "test_a",
+            TestAnalysis {
+                assertion_count: 1,
+                ..Default::default()
+            },
+        )];
+        let analyses = vec![make_file_analysis("test.py", funcs, false, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(diags.iter().any(|d| d.rule.0 == "T004"));
+        let t004 = diags.iter().find(|d| d.rule.0 == "T004").unwrap();
+        assert_eq!(t004.severity, Severity::Info);
+    }
+
+    #[test]
+    fn t004_sufficient_parameterized_no_diagnostic() {
+        let funcs = vec![
+            make_func(
+                "test_a",
+                TestAnalysis {
+                    assertion_count: 1,
+                    ..Default::default()
+                },
+            ),
+            make_func(
+                "test_b",
+                TestAnalysis {
+                    assertion_count: 1,
+                    ..Default::default()
+                },
+            ),
+        ];
+        // parameterized_count=1 out of 2 → ratio 0.5 >= 0.1
+        let analyses = vec![make_file_analysis("test.py", funcs, false, false, 1)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(!diags.iter().any(|d| d.rule.0 == "T004"));
+    }
+
+    #[test]
+    fn t004_custom_threshold() {
+        let funcs = vec![
+            make_func(
+                "test_a",
+                TestAnalysis {
+                    assertion_count: 1,
+                    ..Default::default()
+                },
+            ),
+            make_func(
+                "test_b",
+                TestAnalysis {
+                    assertion_count: 1,
+                    ..Default::default()
+                },
+            ),
+        ];
+        // 1/2 = 0.5, threshold 0.6 → should fire
+        let analyses = vec![make_file_analysis("test.py", funcs, false, false, 1)];
+        let config = Config {
+            parameterized_min_ratio: 0.6,
+            ..Config::default()
+        };
+        let diags = evaluate_file_rules(&analyses, &config);
+        assert!(diags.iter().any(|d| d.rule.0 == "T004"));
+    }
+
+    // --- T005: pbt-missing ---
+
+    #[test]
+    fn t005_no_pbt_import_produces_info() {
+        let funcs = vec![make_func(
+            "test_a",
+            TestAnalysis {
+                assertion_count: 1,
+                ..Default::default()
+            },
+        )];
+        let analyses = vec![make_file_analysis("test.py", funcs, false, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(diags.iter().any(|d| d.rule.0 == "T005"));
+    }
+
+    #[test]
+    fn t005_has_pbt_import_no_diagnostic() {
+        let funcs = vec![make_func(
+            "test_a",
+            TestAnalysis {
+                assertion_count: 1,
+                ..Default::default()
+            },
+        )];
+        let analyses = vec![make_file_analysis("test.py", funcs, true, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(!diags.iter().any(|d| d.rule.0 == "T005"));
+    }
+
+    #[test]
+    fn t005_empty_file_no_diagnostic() {
+        let analyses = vec![make_file_analysis("test.py", vec![], false, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(!diags.iter().any(|d| d.rule.0 == "T005"));
+    }
+
+    // --- T008: no-contract ---
+
+    #[test]
+    fn t008_no_contract_import_produces_info() {
+        let funcs = vec![make_func(
+            "test_a",
+            TestAnalysis {
+                assertion_count: 1,
+                ..Default::default()
+            },
+        )];
+        let analyses = vec![make_file_analysis("test.py", funcs, false, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(diags.iter().any(|d| d.rule.0 == "T008"));
+    }
+
+    #[test]
+    fn t008_has_contract_import_no_diagnostic() {
+        let funcs = vec![make_func(
+            "test_a",
+            TestAnalysis {
+                assertion_count: 1,
+                ..Default::default()
+            },
+        )];
+        let analyses = vec![make_file_analysis("test.py", funcs, false, true, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(!diags.iter().any(|d| d.rule.0 == "T008"));
+    }
+
+    #[test]
+    fn t008_empty_file_no_diagnostic() {
+        let analyses = vec![make_file_analysis("test.py", vec![], false, false, 0)];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(!diags.iter().any(|d| d.rule.0 == "T008"));
+    }
+
+    // === Project-level rules ===
+
+    // --- T007: test-source-ratio ---
+
+    #[test]
+    fn t007_produces_info_with_ratio() {
+        let diags = evaluate_project_rules(5, 10, &Config::default());
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, RuleId::new("T007"));
+        assert_eq!(diags[0].severity, Severity::Info);
+        assert!(diags[0].message.contains("5/10"));
+    }
+
+    #[test]
+    fn t007_zero_source_files_no_diagnostic() {
+        let diags = evaluate_project_rules(5, 0, &Config::default());
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn t007_disabled_no_diagnostic() {
+        let config = Config {
+            disabled_rules: vec![RuleId::new("T007")],
+            ..Config::default()
+        };
+        let diags = evaluate_project_rules(5, 10, &config);
+        assert!(diags.is_empty());
     }
 }

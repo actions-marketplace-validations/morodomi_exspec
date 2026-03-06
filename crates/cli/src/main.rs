@@ -1,9 +1,10 @@
 use std::process;
 
 use clap::Parser;
-use exspec_core::extractor::LanguageExtractor;
+use exspec_core::config::ExspecConfig;
+use exspec_core::extractor::{FileAnalysis, LanguageExtractor};
 use exspec_core::output::{compute_exit_code, format_json, format_terminal};
-use exspec_core::rules::{evaluate_rules, Config};
+use exspec_core::rules::{evaluate_file_rules, evaluate_project_rules, evaluate_rules, Config};
 use exspec_lang_python::PythonExtractor;
 use exspec_lang_typescript::TypeScriptExtractor;
 use ignore::WalkBuilder;
@@ -26,6 +27,10 @@ pub struct Cli {
     /// Treat WARN as errors (exit 1)
     #[arg(long)]
     pub strict: bool,
+
+    /// Path to config file
+    #[arg(long, default_value = ".exspec.toml")]
+    pub config: String,
 }
 
 fn is_python_test_file(path: &str) -> bool {
@@ -45,6 +50,14 @@ fn is_typescript_test_file(path: &str) -> bool {
         || filename.ends_with(".test.tsx")
         || filename.ends_with(".spec.ts")
         || filename.ends_with(".spec.tsx")
+}
+
+fn is_python_source_file(path: &str) -> bool {
+    path.ends_with(".py")
+}
+
+fn is_typescript_source_file(path: &str) -> bool {
+    path.ends_with(".ts") || path.ends_with(".tsx")
 }
 
 fn discover_test_files(root: &str, lang: Option<&str>) -> (Vec<String>, Vec<String>) {
@@ -70,15 +83,48 @@ fn discover_test_files(root: &str, lang: Option<&str>) -> (Vec<String>, Vec<Stri
     (python_files, ts_files)
 }
 
+fn count_source_files(root: &str, lang: Option<&str>) -> usize {
+    let walker = WalkBuilder::new(root).hidden(true).git_ignore(true).build();
+    let include_python = lang.is_none() || lang == Some("python");
+    let include_ts = lang.is_none() || lang == Some("typescript");
+
+    let mut count = 0;
+    for entry in walker.flatten() {
+        if entry.file_type().is_some_and(|ft| ft.is_file()) {
+            let path = entry.path().to_string_lossy().to_string();
+            let is_source = (include_python && is_python_source_file(&path))
+                || (include_ts && is_typescript_source_file(&path));
+            let is_test = is_python_test_file(&path) || is_typescript_test_file(&path);
+            if is_source && !is_test {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn load_config(config_path: &str) -> Config {
+    match std::fs::read_to_string(config_path) {
+        Ok(content) => match ExspecConfig::from_toml(&content) {
+            Ok(ec) => ec.into(),
+            Err(e) => {
+                eprintln!("warning: invalid config {config_path}: {e}");
+                Config::default()
+            }
+        },
+        Err(_) => Config::default(),
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
-    let config = Config::default();
+    let config = load_config(&cli.config);
     let py_extractor = PythonExtractor::new();
     let ts_extractor = TypeScriptExtractor::new();
 
     let (python_files, ts_files) = discover_test_files(&cli.path, cli.lang.as_deref());
-    let total_files = python_files.len() + ts_files.len();
-    let mut all_functions = Vec::new();
+    let test_file_count = python_files.len() + ts_files.len();
+    let mut all_analyses: Vec<FileAnalysis> = Vec::new();
 
     for file_path in &python_files {
         let source = match std::fs::read_to_string(file_path) {
@@ -88,8 +134,7 @@ fn main() {
                 continue;
             }
         };
-        let funcs = py_extractor.extract_test_functions(&source, file_path);
-        all_functions.extend(funcs);
+        all_analyses.push(py_extractor.extract_file_analysis(&source, file_path));
     }
 
     for file_path in &ts_files {
@@ -100,15 +145,33 @@ fn main() {
                 continue;
             }
         };
-        let funcs = ts_extractor.extract_test_functions(&source, file_path);
-        all_functions.extend(funcs);
+        all_analyses.push(ts_extractor.extract_file_analysis(&source, file_path));
     }
 
-    let diagnostics = evaluate_rules(&all_functions, &config);
+    // Collect all functions for per-function rules (T001-T003)
+    let all_functions: Vec<_> = all_analyses
+        .iter()
+        .flat_map(|a| a.functions.iter())
+        .cloned()
+        .collect();
+
+    // Per-function rules (T001-T003)
+    let mut diagnostics = evaluate_rules(&all_functions, &config);
+
+    // Per-file rules (T004-T006, T008)
+    diagnostics.extend(evaluate_file_rules(&all_analyses, &config));
+
+    // Per-project rules (T007)
+    let source_file_count = count_source_files(&cli.path, cli.lang.as_deref());
+    diagnostics.extend(evaluate_project_rules(
+        test_file_count,
+        source_file_count,
+        &config,
+    ));
 
     let output = match cli.format.as_str() {
-        "json" => format_json(&diagnostics, total_files, all_functions.len()),
-        _ => format_terminal(&diagnostics, total_files, all_functions.len()),
+        "json" => format_json(&diagnostics, test_file_count, all_functions.len()),
+        _ => format_terminal(&diagnostics, test_file_count, all_functions.len()),
     };
 
     if !output.is_empty() {
@@ -160,6 +223,18 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn cli_config_option() {
+        let cli = Cli::try_parse_from(["exspec", "--config", "my.toml", "."]).unwrap();
+        assert_eq!(cli.config, "my.toml");
+    }
+
+    #[test]
+    fn cli_config_default() {
+        let cli = Cli::try_parse_from(["exspec"]).unwrap();
+        assert_eq!(cli.config, ".exspec.toml");
+    }
+
     // --- Python file discovery ---
 
     #[test]
@@ -195,6 +270,21 @@ mod tests {
         assert!(!is_typescript_test_file("foo.ts"));
         assert!(!is_typescript_test_file("helper.ts"));
         assert!(!is_typescript_test_file("test.js"));
+    }
+
+    // --- Source file detection ---
+
+    #[test]
+    fn is_python_source_file_detects_py() {
+        assert!(is_python_source_file("foo.py"));
+        assert!(!is_python_source_file("foo.ts"));
+    }
+
+    #[test]
+    fn is_typescript_source_file_detects_ts_tsx() {
+        assert!(is_typescript_source_file("foo.ts"));
+        assert!(is_typescript_source_file("foo.tsx"));
+        assert!(!is_typescript_source_file("foo.py"));
     }
 
     // --- Multi-language discovery ---
@@ -246,6 +336,43 @@ mod tests {
         assert!(py.iter().all(|f| !f.contains(".venv")));
     }
 
+    // --- Source file counting ---
+
+    #[test]
+    fn count_source_files_excludes_test_files() {
+        let dir =
+            std::env::temp_dir().join(format!("exspec_test_src_count_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("app.py"), "").unwrap();
+        std::fs::write(dir.join("test_app.py"), "").unwrap();
+        std::fs::write(dir.join("utils.ts"), "").unwrap();
+        std::fs::write(dir.join("utils.test.ts"), "").unwrap();
+        let count = count_source_files(dir.to_str().unwrap(), None);
+        assert_eq!(count, 2); // app.py + utils.ts (test files excluded)
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- Config loading ---
+
+    #[test]
+    fn load_config_missing_file_returns_default() {
+        let config = load_config("/nonexistent/.exspec.toml");
+        let defaults = Config::default();
+        assert_eq!(config.mock_max, defaults.mock_max);
+    }
+
+    #[test]
+    fn load_config_valid_file() {
+        let config_path = format!(
+            "{}/tests/fixtures/config/valid.toml",
+            env!("CARGO_MANIFEST_DIR").replace("/crates/cli", ""),
+        );
+        let config = load_config(&config_path);
+        assert_eq!(config.mock_max, 10);
+        assert_eq!(config.disabled_rules.len(), 2);
+    }
+
     // --- E2E ---
 
     fn fixture_path(lang: &str, name: &str) -> String {
@@ -281,7 +408,35 @@ mod tests {
         evaluate_rules(&all_functions, &config)
     }
 
-    // Python E2E
+    fn analyze_python_file_rules(
+        files: &[&str],
+        config: &Config,
+    ) -> Vec<exspec_core::rules::Diagnostic> {
+        let extractor = PythonExtractor::new();
+        let mut analyses = Vec::new();
+        for name in files {
+            let path = fixture_path("python", name);
+            let source = std::fs::read_to_string(&path).unwrap();
+            analyses.push(extractor.extract_file_analysis(&source, &path));
+        }
+        evaluate_file_rules(&analyses, config)
+    }
+
+    fn analyze_ts_file_rules(
+        files: &[&str],
+        config: &Config,
+    ) -> Vec<exspec_core::rules::Diagnostic> {
+        let extractor = TypeScriptExtractor::new();
+        let mut analyses = Vec::new();
+        for name in files {
+            let path = fixture_path("typescript", name);
+            let source = std::fs::read_to_string(&path).unwrap();
+            analyses.push(extractor.extract_file_analysis(&source, &path));
+        }
+        evaluate_file_rules(&analyses, config)
+    }
+
+    // Python E2E (T001-T003)
     #[test]
     fn e2e_t001_violation_detected() {
         let diags = analyze_python_fixtures(&["t001_violation.py"]);
@@ -306,7 +461,7 @@ mod tests {
         assert!(diags.is_empty(), "expected no diagnostics, got: {diags:?}");
     }
 
-    // TypeScript E2E
+    // TypeScript E2E (T001-T003)
     #[test]
     fn e2e_ts_t001_violation_detected() {
         let diags = analyze_ts_fixtures(&["t001_violation.test.ts"]);
@@ -352,5 +507,186 @@ mod tests {
             !diags.iter().any(|d| d.rule.0 == "T002"),
             "T002 should be suppressed"
         );
+    }
+
+    // --- E2E: File-level rules (T004-T008) ---
+
+    // T004
+    #[test]
+    fn e2e_t004_violation_detected() {
+        let diags = analyze_python_file_rules(&["t004_violation.py"], &Config::default());
+        assert!(
+            diags.iter().any(|d| d.rule.0 == "T004"),
+            "expected T004, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_t004_pass_no_t004() {
+        let diags = analyze_python_file_rules(&["t004_pass.py"], &Config::default());
+        assert!(
+            !diags.iter().any(|d| d.rule.0 == "T004"),
+            "expected no T004, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_ts_t004_violation_detected() {
+        let diags = analyze_ts_file_rules(&["t004_violation.test.ts"], &Config::default());
+        assert!(
+            diags.iter().any(|d| d.rule.0 == "T004"),
+            "expected T004, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_ts_t004_pass_no_t004() {
+        let diags = analyze_ts_file_rules(&["t004_pass.test.ts"], &Config::default());
+        assert!(
+            !diags.iter().any(|d| d.rule.0 == "T004"),
+            "expected no T004, got: {diags:?}"
+        );
+    }
+
+    // T005
+    #[test]
+    fn e2e_t005_violation_detected() {
+        let diags = analyze_python_file_rules(&["t005_violation.py"], &Config::default());
+        assert!(
+            diags.iter().any(|d| d.rule.0 == "T005"),
+            "expected T005, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_t005_pass_no_t005() {
+        let diags = analyze_python_file_rules(&["t005_pass.py"], &Config::default());
+        assert!(
+            !diags.iter().any(|d| d.rule.0 == "T005"),
+            "expected no T005, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_ts_t005_violation_detected() {
+        let diags = analyze_ts_file_rules(&["t005_violation.test.ts"], &Config::default());
+        assert!(
+            diags.iter().any(|d| d.rule.0 == "T005"),
+            "expected T005, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_ts_t005_pass_no_t005() {
+        let diags = analyze_ts_file_rules(&["t005_pass.test.ts"], &Config::default());
+        assert!(
+            !diags.iter().any(|d| d.rule.0 == "T005"),
+            "expected no T005, got: {diags:?}"
+        );
+    }
+
+    // T006
+    #[test]
+    fn e2e_t006_violation_detected() {
+        let diags = analyze_python_file_rules(&["t006_violation.py"], &Config::default());
+        assert!(
+            diags.iter().any(|d| d.rule.0 == "T006"),
+            "expected T006, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_t006_pass_no_t006() {
+        let diags = analyze_python_file_rules(&["t006_pass.py"], &Config::default());
+        assert!(
+            !diags.iter().any(|d| d.rule.0 == "T006"),
+            "expected no T006, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_ts_t006_violation_detected() {
+        let diags = analyze_ts_file_rules(&["t006_violation.test.ts"], &Config::default());
+        assert!(
+            diags.iter().any(|d| d.rule.0 == "T006"),
+            "expected T006, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_ts_t006_pass_no_t006() {
+        let diags = analyze_ts_file_rules(&["t006_pass.test.ts"], &Config::default());
+        assert!(
+            !diags.iter().any(|d| d.rule.0 == "T006"),
+            "expected no T006, got: {diags:?}"
+        );
+    }
+
+    // T008
+    #[test]
+    fn e2e_t008_violation_detected() {
+        let diags = analyze_python_file_rules(&["t008_violation.py"], &Config::default());
+        assert!(
+            diags.iter().any(|d| d.rule.0 == "T008"),
+            "expected T008, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_t008_pass_no_t008() {
+        let diags = analyze_python_file_rules(&["t008_pass.py"], &Config::default());
+        assert!(
+            !diags.iter().any(|d| d.rule.0 == "T008"),
+            "expected no T008, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_ts_t008_violation_detected() {
+        let diags = analyze_ts_file_rules(&["t008_violation.test.ts"], &Config::default());
+        assert!(
+            diags.iter().any(|d| d.rule.0 == "T008"),
+            "expected T008, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_ts_t008_pass_no_t008() {
+        let diags = analyze_ts_file_rules(&["t008_pass.test.ts"], &Config::default());
+        assert!(
+            !diags.iter().any(|d| d.rule.0 == "T008"),
+            "expected no T008, got: {diags:?}"
+        );
+    }
+
+    // --- E2E: Config disable + file-level rules ---
+
+    #[test]
+    fn e2e_config_disables_t004() {
+        let config = Config {
+            disabled_rules: vec![exspec_core::rules::RuleId::new("T004")],
+            ..Config::default()
+        };
+        let diags = analyze_python_file_rules(&["t004_violation.py"], &config);
+        assert!(!diags.iter().any(|d| d.rule.0 == "T004"));
+    }
+
+    #[test]
+    fn e2e_config_disables_t005() {
+        let config = Config {
+            disabled_rules: vec![exspec_core::rules::RuleId::new("T005")],
+            ..Config::default()
+        };
+        let diags = analyze_python_file_rules(&["t005_violation.py"], &config);
+        assert!(!diags.iter().any(|d| d.rule.0 == "T005"));
+    }
+
+    // --- E2E: T007 project-level ---
+
+    #[test]
+    fn e2e_t007_produces_ratio() {
+        let diags = evaluate_project_rules(5, 10, &Config::default());
+        assert!(diags.iter().any(|d| d.rule.0 == "T007"));
+        assert!(diags[0].message.contains("5/10"));
     }
 }

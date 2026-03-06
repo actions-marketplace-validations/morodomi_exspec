@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
-use exspec_core::extractor::{LanguageExtractor, TestAnalysis, TestFunction};
+use exspec_core::extractor::{FileAnalysis, LanguageExtractor, TestAnalysis, TestFunction};
 use exspec_core::suppress::parse_suppression;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
@@ -10,6 +10,9 @@ const TEST_FUNCTION_QUERY: &str = include_str!("../queries/test_function.scm");
 const ASSERTION_QUERY: &str = include_str!("../queries/assertion.scm");
 const MOCK_USAGE_QUERY: &str = include_str!("../queries/mock_usage.scm");
 const MOCK_ASSIGNMENT_QUERY: &str = include_str!("../queries/mock_assignment.scm");
+const PARAMETERIZED_QUERY: &str = include_str!("../queries/parameterized.scm");
+const IMPORT_PBT_QUERY: &str = include_str!("../queries/import_pbt.scm");
+const IMPORT_CONTRACT_QUERY: &str = include_str!("../queries/import_contract.scm");
 
 fn python_language() -> tree_sitter::Language {
     tree_sitter_python::LANGUAGE.into()
@@ -23,6 +26,9 @@ static TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static MOCK_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static MOCK_ASSIGN_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static PARAMETERIZED_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static IMPORT_PBT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static IMPORT_CONTRACT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct PythonExtractor;
 
@@ -58,6 +64,20 @@ fn count_captures(query: &Query, capture_name: &str, node: Node, source: &[u8]) 
         count += m.captures.iter().filter(|c| c.index == idx).count();
     }
     count
+}
+
+fn has_any_match(query: &Query, capture_name: &str, node: Node, source: &[u8]) -> bool {
+    let idx = query
+        .capture_index_for_name(capture_name)
+        .expect("capture not found");
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, node, source);
+    while let Some(m) = matches.next() {
+        if m.captures.iter().any(|c| c.index == idx) {
+            return true;
+        }
+    }
+    false
 }
 
 fn collect_mock_class_names(query: &Query, node: Node, source: &[u8]) -> Vec<String> {
@@ -101,6 +121,123 @@ struct TestMatch {
     decorated_start_row: Option<usize>,
 }
 
+fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec<TestFunction> {
+    let test_query = cached_query(&TEST_QUERY_CACHE, TEST_FUNCTION_QUERY);
+    let assertion_query = cached_query(&ASSERTION_QUERY_CACHE, ASSERTION_QUERY);
+    let mock_query = cached_query(&MOCK_QUERY_CACHE, MOCK_USAGE_QUERY);
+    let mock_assign_query = cached_query(&MOCK_ASSIGN_QUERY_CACHE, MOCK_ASSIGNMENT_QUERY);
+
+    let name_idx = test_query
+        .capture_index_for_name("name")
+        .expect("no @name capture");
+    let function_idx = test_query
+        .capture_index_for_name("function")
+        .expect("no @function capture");
+    let decorated_idx = test_query
+        .capture_index_for_name("decorated")
+        .expect("no @decorated capture");
+
+    let source_bytes = source.as_bytes();
+
+    let mut test_matches = Vec::new();
+    let mut decorated_fn_ids = std::collections::HashSet::new();
+    {
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(test_query, root, source_bytes);
+        while let Some(m) = matches.next() {
+            let name_capture = match m.captures.iter().find(|c| c.index == name_idx) {
+                Some(c) => c,
+                None => continue,
+            };
+            let name = match name_capture.node.utf8_text(source_bytes) {
+                Ok(s) => s.to_string(),
+                Err(_) => continue,
+            };
+
+            let decorated_capture = m.captures.iter().find(|c| c.index == decorated_idx);
+            let fn_capture = m.captures.iter().find(|c| c.index == function_idx);
+
+            if let Some(dec) = decorated_capture {
+                let inner_fn = dec
+                    .node
+                    .child_by_field_name("definition")
+                    .unwrap_or(dec.node);
+                decorated_fn_ids.insert(inner_fn.id());
+                test_matches.push(TestMatch {
+                    name,
+                    fn_node_id: inner_fn.id(),
+                    fn_start_byte: inner_fn.start_byte(),
+                    fn_end_byte: inner_fn.end_byte(),
+                    fn_start_row: inner_fn.start_position().row,
+                    fn_end_row: inner_fn.end_position().row,
+                    decorated_start_byte: Some(dec.node.start_byte()),
+                    decorated_end_byte: Some(dec.node.end_byte()),
+                    decorated_start_row: Some(dec.node.start_position().row),
+                });
+            } else if let Some(fn_c) = fn_capture {
+                test_matches.push(TestMatch {
+                    name,
+                    fn_node_id: fn_c.node.id(),
+                    fn_start_byte: fn_c.node.start_byte(),
+                    fn_end_byte: fn_c.node.end_byte(),
+                    fn_start_row: fn_c.node.start_position().row,
+                    fn_end_row: fn_c.node.end_position().row,
+                    decorated_start_byte: None,
+                    decorated_end_byte: None,
+                    decorated_start_row: None,
+                });
+            }
+        }
+    }
+
+    test_matches.retain(|tm| {
+        tm.decorated_start_byte.is_some() || !decorated_fn_ids.contains(&tm.fn_node_id)
+    });
+
+    let mut functions = Vec::new();
+    for tm in &test_matches {
+        let fn_node = match root.descendant_for_byte_range(tm.fn_start_byte, tm.fn_end_byte) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let line = tm.fn_start_row + 1;
+        let end_line = tm.fn_end_row + 1;
+        let line_count = end_line - line + 1;
+
+        let assertion_count = count_captures(assertion_query, "assertion", fn_node, source_bytes);
+
+        let mock_scope = match (tm.decorated_start_byte, tm.decorated_end_byte) {
+            (Some(start), Some(end)) => root
+                .descendant_for_byte_range(start, end)
+                .unwrap_or(fn_node),
+            _ => fn_node,
+        };
+        let mock_count = count_captures(mock_query, "mock", mock_scope, source_bytes);
+
+        let mock_classes = collect_mock_class_names(mock_assign_query, fn_node, source_bytes);
+
+        let suppress_row = tm.decorated_start_row.unwrap_or(tm.fn_start_row);
+        let suppressed_rules = extract_suppression_from_previous_line(source, suppress_row);
+
+        functions.push(TestFunction {
+            name: tm.name.clone(),
+            file: file_path.to_string(),
+            line,
+            end_line,
+            analysis: TestAnalysis {
+                assertion_count,
+                mock_count,
+                mock_classes,
+                line_count,
+                suppressed_rules,
+            },
+        });
+    }
+
+    functions
+}
+
 impl LanguageExtractor for PythonExtractor {
     fn extract_test_functions(&self, source: &str, file_path: &str) -> Vec<TestFunction> {
         let mut parser = Self::parser();
@@ -108,128 +245,46 @@ impl LanguageExtractor for PythonExtractor {
             Some(t) => t,
             None => return Vec::new(),
         };
+        extract_functions_from_tree(source, file_path, tree.root_node())
+    }
 
-        let test_query = cached_query(&TEST_QUERY_CACHE, TEST_FUNCTION_QUERY);
-        let assertion_query = cached_query(&ASSERTION_QUERY_CACHE, ASSERTION_QUERY);
-        let mock_query = cached_query(&MOCK_QUERY_CACHE, MOCK_USAGE_QUERY);
-        let mock_assign_query = cached_query(&MOCK_ASSIGN_QUERY_CACHE, MOCK_ASSIGNMENT_QUERY);
-
-        let name_idx = test_query
-            .capture_index_for_name("name")
-            .expect("no @name capture");
-        let function_idx = test_query
-            .capture_index_for_name("function")
-            .expect("no @function capture");
-        let decorated_idx = test_query
-            .capture_index_for_name("decorated")
-            .expect("no @decorated capture");
-
-        let source_bytes = source.as_bytes();
-        let root = tree.root_node();
-
-        // Collect test matches first (StreamingIterator borrows cursor)
-        // Decorated matches take priority; track fn_node_ids to deduplicate.
-        let mut test_matches = Vec::new();
-        let mut decorated_fn_ids = std::collections::HashSet::new();
-        {
-            let mut cursor = QueryCursor::new();
-            let mut matches = cursor.matches(test_query, root, source_bytes);
-            while let Some(m) = matches.next() {
-                let name_capture = match m.captures.iter().find(|c| c.index == name_idx) {
-                    Some(c) => c,
-                    None => continue,
+    fn extract_file_analysis(&self, source: &str, file_path: &str) -> FileAnalysis {
+        let mut parser = Self::parser();
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => {
+                return FileAnalysis {
+                    file: file_path.to_string(),
+                    functions: Vec::new(),
+                    has_pbt_import: false,
+                    has_contract_import: false,
+                    parameterized_count: 0,
                 };
-                let name = match name_capture.node.utf8_text(source_bytes) {
-                    Ok(s) => s.to_string(),
-                    Err(_) => continue,
-                };
-
-                let decorated_capture = m.captures.iter().find(|c| c.index == decorated_idx);
-                let fn_capture = m.captures.iter().find(|c| c.index == function_idx);
-
-                if let Some(dec) = decorated_capture {
-                    let inner_fn = dec
-                        .node
-                        .child_by_field_name("definition")
-                        .unwrap_or(dec.node);
-                    decorated_fn_ids.insert(inner_fn.id());
-                    test_matches.push(TestMatch {
-                        name,
-                        fn_node_id: inner_fn.id(),
-                        fn_start_byte: inner_fn.start_byte(),
-                        fn_end_byte: inner_fn.end_byte(),
-                        fn_start_row: inner_fn.start_position().row,
-                        fn_end_row: inner_fn.end_position().row,
-                        decorated_start_byte: Some(dec.node.start_byte()),
-                        decorated_end_byte: Some(dec.node.end_byte()),
-                        decorated_start_row: Some(dec.node.start_position().row),
-                    });
-                } else if let Some(fn_c) = fn_capture {
-                    test_matches.push(TestMatch {
-                        name,
-                        fn_node_id: fn_c.node.id(),
-                        fn_start_byte: fn_c.node.start_byte(),
-                        fn_end_byte: fn_c.node.end_byte(),
-                        fn_start_row: fn_c.node.start_position().row,
-                        fn_end_row: fn_c.node.end_position().row,
-                        decorated_start_byte: None,
-                        decorated_end_byte: None,
-                        decorated_start_row: None,
-                    });
-                }
             }
+        };
+
+        let root = tree.root_node();
+        let source_bytes = source.as_bytes();
+
+        let functions = extract_functions_from_tree(source, file_path, root);
+
+        let param_query = cached_query(&PARAMETERIZED_QUERY_CACHE, PARAMETERIZED_QUERY);
+        let parameterized_count = count_captures(param_query, "parameterized", root, source_bytes);
+
+        let pbt_query = cached_query(&IMPORT_PBT_QUERY_CACHE, IMPORT_PBT_QUERY);
+        let has_pbt_import = has_any_match(pbt_query, "pbt_import", root, source_bytes);
+
+        let contract_query = cached_query(&IMPORT_CONTRACT_QUERY_CACHE, IMPORT_CONTRACT_QUERY);
+        let has_contract_import =
+            has_any_match(contract_query, "contract_import", root, source_bytes);
+
+        FileAnalysis {
+            file: file_path.to_string(),
+            functions,
+            has_pbt_import,
+            has_contract_import,
+            parameterized_count,
         }
-
-        // Remove bare function matches that are already covered by decorated matches
-        test_matches.retain(|tm| {
-            tm.decorated_start_byte.is_some() || !decorated_fn_ids.contains(&tm.fn_node_id)
-        });
-
-        // Now resolve nodes via byte range (O(log N)) and build TestFunction entries
-        let mut functions = Vec::new();
-        for tm in &test_matches {
-            let fn_node = match root.descendant_for_byte_range(tm.fn_start_byte, tm.fn_end_byte) {
-                Some(n) => n,
-                None => continue,
-            };
-
-            let line = tm.fn_start_row + 1;
-            let end_line = tm.fn_end_row + 1;
-            let line_count = end_line - line + 1;
-
-            let assertion_count =
-                count_captures(assertion_query, "assertion", fn_node, source_bytes);
-
-            let mock_scope = match (tm.decorated_start_byte, tm.decorated_end_byte) {
-                (Some(start), Some(end)) => root
-                    .descendant_for_byte_range(start, end)
-                    .unwrap_or(fn_node),
-                _ => fn_node,
-            };
-            let mock_count = count_captures(mock_query, "mock", mock_scope, source_bytes);
-
-            let mock_classes = collect_mock_class_names(mock_assign_query, fn_node, source_bytes);
-
-            // Suppression: check comment above the topmost node (decorated or fn)
-            let suppress_row = tm.decorated_start_row.unwrap_or(tm.fn_start_row);
-            let suppressed_rules = extract_suppression_from_previous_line(source, suppress_row);
-
-            functions.push(TestFunction {
-                name: tm.name.clone(),
-                file: file_path.to_string(),
-                line,
-                end_line,
-                analysis: TestAnalysis {
-                    assertion_count,
-                    mock_count,
-                    mock_classes,
-                    line_count,
-                    suppressed_rules,
-                },
-            });
-        }
-
-        functions
     }
 }
 
@@ -406,5 +461,74 @@ mod tests {
     fn python_extractor_implements_language_extractor() {
         let extractor = PythonExtractor::new();
         let _: &dyn exspec_core::extractor::LanguageExtractor = &extractor;
+    }
+
+    // --- File analysis: parameterized ---
+
+    #[test]
+    fn file_analysis_detects_parameterized() {
+        let source = fixture("t004_pass.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t004_pass.py");
+        assert!(
+            fa.parameterized_count >= 1,
+            "expected parameterized_count >= 1, got {}",
+            fa.parameterized_count
+        );
+    }
+
+    #[test]
+    fn file_analysis_no_parameterized() {
+        let source = fixture("t004_violation.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t004_violation.py");
+        assert_eq!(fa.parameterized_count, 0);
+    }
+
+    // --- File analysis: PBT import ---
+
+    #[test]
+    fn file_analysis_detects_pbt_import() {
+        let source = fixture("t005_pass.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t005_pass.py");
+        assert!(fa.has_pbt_import);
+    }
+
+    #[test]
+    fn file_analysis_no_pbt_import() {
+        let source = fixture("t005_violation.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t005_violation.py");
+        assert!(!fa.has_pbt_import);
+    }
+
+    // --- File analysis: contract import ---
+
+    #[test]
+    fn file_analysis_detects_contract_import() {
+        let source = fixture("t008_pass.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t008_pass.py");
+        assert!(fa.has_contract_import);
+    }
+
+    #[test]
+    fn file_analysis_no_contract_import() {
+        let source = fixture("t008_violation.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t008_violation.py");
+        assert!(!fa.has_contract_import);
+    }
+
+    // --- File analysis preserves functions ---
+
+    #[test]
+    fn file_analysis_preserves_test_functions() {
+        let source = fixture("t001_pass.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass.py");
+        assert_eq!(fa.functions.len(), 1);
+        assert_eq!(fa.functions[0].name, "test_create_user");
     }
 }
