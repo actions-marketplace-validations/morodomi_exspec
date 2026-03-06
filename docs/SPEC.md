@@ -643,6 +643,26 @@ test('complex integration', () => {
 });
 ```
 
+### Limitations
+
+- Suppression applies only to the **immediate next test function** (`test()`, `it()`, `def test_*`).
+- Placing `// exspec-ignore:` above `describe()` does **not** propagate to inner `test()`/`it()` calls.
+- To suppress a rule for multiple tests, add the comment above each individual test function.
+- This applies equally to Python (above `def test_*`) and PHP (above `public function test*`).
+
+```typescript
+// This does NOT suppress T001 for inner tests:
+// exspec-ignore: T001
+describe('user management', () => {
+  test('create user', () => { ... });  // T001 still fires
+  test('delete user', () => { ... });  // T001 still fires
+});
+
+// This DOES suppress T001:
+// exspec-ignore: T001
+test('create user', () => { ... });  // T001 suppressed
+```
+
 ### Detection
 
 - コメントノードから `exspec-ignore:` パターンをパース

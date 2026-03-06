@@ -481,6 +481,28 @@ mod tests {
         assert!(!fa.has_contract_import);
     }
 
+    // --- Suppression does not propagate from describe to inner tests ---
+
+    #[test]
+    fn suppression_on_describe_does_not_apply_to_inner_tests() {
+        let source = fixture("describe_suppression.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "describe_suppression.test.ts");
+        assert_eq!(funcs.len(), 2, "expected 2 test functions inside describe");
+        for f in &funcs {
+            assert!(
+                f.analysis.suppressed_rules.is_empty(),
+                "test '{}' should NOT have suppressed rules (suppression on describe does not propagate)",
+                f.name
+            );
+            assert_eq!(
+                f.analysis.assertion_count, 0,
+                "test '{}' should have 0 assertions (T001 violation expected)",
+                f.name
+            );
+        }
+    }
+
     // --- File analysis preserves functions ---
 
     #[test]

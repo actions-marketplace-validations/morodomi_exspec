@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 3C complete (MVP). Phase 4 (dev-crew hook integration) next.
+Phase 4 complete (PHP support + dev-crew integration). Phase 5 (Tier 2 + Rust support) next.
 
 ## Progress
 
@@ -15,8 +15,11 @@ Phase 3C complete (MVP). Phase 4 (dev-crew hook integration) next.
 | 3B - T004-T008 + .exspec.toml parsing | DONE |
 | 3B cleanup - Discovered items | DONE |
 | 3C - SARIF output + metrics | DONE |
-| 4 - dev-crew hook integration | NOT STARTED |
-| 5 - Tier 2 + PHP/Rust support | NOT STARTED |
+| 3 cleanup - NaN guard, TestCase false positive, dead code | DONE |
+| 4 - PHP support (PHPUnit/Pest) + dev-crew integration | DONE |
+| 4.1 - PHP FQCN attribute + Pest arrow function | DONE |
+| 4.2 - Nested class, docblock dedup, FQCN pattern | DONE |
+| 5 - Tier 2 + Rust support | NOT STARTED |
 | 6 - Tier 3 (AI Prompt generation) | NOT STARTED |
 | 7 - OSS release + Note article + MCP Server | NOT STARTED |
 
@@ -26,25 +29,26 @@ Phase 3C complete (MVP). Phase 4 (dev-crew hook integration) next.
 |----------|-----------|------------|-------|-------------|
 | Python (pytest) | Yes | Yes | Yes | Yes |
 | TypeScript (Jest/Vitest) | Yes | Yes | Yes | Yes |
+| PHP (PHPUnit/Pest) | Yes | Yes | Yes | Yes |
 
 ## Active Rules
 
-| ID | Rule | Level | Python | TypeScript |
-|----|------|-------|--------|-----------|
-| T001 | assertion-free | BLOCK | Yes | Yes |
-| T002 | mock-overuse | WARN | Yes | Yes |
-| T003 | giant-test | WARN | Yes | Yes |
-| T004 | no-parameterized | INFO | Yes | Yes |
-| T005 | pbt-missing | INFO | Yes | Yes |
-| T006 | low-assertion-density | WARN | Yes | Yes |
-| T007 | test-source-ratio | INFO | -- | -- |
-| T008 | no-contract | INFO | Yes | Yes |
+| ID | Rule | Level | Python | TypeScript | PHP |
+|----|------|-------|--------|-----------|-----|
+| T001 | assertion-free | BLOCK | Yes | Yes | Yes |
+| T002 | mock-overuse | WARN | Yes | Yes | Yes |
+| T003 | giant-test | WARN | Yes | Yes | Yes |
+| T004 | no-parameterized | INFO | Yes | Yes | Yes |
+| T005 | pbt-missing | INFO | Yes | Yes | N/A |
+| T006 | low-assertion-density | WARN | Yes | Yes | Yes |
+| T007 | test-source-ratio | INFO | -- | -- | -- |
+| T008 | no-contract | INFO | Yes | Yes | Yes |
 
 ## Quality Metrics
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 203 passing | -- |
+| Tests | 269 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
@@ -57,12 +61,6 @@ Phase 3C complete (MVP). Phase 4 (dev-crew hook integration) next.
 | sarif | Supported (v2.1.0) |
 | ai-prompt | Tier 3 (Phase 6) |
 
-## Open Issues (v0.2)
+## Open Issues
 
-- pass_count semantic: rename to fn_pass or document scope
-- hidden directory skip: add test + document
-- NaN/Inf guard on ratio config
-- Performance: diagnostics single-pass, clone elimination
-- TestCase false positive filtering (tree-sitter query)
-- OutputFormat enum vs string dispatch sync (issue #5)
-- compute_metrics ratio clamp (issue #5)
+None. All issues resolved as of Phase 4.2 cleanup.
