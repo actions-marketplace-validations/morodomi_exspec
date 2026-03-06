@@ -60,47 +60,59 @@ fn is_typescript_source_file(path: &str) -> bool {
     path.ends_with(".ts") || path.ends_with(".tsx")
 }
 
-fn discover_test_files(root: &str, lang: Option<&str>) -> (Vec<String>, Vec<String>) {
+struct DiscoverResult {
+    python_test_files: Vec<String>,
+    ts_test_files: Vec<String>,
+    source_file_count: usize,
+}
+
+fn discover_files(root: &str, lang: Option<&str>) -> DiscoverResult {
     let mut python_files = Vec::new();
     let mut ts_files = Vec::new();
+    let mut source_count = 0;
     let walker = WalkBuilder::new(root).hidden(true).git_ignore(true).build();
 
     let include_python = lang.is_none() || lang == Some("python");
     let include_ts = lang.is_none() || lang == Some("typescript");
 
     for entry in walker.flatten() {
-        if entry.file_type().is_some_and(|ft| ft.is_file()) {
-            let path = entry.path().to_string_lossy().to_string();
-            if include_python && is_python_test_file(&path) {
-                python_files.push(path);
-            } else if include_ts && is_typescript_test_file(&path) {
-                ts_files.push(path);
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let path = entry.path().to_string_lossy().to_string();
+        let is_py_test = include_python && is_python_test_file(&path);
+        let is_ts_test = include_ts && is_typescript_test_file(&path);
+
+        if is_py_test {
+            python_files.push(path);
+        } else if is_ts_test {
+            ts_files.push(path);
+        } else {
+            let is_source = (include_python && is_python_source_file(&path))
+                || (include_ts && is_typescript_source_file(&path));
+            if is_source {
+                source_count += 1;
             }
         }
     }
     python_files.sort();
     ts_files.sort();
-    (python_files, ts_files)
+    DiscoverResult {
+        python_test_files: python_files,
+        ts_test_files: ts_files,
+        source_file_count: source_count,
+    }
 }
 
-fn count_source_files(root: &str, lang: Option<&str>) -> usize {
-    let walker = WalkBuilder::new(root).hidden(true).git_ignore(true).build();
-    let include_python = lang.is_none() || lang == Some("python");
-    let include_ts = lang.is_none() || lang == Some("typescript");
+#[cfg(test)]
+fn discover_test_files(root: &str, lang: Option<&str>) -> (Vec<String>, Vec<String>) {
+    let result = discover_files(root, lang);
+    (result.python_test_files, result.ts_test_files)
+}
 
-    let mut count = 0;
-    for entry in walker.flatten() {
-        if entry.file_type().is_some_and(|ft| ft.is_file()) {
-            let path = entry.path().to_string_lossy().to_string();
-            let is_source = (include_python && is_python_source_file(&path))
-                || (include_ts && is_typescript_source_file(&path));
-            let is_test = is_python_test_file(&path) || is_typescript_test_file(&path);
-            if is_source && !is_test {
-                count += 1;
-            }
-        }
-    }
-    count
+#[cfg(test)]
+fn count_source_files(root: &str, lang: Option<&str>) -> usize {
+    discover_files(root, lang).source_file_count
 }
 
 fn load_config(config_path: &str) -> Config {
@@ -116,17 +128,39 @@ fn load_config(config_path: &str) -> Config {
     }
 }
 
+const SUPPORTED_LANGUAGES: &[&str] = &["python", "typescript"];
+
+fn validate_lang(lang: Option<&str>) -> Result<(), String> {
+    if let Some(l) = lang {
+        if !SUPPORTED_LANGUAGES.contains(&l) {
+            return Err(format!(
+                "unsupported language: {l}. Supported: {}",
+                SUPPORTED_LANGUAGES.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     let cli = Cli::parse();
+
+    if let Err(e) = validate_lang(cli.lang.as_deref()) {
+        eprintln!("error: {e}");
+        process::exit(1);
+    }
+
     let config = load_config(&cli.config);
     let py_extractor = PythonExtractor::new();
     let ts_extractor = TypeScriptExtractor::new();
 
-    let (python_files, ts_files) = discover_test_files(&cli.path, cli.lang.as_deref());
+    let discovered = discover_files(&cli.path, cli.lang.as_deref());
+    let python_files = &discovered.python_test_files;
+    let ts_files = &discovered.ts_test_files;
     let test_file_count = python_files.len() + ts_files.len();
     let mut all_analyses: Vec<FileAnalysis> = Vec::new();
 
-    for file_path in &python_files {
+    for file_path in python_files {
         let source = match std::fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(e) => {
@@ -137,7 +171,7 @@ fn main() {
         all_analyses.push(py_extractor.extract_file_analysis(&source, file_path));
     }
 
-    for file_path in &ts_files {
+    for file_path in ts_files {
         let source = match std::fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(e) => {
@@ -162,7 +196,7 @@ fn main() {
     diagnostics.extend(evaluate_file_rules(&all_analyses, &config));
 
     // Per-project rules (T007)
-    let source_file_count = count_source_files(&cli.path, cli.lang.as_deref());
+    let source_file_count = discovered.source_file_count;
     diagnostics.extend(evaluate_project_rules(
         test_file_count,
         source_file_count,
@@ -350,6 +384,24 @@ mod tests {
         std::fs::write(dir.join("utils.test.ts"), "").unwrap();
         let count = count_source_files(dir.to_str().unwrap(), None);
         assert_eq!(count, 2); // app.py + utils.ts (test files excluded)
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- Combined walk ---
+
+    #[test]
+    fn discover_files_returns_test_and_source_counts() {
+        let dir = std::env::temp_dir().join(format!("exspec_test_combined_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("test_foo.py"), "").unwrap();
+        std::fs::write(dir.join("app.py"), "").unwrap();
+        std::fs::write(dir.join("baz.test.ts"), "").unwrap();
+        std::fs::write(dir.join("utils.ts"), "").unwrap();
+        let result = discover_files(dir.to_str().unwrap(), None);
+        assert_eq!(result.python_test_files.len(), 1);
+        assert_eq!(result.ts_test_files.len(), 1);
+        assert_eq!(result.source_file_count, 2); // app.py + utils.ts
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -682,6 +734,40 @@ mod tests {
     }
 
     // --- E2E: T007 project-level ---
+
+    // --- --lang validation ---
+
+    #[test]
+    fn unsupported_lang_returns_error_message() {
+        let result = validate_lang(Some("rust"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("rust"));
+    }
+
+    #[test]
+    fn unsupported_lang_error_shows_supported_list() {
+        let err = validate_lang(Some("Python")).unwrap_err();
+        assert!(err.contains("python"), "should hint lowercase: {err}");
+        assert!(
+            err.contains("typescript"),
+            "should list all supported: {err}"
+        );
+    }
+
+    #[test]
+    fn supported_lang_python_ok() {
+        assert!(validate_lang(Some("python")).is_ok());
+    }
+
+    #[test]
+    fn supported_lang_typescript_ok() {
+        assert!(validate_lang(Some("typescript")).is_ok());
+    }
+
+    #[test]
+    fn no_lang_ok() {
+        assert!(validate_lang(None).is_ok());
+    }
 
     #[test]
     fn e2e_t007_produces_ratio() {

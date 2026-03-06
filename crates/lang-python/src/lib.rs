@@ -111,7 +111,7 @@ fn extract_suppression_from_previous_line(
 
 struct TestMatch {
     name: String,
-    fn_node_id: usize,
+    dedup_id: usize,
     fn_start_byte: usize,
     fn_end_byte: usize,
     fn_start_row: usize,
@@ -165,7 +165,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 decorated_fn_ids.insert(inner_fn.id());
                 test_matches.push(TestMatch {
                     name,
-                    fn_node_id: inner_fn.id(),
+                    dedup_id: inner_fn.id(),
                     fn_start_byte: inner_fn.start_byte(),
                     fn_end_byte: inner_fn.end_byte(),
                     fn_start_row: inner_fn.start_position().row,
@@ -177,7 +177,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
             } else if let Some(fn_c) = fn_capture {
                 test_matches.push(TestMatch {
                     name,
-                    fn_node_id: fn_c.node.id(),
+                    dedup_id: fn_c.node.id(),
                     fn_start_byte: fn_c.node.start_byte(),
                     fn_end_byte: fn_c.node.end_byte(),
                     fn_start_row: fn_c.node.start_position().row,
@@ -190,9 +190,8 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
         }
     }
 
-    test_matches.retain(|tm| {
-        tm.decorated_start_byte.is_some() || !decorated_fn_ids.contains(&tm.fn_node_id)
-    });
+    test_matches
+        .retain(|tm| tm.decorated_start_byte.is_some() || !decorated_fn_ids.contains(&tm.dedup_id));
 
     let mut functions = Vec::new();
     for tm in &test_matches {

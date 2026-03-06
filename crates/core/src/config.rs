@@ -64,7 +64,8 @@ impl From<ExspecConfig> for Config {
             parameterized_min_ratio: ec
                 .thresholds
                 .parameterized_min_ratio
-                .unwrap_or(defaults.parameterized_min_ratio),
+                .unwrap_or(defaults.parameterized_min_ratio)
+                .clamp(0.0, 1.0),
             disabled_rules: ec.rules.disable.iter().map(|s| RuleId::new(s)).collect(),
         }
     }
@@ -150,6 +151,58 @@ mod tests {
             defaults.parameterized_min_ratio
         );
         assert!(config.disabled_rules.is_empty());
+    }
+
+    #[test]
+    fn convert_negative_ratio_clamped_to_zero() {
+        let ec = ExspecConfig {
+            thresholds: ThresholdsConfig {
+                parameterized_min_ratio: Some(-0.5),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let config: Config = ec.into();
+        assert_eq!(config.parameterized_min_ratio, 0.0);
+    }
+
+    #[test]
+    fn convert_zero_ratio_stays_zero() {
+        let ec = ExspecConfig {
+            thresholds: ThresholdsConfig {
+                parameterized_min_ratio: Some(0.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let config: Config = ec.into();
+        assert_eq!(config.parameterized_min_ratio, 0.0);
+    }
+
+    #[test]
+    fn convert_positive_ratio_unchanged() {
+        let ec = ExspecConfig {
+            thresholds: ThresholdsConfig {
+                parameterized_min_ratio: Some(0.3),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let config: Config = ec.into();
+        assert_eq!(config.parameterized_min_ratio, 0.3);
+    }
+
+    #[test]
+    fn convert_ratio_above_one_clamped_to_one() {
+        let ec = ExspecConfig {
+            thresholds: ThresholdsConfig {
+                parameterized_min_ratio: Some(1.5),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let config: Config = ec.into();
+        assert_eq!(config.parameterized_min_ratio, 1.0);
     }
 
     #[test]

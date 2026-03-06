@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::rules::{Diagnostic, Severity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6,6 +8,16 @@ pub enum OutputFormat {
     Json,
     Sarif,
     AiPrompt,
+}
+
+/// Count unique violated functions by (file, line) pairs.
+/// Only per-function diagnostics (line=Some) are counted.
+fn count_violated_functions(diagnostics: &[Diagnostic]) -> usize {
+    diagnostics
+        .iter()
+        .filter_map(|d| d.line.map(|l| (d.file.as_str(), l)))
+        .collect::<HashSet<_>>()
+        .len()
 }
 
 pub fn format_terminal(
@@ -21,6 +33,10 @@ pub fn format_terminal(
         file_count,
         function_count,
     ));
+
+    if file_count == 0 {
+        lines.push("No test files found. Check --lang filter or run from a directory containing test files.".to_string());
+    }
 
     for d in diagnostics {
         let line_str = d.line.map(|l| format!(":{l}")).unwrap_or_default();
@@ -42,7 +58,8 @@ pub fn format_terminal(
         .iter()
         .filter(|d| d.severity == Severity::Info)
         .count();
-    let pass_count = function_count.saturating_sub(block_count + warn_count + info_count);
+    let violated = count_violated_functions(diagnostics);
+    let pass_count = function_count.saturating_sub(violated);
     lines.push(format!(
         "Score: BLOCK {block_count} | WARN {warn_count} | INFO {info_count} | PASS {pass_count}",
     ));
@@ -63,9 +80,10 @@ pub fn format_json(diagnostics: &[Diagnostic], file_count: usize, function_count
         .iter()
         .filter(|d| d.severity == Severity::Info)
         .count();
-    let pass_count = function_count.saturating_sub(block_count + warn_count + info_count);
+    let violated = count_violated_functions(diagnostics);
+    let pass_count = function_count.saturating_sub(violated);
 
-    let output = serde_json::json!({
+    let mut output = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "summary": {
             "files": file_count,
@@ -78,6 +96,10 @@ pub fn format_json(diagnostics: &[Diagnostic], file_count: usize, function_count
         "diagnostics": diagnostics,
         "metrics": {},
     });
+
+    if file_count == 0 {
+        output["guidance"] = serde_json::json!("No test files found. Check --lang filter or run from a directory containing test files.");
+    }
     serde_json::to_string_pretty(&output).unwrap_or_else(|_| "{}".to_string())
 }
 
@@ -199,6 +221,72 @@ mod tests {
     }
 
     // --- Exit code ---
+
+    // --- Empty result UX ---
+
+    #[test]
+    fn terminal_format_zero_files_shows_guidance() {
+        let output = format_terminal(&[], 0, 0);
+        assert!(
+            output.contains("No test files found"),
+            "expected guidance message, got: {output}"
+        );
+    }
+
+    #[test]
+    fn json_format_zero_files_has_guidance() {
+        let output = format_json(&[], 0, 0);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert!(parsed["guidance"].is_string());
+    }
+
+    // --- pass_count multi-violation ---
+
+    #[test]
+    fn pass_count_with_multi_violation_function() {
+        // One function with T001 (BLOCK) + T003 (WARN) should count as 1 violated function, not 2
+        let d1 = Diagnostic {
+            rule: RuleId::new("T001"),
+            severity: Severity::Block,
+            file: "test.py".to_string(),
+            line: Some(10),
+            message: "assertion-free".to_string(),
+            details: None,
+        };
+        let d2 = Diagnostic {
+            rule: RuleId::new("T003"),
+            severity: Severity::Warn,
+            file: "test.py".to_string(),
+            line: Some(10), // same function (same file+line)
+            message: "giant-test".to_string(),
+            details: None,
+        };
+        // 2 functions total, 1 has 2 violations → pass_count should be 1
+        let output = format_terminal(&[d1, d2], 1, 2);
+        assert!(output.contains("PASS 1"), "expected PASS 1, got: {output}");
+    }
+
+    #[test]
+    fn pass_count_excludes_file_level_diagnostics() {
+        // File-level diagnostics (line=None) should not count toward violated functions
+        let d1 = Diagnostic {
+            rule: RuleId::new("T004"),
+            severity: Severity::Info,
+            file: "test.py".to_string(),
+            line: None,
+            message: "no-parameterized".to_string(),
+            details: None,
+        };
+        // 1 function total, only file-level diag → pass_count should be 1
+        let output = format_terminal(&[d1], 1, 1);
+        assert!(output.contains("PASS 1"), "expected PASS 1, got: {output}");
+    }
+
+    #[test]
+    fn terminal_format_nonzero_files_no_guidance() {
+        let output = format_terminal(&[], 1, 0);
+        assert!(!output.contains("No test files found"));
+    }
 
     #[test]
     fn exit_code_block_returns_1() {

@@ -137,6 +137,10 @@ test('complex integration', () => {
 });
 ```
 
+### Limitations
+
+- **TypeScript `describe()` scope**: Inline suppression applies to the **next** `test()`/`it()` call only. Placing `// exspec-ignore` above a `describe()` block does **not** suppress rules for all tests inside it. Suppress each test individually.
+
 ## Architecture
 
 Built with Rust + tree-sitter for fast, language-agnostic AST analysis. Detection queries are externalized as `.scm` files, allowing logic adjustments without recompilation.

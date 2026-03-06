@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 3B complete. Phase 3C (SARIF output + metrics) next.
+Phase 3B cleanup complete. Phase 3C (SARIF output + metrics) next.
 
 ## Progress
 
@@ -13,6 +13,7 @@ Phase 3B complete. Phase 3C (SARIF output + metrics) next.
 | 2 - Python + Tier 1 (T001-T003) | DONE |
 | 3A - TypeScript + inline suppression + output polish | DONE |
 | 3B - T004-T008 + .exspec.toml parsing | DONE |
+| 3B cleanup - Discovered items | DONE |
 | 3C - SARIF output + metrics | NOT STARTED |
 | 4 - dev-crew hook integration | NOT STARTED |
 | 5 - Tier 2 + PHP/Rust support | NOT STARTED |
@@ -43,13 +44,15 @@ Phase 3B complete. Phase 3C (SARIF output + metrics) next.
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 153 passing | -- |
+| Tests | 168 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
-## Open Issues
+## Open Issues (v0.2)
 
-- #1: validate --lang argument (Phase 3B)
-- #2: pass_count multi-violation fix (Phase 3B)
-- #3: TS suppression describe() limitation docs (Phase 3B)
-- #4: fn_node_id rename (Phase 3B)
+- pass_count semantic: rename to fn_pass or document scope
+- hidden directory skip: add test + document
+- --format validation: reject unknown values
+- NaN/Inf guard on ratio config
+- Performance: diagnostics single-pass, clone elimination
+- TestCase false positive filtering (tree-sitter query)
