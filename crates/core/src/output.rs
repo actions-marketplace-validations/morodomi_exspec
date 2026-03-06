@@ -8,8 +8,20 @@ pub enum OutputFormat {
     AiPrompt,
 }
 
-pub fn format_terminal(diagnostics: &[Diagnostic]) -> String {
+pub fn format_terminal(
+    diagnostics: &[Diagnostic],
+    file_count: usize,
+    function_count: usize,
+) -> String {
     let mut lines = Vec::new();
+
+    lines.push(format!(
+        "exspec v{} -- {} test files, {} test functions",
+        env!("CARGO_PKG_VERSION"),
+        file_count,
+        function_count,
+    ));
+
     for d in diagnostics {
         let line_str = d.line.map(|l| format!(":{l}")).unwrap_or_default();
         lines.push(format!(
@@ -17,11 +29,52 @@ pub fn format_terminal(diagnostics: &[Diagnostic]) -> String {
             d.severity, d.file, line_str, d.rule, d.message,
         ));
     }
+
+    let block_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Block)
+        .count();
+    let warn_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warn)
+        .count();
+    let info_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Info)
+        .count();
+    let pass_count = function_count.saturating_sub(block_count + warn_count + info_count);
+    lines.push(format!(
+        "Score: BLOCK {block_count} | WARN {warn_count} | INFO {info_count} | PASS {pass_count}",
+    ));
+
     lines.join("\n")
 }
 
-pub fn format_json(diagnostics: &[Diagnostic]) -> String {
+pub fn format_json(diagnostics: &[Diagnostic], file_count: usize, function_count: usize) -> String {
+    let block_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Block)
+        .count();
+    let warn_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warn)
+        .count();
+    let info_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Info)
+        .count();
+    let pass_count = function_count.saturating_sub(block_count + warn_count + info_count);
+
     let output = serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "summary": {
+            "files": file_count,
+            "functions": function_count,
+            "block": block_count,
+            "warn": warn_count,
+            "info": info_count,
+            "pass": pass_count,
+        },
         "diagnostics": diagnostics,
         "metrics": {},
     });
@@ -74,42 +127,63 @@ mod tests {
     // --- Terminal format ---
 
     #[test]
+    fn terminal_format_has_summary_header() {
+        let output = format_terminal(&[block_diag()], 1, 1);
+        assert!(output.starts_with("exspec v"));
+        assert!(output.contains("1 test files"));
+        assert!(output.contains("1 test functions"));
+    }
+
+    #[test]
+    fn terminal_format_has_score_footer() {
+        let output = format_terminal(&[block_diag()], 1, 1);
+        assert!(output.contains("Score: BLOCK 1 | WARN 0 | INFO 0 | PASS 0"));
+    }
+
+    #[test]
     fn terminal_format_block() {
-        let output = format_terminal(&[block_diag()]);
-        assert_eq!(
-            output,
-            "BLOCK test.py:10 T001 assertion-free: test has no assertions"
-        );
+        let output = format_terminal(&[block_diag()], 1, 1);
+        assert!(output.contains("BLOCK test.py:10 T001 assertion-free: test has no assertions"));
     }
 
     #[test]
     fn terminal_format_warn() {
-        let output = format_terminal(&[warn_diag()]);
-        assert_eq!(
-            output,
-            "WARN test.py:5 T003 giant-test: 73 lines, threshold: 50"
-        );
+        let output = format_terminal(&[warn_diag()], 1, 1);
+        assert!(output.contains("WARN test.py:5 T003 giant-test: 73 lines, threshold: 50"));
     }
 
     #[test]
     fn terminal_format_multiple() {
-        let output = format_terminal(&[block_diag(), warn_diag()]);
+        let output = format_terminal(&[block_diag(), warn_diag()], 2, 2);
         assert!(output.contains("BLOCK"));
         assert!(output.contains("WARN"));
-        assert_eq!(output.lines().count(), 2);
     }
 
     #[test]
-    fn terminal_format_empty() {
-        let output = format_terminal(&[]);
-        assert_eq!(output, "");
+    fn terminal_format_empty_has_header_and_footer() {
+        let output = format_terminal(&[], 0, 0);
+        assert!(output.contains("exspec v"));
+        assert!(output.contains("Score:"));
     }
 
     // --- JSON format ---
 
     #[test]
+    fn json_format_has_version_and_summary() {
+        let output = format_json(&[block_diag()], 1, 1);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert!(parsed["version"].is_string());
+        assert!(parsed["summary"].is_object());
+        assert_eq!(parsed["summary"]["files"], 1);
+        assert_eq!(parsed["summary"]["functions"], 1);
+        assert_eq!(parsed["summary"]["block"], 1);
+        assert_eq!(parsed["summary"]["warn"], 0);
+        assert_eq!(parsed["summary"]["pass"], 0);
+    }
+
+    #[test]
     fn json_format_has_diagnostics_and_metrics() {
-        let output = format_json(&[block_diag()]);
+        let output = format_json(&[block_diag()], 1, 1);
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(parsed["diagnostics"].is_array());
         assert!(parsed["metrics"].is_object());
@@ -118,9 +192,10 @@ mod tests {
 
     #[test]
     fn json_format_empty() {
-        let output = format_json(&[]);
+        let output = format_json(&[], 0, 0);
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["diagnostics"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["summary"]["functions"], 0);
     }
 
     // --- Exit code ---

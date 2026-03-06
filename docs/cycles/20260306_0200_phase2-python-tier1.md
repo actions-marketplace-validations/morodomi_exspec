@@ -81,3 +81,6 @@
 - find_node_by_id -> descendant_for_byte_range O(log N)
 - test_function.scm: non-TestCase class method false positive
 - Empty result UX: summary line output
+
+## Progress Log
+2026-03-06 14:30 - PreCompact: phase=UNKNOWN, snapshot saved

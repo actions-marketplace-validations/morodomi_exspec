@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 use exspec_core::extractor::{LanguageExtractor, TestAnalysis, TestFunction};
+use exspec_core::suppress::parse_suppression;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
@@ -8,6 +10,19 @@ const TEST_FUNCTION_QUERY: &str = include_str!("../queries/test_function.scm");
 const ASSERTION_QUERY: &str = include_str!("../queries/assertion.scm");
 const MOCK_USAGE_QUERY: &str = include_str!("../queries/mock_usage.scm");
 const MOCK_ASSIGNMENT_QUERY: &str = include_str!("../queries/mock_assignment.scm");
+
+fn python_language() -> tree_sitter::Language {
+    tree_sitter_python::LANGUAGE.into()
+}
+
+fn cached_query<'a>(lock: &'a OnceLock<Query>, source: &str) -> &'a Query {
+    lock.get_or_init(|| Query::new(&python_language(), source).expect("invalid query"))
+}
+
+static TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static MOCK_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static MOCK_ASSIGN_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct PythonExtractor;
 
@@ -62,12 +77,28 @@ fn collect_mock_class_names(query: &Query, node: Node, source: &[u8]) -> Vec<Str
     names.into_iter().collect()
 }
 
+fn extract_suppression_from_previous_line(
+    source: &str,
+    start_row: usize,
+) -> Vec<exspec_core::rules::RuleId> {
+    if start_row == 0 {
+        return Vec::new();
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    let prev_line = lines.get(start_row - 1).unwrap_or(&"");
+    parse_suppression(prev_line)
+}
+
 struct TestMatch {
     name: String,
     fn_node_id: usize,
+    fn_start_byte: usize,
+    fn_end_byte: usize,
     fn_start_row: usize,
     fn_end_row: usize,
-    decorated_node_id: Option<usize>,
+    decorated_start_byte: Option<usize>,
+    decorated_end_byte: Option<usize>,
+    decorated_start_row: Option<usize>,
 }
 
 impl LanguageExtractor for PythonExtractor {
@@ -78,12 +109,10 @@ impl LanguageExtractor for PythonExtractor {
             None => return Vec::new(),
         };
 
-        let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-        let test_query = Query::new(&lang, TEST_FUNCTION_QUERY).expect("invalid test_function.scm");
-        let assertion_query = Query::new(&lang, ASSERTION_QUERY).expect("invalid assertion.scm");
-        let mock_query = Query::new(&lang, MOCK_USAGE_QUERY).expect("invalid mock_usage.scm");
-        let mock_assign_query =
-            Query::new(&lang, MOCK_ASSIGNMENT_QUERY).expect("invalid mock_assignment.scm");
+        let test_query = cached_query(&TEST_QUERY_CACHE, TEST_FUNCTION_QUERY);
+        let assertion_query = cached_query(&ASSERTION_QUERY_CACHE, ASSERTION_QUERY);
+        let mock_query = cached_query(&MOCK_QUERY_CACHE, MOCK_USAGE_QUERY);
+        let mock_assign_query = cached_query(&MOCK_ASSIGN_QUERY_CACHE, MOCK_ASSIGNMENT_QUERY);
 
         let name_idx = test_query
             .capture_index_for_name("name")
@@ -104,7 +133,7 @@ impl LanguageExtractor for PythonExtractor {
         let mut decorated_fn_ids = std::collections::HashSet::new();
         {
             let mut cursor = QueryCursor::new();
-            let mut matches = cursor.matches(&test_query, root, source_bytes);
+            let mut matches = cursor.matches(test_query, root, source_bytes);
             while let Some(m) = matches.next() {
                 let name_capture = match m.captures.iter().find(|c| c.index == name_idx) {
                     Some(c) => c,
@@ -127,17 +156,25 @@ impl LanguageExtractor for PythonExtractor {
                     test_matches.push(TestMatch {
                         name,
                         fn_node_id: inner_fn.id(),
+                        fn_start_byte: inner_fn.start_byte(),
+                        fn_end_byte: inner_fn.end_byte(),
                         fn_start_row: inner_fn.start_position().row,
                         fn_end_row: inner_fn.end_position().row,
-                        decorated_node_id: Some(dec.node.id()),
+                        decorated_start_byte: Some(dec.node.start_byte()),
+                        decorated_end_byte: Some(dec.node.end_byte()),
+                        decorated_start_row: Some(dec.node.start_position().row),
                     });
                 } else if let Some(fn_c) = fn_capture {
                     test_matches.push(TestMatch {
                         name,
                         fn_node_id: fn_c.node.id(),
+                        fn_start_byte: fn_c.node.start_byte(),
+                        fn_end_byte: fn_c.node.end_byte(),
                         fn_start_row: fn_c.node.start_position().row,
                         fn_end_row: fn_c.node.end_position().row,
-                        decorated_node_id: None,
+                        decorated_start_byte: None,
+                        decorated_end_byte: None,
+                        decorated_start_row: None,
                     });
                 }
             }
@@ -145,18 +182,13 @@ impl LanguageExtractor for PythonExtractor {
 
         // Remove bare function matches that are already covered by decorated matches
         test_matches.retain(|tm| {
-            tm.decorated_node_id.is_some() || !decorated_fn_ids.contains(&tm.fn_node_id)
+            tm.decorated_start_byte.is_some() || !decorated_fn_ids.contains(&tm.fn_node_id)
         });
 
-        // Now resolve nodes and build TestFunction entries
+        // Now resolve nodes via byte range (O(log N)) and build TestFunction entries
         let mut functions = Vec::new();
         for tm in &test_matches {
-            let fn_node = find_node_by_id(root, tm.fn_node_id);
-            let decorated_node = tm
-                .decorated_node_id
-                .and_then(|id| find_node_by_id(root, id));
-
-            let fn_node = match fn_node {
+            let fn_node = match root.descendant_for_byte_range(tm.fn_start_byte, tm.fn_end_byte) {
                 Some(n) => n,
                 None => continue,
             };
@@ -166,12 +198,21 @@ impl LanguageExtractor for PythonExtractor {
             let line_count = end_line - line + 1;
 
             let assertion_count =
-                count_captures(&assertion_query, "assertion", fn_node, source_bytes);
+                count_captures(assertion_query, "assertion", fn_node, source_bytes);
 
-            let mock_scope = decorated_node.unwrap_or(fn_node);
-            let mock_count = count_captures(&mock_query, "mock", mock_scope, source_bytes);
+            let mock_scope = match (tm.decorated_start_byte, tm.decorated_end_byte) {
+                (Some(start), Some(end)) => root
+                    .descendant_for_byte_range(start, end)
+                    .unwrap_or(fn_node),
+                _ => fn_node,
+            };
+            let mock_count = count_captures(mock_query, "mock", mock_scope, source_bytes);
 
-            let mock_classes = collect_mock_class_names(&mock_assign_query, fn_node, source_bytes);
+            let mock_classes = collect_mock_class_names(mock_assign_query, fn_node, source_bytes);
+
+            // Suppression: check comment above the topmost node (decorated or fn)
+            let suppress_row = tm.decorated_start_row.unwrap_or(tm.fn_start_row);
+            let suppressed_rules = extract_suppression_from_previous_line(source, suppress_row);
 
             functions.push(TestFunction {
                 name: tm.name.clone(),
@@ -183,26 +224,13 @@ impl LanguageExtractor for PythonExtractor {
                     mock_count,
                     mock_classes,
                     line_count,
-                    suppressed_rules: Vec::new(),
+                    suppressed_rules,
                 },
             });
         }
 
         functions
     }
-}
-
-fn find_node_by_id(root: Node, target_id: usize) -> Option<Node> {
-    if root.id() == target_id {
-        return Some(root);
-    }
-    let mut cursor = root.walk();
-    for child in root.children(&mut cursor) {
-        if let Some(found) = find_node_by_id(child, target_id) {
-            return Some(found);
-        }
-    }
-    None
 }
 
 fn extract_mock_class_name(var_name: &str) -> String {
@@ -338,6 +366,30 @@ mod tests {
         let funcs = extractor.extract_test_functions(&source, "t003_pass.py");
         assert_eq!(funcs.len(), 1);
         assert!(funcs[0].analysis.line_count <= 50);
+    }
+
+    // --- Inline suppression ---
+
+    #[test]
+    fn suppressed_test_has_suppressed_rules() {
+        let source = fixture("suppressed.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "suppressed.py");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].analysis.mock_count, 6);
+        assert!(funcs[0]
+            .analysis
+            .suppressed_rules
+            .iter()
+            .any(|r| r.0 == "T002"));
+    }
+
+    #[test]
+    fn non_suppressed_test_has_empty_suppressed_rules() {
+        let source = fixture("t002_violation.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t002_violation.py");
+        assert!(funcs[0].analysis.suppressed_rules.is_empty());
     }
 
     // --- Phase 1 preserved tests ---

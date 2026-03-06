@@ -37,21 +37,11 @@ exspec --strict .
 ## Output
 
 ```
-exspec v0.1.0 -- 42 test files, 187 test functions
-
-BLOCK tests/test_api.py:78       T001 assertion-free
-WARN  tests/test_predict.py:45   T002 mock-overuse (6 mocks across 4 classes)
-WARN  tests/test_feature.py:120  T003 giant-test (73 lines)
-INFO  tests/test_transform.py    T008 no-contract (no Pydantic/Pandera)
-
-Metrics:
-  Mock density:      2.3/test (avg), 4 distinct classes/test (max)
-  Parameterized:     15% (28/187)
-  PBT usage:         12% (23/187)
-  Assertion density: 1.8/test (avg)
-  Contract coverage: 8% (15/187)
-
-Score: BLOCK 1 | WARN 2 | INFO 1 | PASS 183
+exspec v0.1.0 -- 8 test files, 10 test functions
+BLOCK tests/fixtures/typescript/t001_violation.test.ts:1 T001 assertion-free: test has no assertions
+WARN tests/fixtures/typescript/t002_violation.test.ts:1 T002 mock-overuse: 6 mocks (6 classes), threshold: 5 mocks / 3 classes
+WARN tests/fixtures/typescript/t003_violation.test.ts:1 T003 giant-test: 74 lines, threshold: 50
+Score: BLOCK 1 | WARN 2 | INFO 0 | PASS 7
 ```
 
 ## Output Formats

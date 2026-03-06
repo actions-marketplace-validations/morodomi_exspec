@@ -166,9 +166,11 @@ SPEC.md (ルールごとの入力→期待出力)
 | Phase | Content | Deliverable |
 |-------|---------|-------------|
 | 0 | SPEC.md + 命名 + 壁打ち | 仕様書 (DONE) |
-| 1 | Rust + tree-sitter scaffolding | cargo build通る |
-| 2 | Python + Tier 1 (T001-T003) | 3ルール動作 → dogfooding開始 |
-| 3 | TS + 残Tier 1 + SARIF出力 | MVP完成 |
+| 1 | Rust + tree-sitter scaffolding | cargo build通る (DONE) |
+| 2 | Python + Tier 1 (T001-T003) | 3ルール動作 (DONE) |
+| 3A | TypeScript + inline suppression + output polish | Python+TS両対応 (DONE) |
+| 3B | T004-T008 + .exspec.toml parsing | 残Tier 1ルール |
+| 3C | SARIF出力 + metrics本格化 | MVP完成 |
 | 4 | dev-crew hook統合 | RED Phase自動チェック |
 | 5 | Tier 2 + PHP/Rust対応 | v0.2 |
 | 6 | Tier 3 (AI Prompt生成) | v1.0 |
