@@ -1,5 +1,4 @@
 use exspec_core::extractor::{LanguageExtractor, TestFunction};
-use exspec_core::rules::Diagnostic;
 
 pub struct TypeScriptExtractor;
 
@@ -26,10 +25,6 @@ impl Default for TypeScriptExtractor {
 
 impl LanguageExtractor for TypeScriptExtractor {
     fn extract_test_functions(&self, _source: &str, _file_path: &str) -> Vec<TestFunction> {
-        Vec::new()
-    }
-
-    fn check(&self, _source: &str, _file_path: &str) -> Vec<Diagnostic> {
         Vec::new()
     }
 }

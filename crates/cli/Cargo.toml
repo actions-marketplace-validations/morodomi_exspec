@@ -9,4 +9,6 @@ path = "src/main.rs"
 
 [dependencies]
 exspec-core = { path = "../core" }
+exspec-lang-python = { path = "../lang-python" }
 clap = { version = "4", features = ["derive"] }
+ignore = "0.4"
