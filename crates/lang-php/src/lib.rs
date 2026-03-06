@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use exspec_core::extractor::{FileAnalysis, LanguageExtractor, TestAnalysis, TestFunction};
-use exspec_core::suppress::parse_suppression;
+use exspec_core::query_utils::{
+    collect_mock_class_names, count_captures, extract_suppression_from_previous_line, has_any_match,
+};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
@@ -53,51 +54,6 @@ impl Default for PhpExtractor {
     }
 }
 
-fn count_captures(query: &Query, capture_name: &str, node: Node, source: &[u8]) -> usize {
-    let idx = query
-        .capture_index_for_name(capture_name)
-        .expect("capture not found");
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(query, node, source);
-    let mut count = 0;
-    while let Some(m) = matches.next() {
-        count += m.captures.iter().filter(|c| c.index == idx).count();
-    }
-    count
-}
-
-fn has_any_match(query: &Query, capture_name: &str, node: Node, source: &[u8]) -> bool {
-    let idx = match query.capture_index_for_name(capture_name) {
-        Some(i) => i,
-        None => return false,
-    };
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(query, node, source);
-    while let Some(m) = matches.next() {
-        if m.captures.iter().any(|c| c.index == idx) {
-            return true;
-        }
-    }
-    false
-}
-
-fn collect_mock_class_names(query: &Query, node: Node, source: &[u8]) -> Vec<String> {
-    let var_idx = query
-        .capture_index_for_name("var_name")
-        .expect("no @var_name capture");
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(query, node, source);
-    let mut names = BTreeSet::new();
-    while let Some(m) = matches.next() {
-        for c in m.captures.iter().filter(|c| c.index == var_idx) {
-            if let Ok(var) = c.node.utf8_text(source) {
-                names.insert(extract_mock_class_name(var));
-            }
-        }
-    }
-    names.into_iter().collect()
-}
-
 fn extract_mock_class_name(var_name: &str) -> String {
     // PHP uses $mockDb or $mock_db patterns
     // Strip $ prefix first
@@ -115,18 +71,6 @@ fn extract_mock_class_name(var_name: &str) -> String {
         }
     }
     name.to_string()
-}
-
-fn extract_suppression_from_previous_line(
-    source: &str,
-    start_row: usize,
-) -> Vec<exspec_core::rules::RuleId> {
-    if start_row == 0 {
-        return Vec::new();
-    }
-    let lines: Vec<&str> = source.lines().collect();
-    let prev_line = lines.get(start_row - 1).unwrap_or(&"");
-    parse_suppression(prev_line)
 }
 
 /// Check if the method has a `/** @test */` docblock comment on the preceding line(s).
@@ -231,7 +175,12 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
 
         let assertion_count = count_captures(assertion_query, "assertion", fn_node, source_bytes);
         let mock_count = count_captures(mock_query, "mock", fn_node, source_bytes);
-        let mock_classes = collect_mock_class_names(mock_assign_query, fn_node, source_bytes);
+        let mock_classes = collect_mock_class_names(
+            mock_assign_query,
+            fn_node,
+            source_bytes,
+            extract_mock_class_name,
+        );
         let suppressed_rules = extract_suppression_from_previous_line(source, tm.fn_start_row);
 
         functions.push(TestFunction {

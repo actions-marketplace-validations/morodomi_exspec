@@ -77,6 +77,12 @@ fn is_php_source_file(path: &str) -> bool {
     path.ends_with(".php")
 }
 
+fn has_path_component(path: &str, component: &str) -> bool {
+    std::path::Path::new(path)
+        .components()
+        .any(|c| c.as_os_str() == component)
+}
+
 fn is_rust_test_file(path: &str) -> bool {
     let filename = std::path::Path::new(path)
         .file_name()
@@ -86,7 +92,7 @@ fn is_rust_test_file(path: &str) -> bool {
         return false;
     }
     // tests/**/*.rs or *_test.rs patterns
-    filename.ends_with("_test.rs") || path.contains("/tests/") || path.contains("\\tests\\")
+    filename.ends_with("_test.rs") || has_path_component(path, "tests")
 }
 
 fn is_rust_source_file(path: &str) -> bool {
@@ -1263,6 +1269,27 @@ mod tests {
     fn is_rust_test_file_rejects_non_rs() {
         assert!(!is_rust_test_file("test_foo.py"));
         assert!(!is_rust_test_file("foo.test.ts"));
+    }
+
+    #[test]
+    fn is_rust_test_file_rejects_partial_tests_dir() {
+        // #9: substring match false positives
+        assert!(!is_rust_test_file("src/mytests/foo.rs"));
+        assert!(!is_rust_test_file("tests_data/bar.rs"));
+        assert!(!is_rust_test_file("contested/baz.rs"));
+    }
+
+    #[test]
+    fn is_rust_test_file_matches_nested_tests_dir() {
+        // #9: nested tests/ dir should still match
+        assert!(is_rust_test_file("project/tests/nested/foo.rs"));
+    }
+
+    #[test]
+    fn is_rust_test_file_matches_tests_at_root() {
+        // #9: tests/ at path start (no leading component) should match
+        assert!(is_rust_test_file("tests/foo.rs"));
+        assert!(is_rust_test_file("tests/nested/bar.rs"));
     }
 
     #[test]
