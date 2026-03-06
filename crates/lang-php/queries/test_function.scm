@@ -18,7 +18,7 @@
     (attribute_group
       (attribute
         (qualified_name) @_qattr
-        (#match? @_qattr "Test$"))))
+        (#match? @_qattr "PHPUnit"))))
   name: (name) @name) @function
 
 ; Pest: test('name', fn() { ... }) anonymous function

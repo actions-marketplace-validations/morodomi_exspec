@@ -125,19 +125,25 @@ fn is_in_non_test_class(root: Node, start_byte: usize, end_byte: usize, source: 
     let Some(node) = root.descendant_for_byte_range(start_byte, end_byte) else {
         return false;
     };
+    // Walk all ancestors, record the outermost class name
+    let mut outermost_class_name: Option<String> = None;
     let mut current = node.parent();
     while let Some(parent) = current {
         if parent.kind() == "class_definition" {
             if let Some(name_node) = parent.child_by_field_name("name") {
                 if let Ok(name) = name_node.utf8_text(source) {
-                    return !name.starts_with("Test") && !name.starts_with("test_");
+                    outermost_class_name = Some(name.to_string());
                 }
+            } else {
+                outermost_class_name = Some(String::new());
             }
-            return true; // class without parseable name -> exclude
         }
         current = parent.parent();
     }
-    false // module-level -> not in non-test class
+    match outermost_class_name {
+        None => false, // module-level
+        Some(name) => !name.starts_with("Test") && !name.starts_with("test_"),
+    }
 }
 
 fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec<TestFunction> {
@@ -599,6 +605,44 @@ mod tests {
         let funcs = extractor.extract_test_functions(&source, "test_class_decorated.py");
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "test_create");
+    }
+
+    // --- Issue #6: Nested class outermost ancestor ---
+
+    #[test]
+    fn nested_class_test_outer_helper_included() {
+        let source = fixture("nested_class.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "nested_class.py");
+        let names: Vec<&str> = funcs.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            names.contains(&"test_nested_in_test_outer"),
+            "TestOuter > Helper > test_foo should be INCLUDED: {names:?}"
+        );
+    }
+
+    #[test]
+    fn nested_class_non_test_outer_excluded() {
+        let source = fixture("nested_class.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "nested_class.py");
+        let names: Vec<&str> = funcs.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            !names.contains(&"test_nested_in_non_test_outer"),
+            "UserService > TestInner > test_foo should be EXCLUDED: {names:?}"
+        );
+    }
+
+    #[test]
+    fn nested_class_both_non_test_excluded() {
+        let source = fixture("nested_class.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "nested_class.py");
+        let names: Vec<&str> = funcs.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            !names.contains(&"test_connection"),
+            "ServiceA > ServiceB > test_connection should be EXCLUDED: {names:?}"
+        );
     }
 
     // --- File analysis preserves functions ---

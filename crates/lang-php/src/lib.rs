@@ -214,6 +214,10 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
     // but have a @test docblock. We need to walk the tree for these.
     detect_docblock_test_methods(root, source, &mut test_matches);
 
+    // Dedup: docblock detector may re-add methods already matched by query
+    let mut seen = std::collections::HashSet::new();
+    test_matches.retain(|tm| seen.insert(tm.fn_start_byte));
+
     let mut functions = Vec::new();
     for tm in &test_matches {
         let fn_node = match root.descendant_for_byte_range(tm.fn_start_byte, tm.fn_end_byte) {
@@ -668,6 +672,43 @@ mod tests {
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "adds numbers");
         assert!(funcs[0].analysis.assertion_count >= 1);
+    }
+
+    // --- Issue #8: FQCN false positive ---
+
+    #[test]
+    fn fqcn_rejects_non_phpunit_attribute() {
+        let source = fixture("fqcn_false_positive.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "fqcn_false_positive.php");
+        let names: Vec<&str> = funcs.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            !names.contains(&"custom_attribute_method"),
+            "custom #[\\MyApp\\Attributes\\Test] should NOT be detected: {names:?}"
+        );
+        assert!(
+            names.contains(&"real_phpunit_attribute"),
+            "real #[\\PHPUnit\\...\\Test] should be detected: {names:?}"
+        );
+        assert_eq!(funcs.len(), 1);
+    }
+
+    // --- Issue #7: Docblock double detection ---
+
+    #[test]
+    fn docblock_attribute_no_double_detection() {
+        let source = fixture("docblock_double_detection.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "docblock_double_detection.php");
+        let names: Vec<&str> = funcs.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            funcs.len(),
+            3,
+            "expected exactly 3 test functions (no duplicates): {names:?}"
+        );
+        assert!(names.contains(&"short_attribute_with_docblock"));
+        assert!(names.contains(&"fqcn_attribute_with_docblock"));
+        assert!(names.contains(&"docblock_only"));
     }
 
     // --- File analysis preserves functions ---
