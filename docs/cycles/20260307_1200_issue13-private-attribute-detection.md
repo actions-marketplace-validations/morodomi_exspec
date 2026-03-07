@@ -41,24 +41,23 @@ T101 how-not-what ルールを拡張し、assertion内の private attribute ア�
 ### rules.rs
 - [ ] 既存 `t101_how_not_what_produces_warn` のメッセージ assertion 更新
 
-## Phases
+## Phase: DONE
 
 ### RED
-- Create fixtures: t101_private_violation.py, t101_private_violation.test.ts
-- Write all failing tests
-- Verify tests fail
+- Created fixtures: t101_private_violation.py, t101_private_violation.test.ts
+- 8 failing tests confirmed (4 core + 5 Python + 5 TypeScript - 6 trivially passing stubs)
 
 ### GREEN
-- Implement `count_captures_within_context()` in core
-- Create private_in_assertion.scm for Python and TypeScript
-- Wire up in extractors
-- Update T101 message in rules.rs
+- Implemented `count_captures_within_context()` in core (2-pass byte range matching)
+- Created private_in_assertion.scm for Python and TypeScript
+- Wired up in both extractors (adds to how_not_what_count)
+- Updated T101 message: "mock verification" -> "implementation-testing"
+- 371 tests all passing
 
 ### REFACTOR
-- Review code quality
+- cargo fmt applied
 
 ### REVIEW
-- Quality gate
-
-### COMMIT
-- Git commit
+- Security: PASS (score 5)
+- Correctness: PASS (score 8)
+- Overall: PASS

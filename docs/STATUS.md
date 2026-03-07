@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 5B in progress (Tier 2 rules). T101 how-not-what implemented for Python + TypeScript.
+Phase 5B in progress (Tier 2 rules). T101 how-not-what implemented for Python + TypeScript (mock verification + private attribute access).
 
 ## Progress
 
@@ -51,7 +51,7 @@ Phase 5B in progress (Tier 2 rules). T101 how-not-what implemented for Python + 
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 357 passing | -- |
+| Tests | 371 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
