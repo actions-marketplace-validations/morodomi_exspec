@@ -2,7 +2,8 @@ use std::sync::OnceLock;
 
 use exspec_core::extractor::{FileAnalysis, LanguageExtractor, TestAnalysis, TestFunction};
 use exspec_core::query_utils::{
-    collect_mock_class_names, count_captures, extract_suppression_from_previous_line, has_any_match,
+    collect_mock_class_names, count_captures, count_captures_within_context,
+    extract_suppression_from_previous_line, has_any_match,
 };
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
@@ -14,6 +15,10 @@ const MOCK_ASSIGNMENT_QUERY: &str = include_str!("../queries/mock_assignment.scm
 const PARAMETERIZED_QUERY: &str = include_str!("../queries/parameterized.scm");
 const IMPORT_PBT_QUERY: &str = include_str!("../queries/import_pbt.scm");
 const IMPORT_CONTRACT_QUERY: &str = include_str!("../queries/import_contract.scm");
+const HOW_NOT_WHAT_QUERY: &str = include_str!("../queries/how_not_what.scm");
+const PRIVATE_IN_ASSERTION_QUERY: &str = include_str!("../queries/private_in_assertion.scm");
+const ERROR_TEST_QUERY: &str = include_str!("../queries/error_test.scm");
+const RELATIONAL_ASSERTION_QUERY: &str = include_str!("../queries/relational_assertion.scm");
 
 fn php_language() -> tree_sitter::Language {
     tree_sitter_php::LANGUAGE_PHP.into()
@@ -30,6 +35,10 @@ static MOCK_ASSIGN_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static PARAMETERIZED_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static IMPORT_PBT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static IMPORT_CONTRACT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static HOW_NOT_WHAT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static PRIVATE_IN_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static ERROR_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static RELATIONAL_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct PhpExtractor;
 
@@ -108,11 +117,39 @@ struct TestMatch {
     fn_end_row: usize,
 }
 
+/// Count the number of parameters in a PHP method (formal_parameters).
+fn count_method_params(fn_node: Node) -> usize {
+    let params_node = match fn_node.child_by_field_name("parameters") {
+        Some(n) => n,
+        None => return 0,
+    };
+
+    let mut count = 0;
+    let mut cursor = params_node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            let node = cursor.node();
+            if node.kind() == "simple_parameter" || node.kind() == "variadic_parameter" {
+                count += 1;
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    count
+}
+
 fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec<TestFunction> {
     let test_query = cached_query(&TEST_QUERY_CACHE, TEST_FUNCTION_QUERY);
     let assertion_query = cached_query(&ASSERTION_QUERY_CACHE, ASSERTION_QUERY);
     let mock_query = cached_query(&MOCK_QUERY_CACHE, MOCK_USAGE_QUERY);
     let mock_assign_query = cached_query(&MOCK_ASSIGN_QUERY_CACHE, MOCK_ASSIGNMENT_QUERY);
+    let how_not_what_query = cached_query(&HOW_NOT_WHAT_QUERY_CACHE, HOW_NOT_WHAT_QUERY);
+    let private_query = cached_query(
+        &PRIVATE_IN_ASSERTION_QUERY_CACHE,
+        PRIVATE_IN_ASSERTION_QUERY,
+    );
 
     let source_bytes = source.as_bytes();
 
@@ -181,6 +218,20 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
             source_bytes,
             extract_mock_class_name,
         );
+        let how_not_what_count =
+            count_captures(how_not_what_query, "how_pattern", fn_node, source_bytes);
+
+        let private_in_assertion_count = count_captures_within_context(
+            assertion_query,
+            "assertion",
+            private_query,
+            "private_access",
+            fn_node,
+            source_bytes,
+        );
+
+        let fixture_count = count_method_params(fn_node);
+
         let suppressed_rules = extract_suppression_from_previous_line(source, tm.fn_start_row);
 
         functions.push(TestFunction {
@@ -193,8 +244,8 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 mock_count,
                 mock_classes,
                 line_count,
-                how_not_what_count: 0,
-                fixture_count: 0,
+                how_not_what_count: how_not_what_count + private_in_assertion_count,
+                fixture_count,
                 hardcoded_only: false, // T104 deferred for PHP: false to suppress noise
                 suppressed_rules,
             },
@@ -271,10 +322,8 @@ impl LanguageExtractor for PhpExtractor {
                     functions: Vec::new(),
                     has_pbt_import: false,
                     has_contract_import: false,
-                    // T103 deferred for PHP: true to suppress noise
-                    has_error_test: true,
-                    // T105 deferred for PHP: true to suppress noise
-                    has_relational_assertion: true,
+                    has_error_test: false,
+                    has_relational_assertion: false,
                     parameterized_count: 0,
                 };
             }
@@ -295,15 +344,23 @@ impl LanguageExtractor for PhpExtractor {
         let has_contract_import =
             has_any_match(contract_query, "contract_import", root, source_bytes);
 
+        let error_test_query = cached_query(&ERROR_TEST_QUERY_CACHE, ERROR_TEST_QUERY);
+        let has_error_test = has_any_match(error_test_query, "error_test", root, source_bytes);
+
+        let relational_query = cached_query(
+            &RELATIONAL_ASSERTION_QUERY_CACHE,
+            RELATIONAL_ASSERTION_QUERY,
+        );
+        let has_relational_assertion =
+            has_any_match(relational_query, "relational", root, source_bytes);
+
         FileAnalysis {
             file: file_path.to_string(),
             functions,
             has_pbt_import,
             has_contract_import,
-            // T103 deferred for PHP: true to suppress noise
-            has_error_test: true,
-            // T105 deferred for PHP: true to suppress noise
-            has_relational_assertion: true,
+            has_error_test,
+            has_relational_assertion,
             parameterized_count,
         }
     }
@@ -755,6 +812,174 @@ mod tests {
         assert!(
             q.capture_index_for_name("contract_import").is_some(),
             "import_contract.scm must define @contract_import capture"
+        );
+    }
+
+    // --- T103: missing-error-test ---
+
+    #[test]
+    fn error_test_expect_exception() {
+        let source = fixture("t103_pass.php");
+        let extractor = PhpExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t103_pass.php");
+        assert!(
+            fa.has_error_test,
+            "$this->expectException should set has_error_test"
+        );
+    }
+
+    #[test]
+    fn error_test_pest_to_throw() {
+        let source = fixture("t103_pass_pest.php");
+        let extractor = PhpExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t103_pass_pest.php");
+        assert!(
+            fa.has_error_test,
+            "Pest ->toThrow() should set has_error_test"
+        );
+    }
+
+    #[test]
+    fn error_test_no_patterns() {
+        let source = fixture("t103_violation.php");
+        let extractor = PhpExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t103_violation.php");
+        assert!(
+            !fa.has_error_test,
+            "no error patterns should set has_error_test=false"
+        );
+    }
+
+    #[test]
+    fn query_capture_names_error_test() {
+        let q = make_query(include_str!("../queries/error_test.scm"));
+        assert!(
+            q.capture_index_for_name("error_test").is_some(),
+            "error_test.scm must define @error_test capture"
+        );
+    }
+
+    // --- T105: deterministic-no-metamorphic ---
+
+    #[test]
+    fn relational_assertion_pass_greater_than() {
+        let source = fixture("t105_pass.php");
+        let extractor = PhpExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t105_pass.php");
+        assert!(
+            fa.has_relational_assertion,
+            "assertGreaterThan should set has_relational_assertion"
+        );
+    }
+
+    #[test]
+    fn relational_assertion_violation() {
+        let source = fixture("t105_violation.php");
+        let extractor = PhpExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t105_violation.php");
+        assert!(
+            !fa.has_relational_assertion,
+            "only assertEquals should not set has_relational_assertion"
+        );
+    }
+
+    #[test]
+    fn query_capture_names_relational_assertion() {
+        let q = make_query(include_str!("../queries/relational_assertion.scm"));
+        assert!(
+            q.capture_index_for_name("relational").is_some(),
+            "relational_assertion.scm must define @relational capture"
+        );
+    }
+
+    // --- T101: how-not-what ---
+
+    #[test]
+    fn how_not_what_expects() {
+        let source = fixture("t101_violation.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_violation.php");
+        assert!(
+            funcs[0].analysis.how_not_what_count > 0,
+            "->expects() should trigger how_not_what, got {}",
+            funcs[0].analysis.how_not_what_count
+        );
+    }
+
+    #[test]
+    fn how_not_what_should_receive() {
+        let source = fixture("t101_violation.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_violation.php");
+        assert!(
+            funcs[1].analysis.how_not_what_count > 0,
+            "->shouldReceive() should trigger how_not_what, got {}",
+            funcs[1].analysis.how_not_what_count
+        );
+    }
+
+    #[test]
+    fn how_not_what_pass() {
+        let source = fixture("t101_pass.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_pass.php");
+        assert_eq!(
+            funcs[0].analysis.how_not_what_count, 0,
+            "no mock patterns should have how_not_what_count=0"
+        );
+    }
+
+    #[test]
+    fn how_not_what_private_access() {
+        let source = fixture("t101_private_violation.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_private_violation.php");
+        assert!(
+            funcs[0].analysis.how_not_what_count > 0,
+            "$obj->_name in assertion should trigger how_not_what, got {}",
+            funcs[0].analysis.how_not_what_count
+        );
+    }
+
+    #[test]
+    fn query_capture_names_how_not_what() {
+        let q = make_query(include_str!("../queries/how_not_what.scm"));
+        assert!(
+            q.capture_index_for_name("how_pattern").is_some(),
+            "how_not_what.scm must define @how_pattern capture"
+        );
+    }
+
+    #[test]
+    fn query_capture_names_private_in_assertion() {
+        let q = make_query(include_str!("../queries/private_in_assertion.scm"));
+        assert!(
+            q.capture_index_for_name("private_access").is_some(),
+            "private_in_assertion.scm must define @private_access capture"
+        );
+    }
+
+    // --- T102: fixture-sprawl ---
+
+    #[test]
+    fn fixture_count_for_violation() {
+        let source = fixture("t102_violation.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t102_violation.php");
+        assert_eq!(
+            funcs[0].analysis.fixture_count, 7,
+            "expected 7 parameters as fixture_count"
+        );
+    }
+
+    #[test]
+    fn fixture_count_for_pass() {
+        let source = fixture("t102_pass.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t102_pass.php");
+        assert_eq!(
+            funcs[0].analysis.fixture_count, 0,
+            "expected 0 parameters as fixture_count"
         );
     }
 }

@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 5B complete (Tier 2 rules). T101-T105 implemented for Python + TypeScript.
+Phase 5C complete (Tier 2 PHP/Rust expansion). T101-T105 implemented for all 4 languages.
 
 ## Progress
 
@@ -20,7 +20,8 @@ Phase 5B complete (Tier 2 rules). T101-T105 implemented for Python + TypeScript.
 | 4.1 - PHP FQCN attribute + Pest arrow function | DONE |
 | 4.2 - Nested class, docblock dedup, FQCN pattern | DONE |
 | 5A - Rust language support (cargo test) | DONE |
-| 5B - Tier 2 rules (T101-T105) | DONE |
+| 5B - Tier 2 rules (T101-T105) Python + TypeScript | DONE |
+| 5C - Tier 2 PHP/Rust expansion (T101-T105) | DONE |
 | 6 - Tier 3 (AI Prompt generation) | NOT STARTED |
 | 7 - OSS release + Note article + MCP Server | NOT STARTED |
 
@@ -45,17 +46,19 @@ Phase 5B complete (Tier 2 rules). T101-T105 implemented for Python + TypeScript.
 | T006 | low-assertion-density | WARN | Yes | Yes | Yes | Yes |
 | T007 | test-source-ratio | INFO | -- | -- | -- | -- |
 | T008 | no-contract | INFO | Yes | Yes | Yes | N/A |
-| T101 | how-not-what | WARN | Yes | Yes | -- | -- |
-| T102 | fixture-sprawl | WARN | Yes | Yes | -- | -- |
-| T103 | missing-error-test | INFO | Yes | Yes | -- | -- |
+| T101 | how-not-what | WARN | Yes | Yes | Yes | Yes* |
+| T102 | fixture-sprawl | WARN | Yes | Yes | Yes | Yes |
+| T103 | missing-error-test | INFO | Yes | Yes | Yes | Yes |
 | T104 | hardcoded-only | INFO | Yes | Yes | -- | -- |
-| T105 | deterministic-no-metamorphic | INFO | Yes | Yes | -- | -- |
+| T105 | deterministic-no-metamorphic | INFO | Yes | Yes | Yes | Yes* |
+
+\* Rust: token_tree limitation. Private field access in macros (T101) and relational operators in `assert!()` (T105) are not detectable.
 
 ## Quality Metrics
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 437 passing | -- |
+| Tests | 466 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
@@ -70,4 +73,6 @@ Phase 5B complete (Tier 2 rules). T101-T105 implemented for Python + TypeScript.
 
 ## Open Issues
 
-None.
+- #20 T102 PHP: DataProvider params counted as fixtures (false positive)
+- #21 T102 Rust: let-binding count over-counts (threshold calibration)
+- #22 T103 Rust: `.is_err()` is a weak error-test proxy
