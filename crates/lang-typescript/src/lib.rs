@@ -14,6 +14,7 @@ const MOCK_ASSIGNMENT_QUERY: &str = include_str!("../queries/mock_assignment.scm
 const PARAMETERIZED_QUERY: &str = include_str!("../queries/parameterized.scm");
 const IMPORT_PBT_QUERY: &str = include_str!("../queries/import_pbt.scm");
 const IMPORT_CONTRACT_QUERY: &str = include_str!("../queries/import_contract.scm");
+const HOW_NOT_WHAT_QUERY: &str = include_str!("../queries/how_not_what.scm");
 
 fn ts_language() -> tree_sitter::Language {
     tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
@@ -30,6 +31,7 @@ static MOCK_ASSIGN_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static PARAMETERIZED_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static IMPORT_PBT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static IMPORT_CONTRACT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static HOW_NOT_WHAT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct TypeScriptExtractor;
 
@@ -77,6 +79,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
     let assertion_query = cached_query(&ASSERTION_QUERY_CACHE, ASSERTION_QUERY);
     let mock_query = cached_query(&MOCK_QUERY_CACHE, MOCK_USAGE_QUERY);
     let mock_assign_query = cached_query(&MOCK_ASSIGN_QUERY_CACHE, MOCK_ASSIGNMENT_QUERY);
+    let how_not_what_query = cached_query(&HOW_NOT_WHAT_QUERY_CACHE, HOW_NOT_WHAT_QUERY);
 
     let name_idx = test_query
         .capture_index_for_name("name")
@@ -136,6 +139,9 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
             extract_mock_class_name,
         );
 
+        let how_not_what_count =
+            count_captures(how_not_what_query, "how_pattern", fn_node, source_bytes);
+
         let suppressed_rules = extract_suppression_from_previous_line(source, tm.fn_start_row);
 
         functions.push(TestFunction {
@@ -148,6 +154,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 mock_count,
                 mock_classes,
                 line_count,
+                how_not_what_count,
                 suppressed_rules,
             },
         });
@@ -464,6 +471,50 @@ mod tests {
         assert_eq!(fa.functions[0].name, "create user");
     }
 
+    // --- T101: how-not-what ---
+
+    #[test]
+    fn how_not_what_count_for_violation() {
+        let source = fixture("t101_violation.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_violation.test.ts");
+        assert_eq!(funcs.len(), 2);
+        assert!(
+            funcs[0].analysis.how_not_what_count > 0,
+            "expected how_not_what_count > 0 for first test, got {}",
+            funcs[0].analysis.how_not_what_count
+        );
+        assert!(
+            funcs[1].analysis.how_not_what_count > 0,
+            "expected how_not_what_count > 0 for second test, got {}",
+            funcs[1].analysis.how_not_what_count
+        );
+    }
+
+    #[test]
+    fn how_not_what_count_zero_for_pass() {
+        let source = fixture("t101_pass.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_pass.test.ts");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].analysis.how_not_what_count, 0);
+    }
+
+    #[test]
+    fn how_not_what_coexists_with_assertions() {
+        let source = fixture("t101_violation.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_violation.test.ts");
+        assert!(
+            funcs[0].analysis.assertion_count > 0,
+            "should also count as assertions"
+        );
+        assert!(
+            funcs[0].analysis.how_not_what_count > 0,
+            "should count as how-not-what"
+        );
+    }
+
     // --- Query capture name verification (#14) ---
 
     fn make_query(scm: &str) -> Query {
@@ -534,6 +585,15 @@ mod tests {
         assert!(
             q.capture_index_for_name("contract_import").is_some(),
             "import_contract.scm must define @contract_import capture"
+        );
+    }
+
+    #[test]
+    fn query_capture_names_how_not_what() {
+        let q = make_query(include_str!("../queries/how_not_what.scm"));
+        assert!(
+            q.capture_index_for_name("how_pattern").is_some(),
+            "how_not_what.scm must define @how_pattern capture"
         );
     }
 }

@@ -721,3 +721,79 @@ fn test_suppressed() {
 ```
 
 Comment must be on the line immediately before `#[test]` attribute.
+
+---
+
+## Tier 2 Rules
+
+### T101: how-not-what
+
+テストが「何を検証しているか (WHAT)」ではなく「どう実装されているか (HOW)」を検証しているパターンを検出する。mock検証メソッドの使用を検出しWARNを出力する。
+
+**Default**: WARN
+**Threshold**: なし (1つ以上でWARN)
+
+#### Assertion二重計上 (意図的仕様)
+
+`assert_called_with()` や `toHaveBeenCalledWith()` は assertion.scm にもマッチするため、T001 (assertion-free) を回避しつつ T101 が発火する。これは意図的な設計: mock検証しかないテストは「assertionはあるが実装検証」という正しい判定になる。
+
+#### Python -- Violation
+
+```python
+# fixtures/python/t101_violation.py
+def test_user_creation_calls_repository(mock_repo):
+    service = UserService(mock_repo)
+    service.create_user("alice")
+    mock_repo.save.assert_called_with("alice")
+    mock_repo.save.assert_called_once()
+    assert service is not None
+```
+
+#### Python -- Pass
+
+```python
+# fixtures/python/t101_pass.py
+def test_user_creation_returns_user():
+    service = UserService()
+    user = service.create_user("alice")
+    assert user.name == "alice"
+    assert user.active is True
+```
+
+#### TypeScript -- Violation
+
+```typescript
+// fixtures/typescript/t101_violation.test.ts
+test('calls repository on create', () => {
+  const mockRepo = jest.fn();
+  const service = new UserService(mockRepo);
+  service.createUser('alice');
+  expect(mockRepo.save).toHaveBeenCalledWith('alice');
+  expect(mockRepo.save).toHaveBeenCalledTimes(1);
+});
+```
+
+#### TypeScript -- Pass
+
+```typescript
+// fixtures/typescript/t101_pass.test.ts
+test('creates user with correct name', () => {
+  const service = new UserService();
+  const user = service.createUser('alice');
+  expect(user.name).toBe('alice');
+  expect(user.active).toBe(true);
+});
+```
+
+#### Expected Output
+
+```
+WARN tests/test_api.py:1  T101 how-not-what: 2 mock verification pattern(s) detected
+```
+
+#### Detection
+
+- Python: `mock.assert_called()`, `mock.assert_called_with()`, `mock.assert_called_once()`, `mock.assert_called_once_with()`, `mock.assert_any_call()`, `mock.assert_has_calls()`, `mock.assert_not_called()`
+- TypeScript: `toHaveBeenCalled()`, `toHaveBeenCalledWith()`, `toHaveBeenCalledTimes()`, `toHaveBeenLastCalledWith()`, `toHaveBeenNthCalledWith()`, `toHaveReturned()`, `toHaveReturnedWith()`, `toHaveReturnedTimes()`, `toHaveLastReturnedWith()`, `toHaveNthReturnedWith()`
+- PHP/Rust: スコープ外 (how_not_what_count = 0 固定)
+- scm: `how_not_what.scm` の `@how_pattern` capture count

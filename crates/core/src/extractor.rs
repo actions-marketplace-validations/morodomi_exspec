@@ -6,6 +6,7 @@ pub struct TestAnalysis {
     pub mock_count: usize,
     pub mock_classes: Vec<String>,
     pub line_count: usize,
+    pub how_not_what_count: usize,
     pub suppressed_rules: Vec<RuleId>,
 }
 
@@ -61,6 +62,7 @@ mod tests {
         assert_eq!(analysis.mock_count, 0);
         assert!(analysis.mock_classes.is_empty());
         assert_eq!(analysis.line_count, 0);
+        assert_eq!(analysis.how_not_what_count, 0);
         assert!(analysis.suppressed_rules.is_empty());
     }
 

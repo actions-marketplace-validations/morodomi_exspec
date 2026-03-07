@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 5A complete (Rust language support). Phase 5B (Tier 2 rules) next.
+Phase 5B in progress (Tier 2 rules). T101 how-not-what implemented for Python + TypeScript.
 
 ## Progress
 
@@ -20,7 +20,7 @@ Phase 5A complete (Rust language support). Phase 5B (Tier 2 rules) next.
 | 4.1 - PHP FQCN attribute + Pest arrow function | DONE |
 | 4.2 - Nested class, docblock dedup, FQCN pattern | DONE |
 | 5A - Rust language support (cargo test) | DONE |
-| 5B - Tier 2 rules | NOT STARTED |
+| 5B - Tier 2 rules (T101 how-not-what) | IN PROGRESS |
 | 6 - Tier 3 (AI Prompt generation) | NOT STARTED |
 | 7 - OSS release + Note article + MCP Server | NOT STARTED |
 
@@ -45,12 +45,13 @@ Phase 5A complete (Rust language support). Phase 5B (Tier 2 rules) next.
 | T006 | low-assertion-density | WARN | Yes | Yes | Yes | Yes |
 | T007 | test-source-ratio | INFO | -- | -- | -- | -- |
 | T008 | no-contract | INFO | Yes | Yes | Yes | N/A |
+| T101 | how-not-what | WARN | Yes | Yes | -- | -- |
 
 ## Quality Metrics
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 345 passing | -- |
+| Tests | 357 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 

@@ -154,6 +154,24 @@ pub fn evaluate_rules(functions: &[TestFunction], config: &Config) -> Vec<Diagno
                 details: None,
             });
         }
+
+        // T101: how-not-what
+        if !is_disabled(config, "T101")
+            && !is_suppressed(analysis, "T101")
+            && analysis.how_not_what_count > 0
+        {
+            diagnostics.push(Diagnostic {
+                rule: RuleId::new("T101"),
+                severity: Severity::Warn,
+                file: func.file.clone(),
+                line: Some(func.line),
+                message: format!(
+                    "how-not-what: {} mock verification pattern(s) detected",
+                    analysis.how_not_what_count,
+                ),
+                details: None,
+            });
+        }
     }
 
     diagnostics
@@ -490,6 +508,72 @@ mod tests {
                     "f".into(),
                 ],
                 suppressed_rules: vec![RuleId::new("T002")],
+                ..Default::default()
+            },
+        )];
+        let diags = evaluate_rules(&funcs, &Config::default());
+        assert!(diags.is_empty());
+    }
+
+    // --- T101: how-not-what ---
+
+    #[test]
+    fn t101_how_not_what_produces_warn() {
+        let funcs = vec![make_func(
+            "test_calls_repo",
+            TestAnalysis {
+                assertion_count: 1,
+                how_not_what_count: 2,
+                ..Default::default()
+            },
+        )];
+        let diags = evaluate_rules(&funcs, &Config::default());
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, RuleId::new("T101"));
+        assert_eq!(diags[0].severity, Severity::Warn);
+        assert!(diags[0].message.contains("2 mock verification pattern(s)"));
+    }
+
+    #[test]
+    fn t101_zero_how_not_what_no_diagnostic() {
+        let funcs = vec![make_func(
+            "test_behavior",
+            TestAnalysis {
+                assertion_count: 1,
+                how_not_what_count: 0,
+                ..Default::default()
+            },
+        )];
+        let diags = evaluate_rules(&funcs, &Config::default());
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn t101_disabled_no_diagnostic() {
+        let funcs = vec![make_func(
+            "test_calls_repo",
+            TestAnalysis {
+                assertion_count: 1,
+                how_not_what_count: 2,
+                ..Default::default()
+            },
+        )];
+        let config = Config {
+            disabled_rules: vec![RuleId::new("T101")],
+            ..Config::default()
+        };
+        let diags = evaluate_rules(&funcs, &config);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn t101_suppressed_no_diagnostic() {
+        let funcs = vec![make_func(
+            "test_calls_repo",
+            TestAnalysis {
+                assertion_count: 1,
+                how_not_what_count: 2,
+                suppressed_rules: vec![RuleId::new("T101")],
                 ..Default::default()
             },
         )];

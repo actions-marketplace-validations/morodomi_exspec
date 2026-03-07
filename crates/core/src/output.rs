@@ -197,6 +197,11 @@ const RULE_REGISTRY: &[RuleMeta] = &[
         name: "no-contract",
         short_description: "No contract testing library used in tests",
     },
+    RuleMeta {
+        id: "T101",
+        name: "how-not-what",
+        short_description: "Test verifies implementation rather than behavior",
+    },
 ];
 
 pub fn format_sarif(diagnostics: &[Diagnostic]) -> String {
@@ -628,13 +633,13 @@ mod tests {
     }
 
     #[test]
-    fn sarif_rules_has_8_entries() {
+    fn sarif_rules_has_9_entries() {
         let output = format_sarif(&[]);
         let parsed = parse_sarif(&output);
         let rules = parsed["runs"][0]["tool"]["driver"]["rules"]
             .as_array()
             .unwrap();
-        assert_eq!(rules.len(), 8);
+        assert_eq!(rules.len(), 9);
     }
 
     #[test]
@@ -693,7 +698,7 @@ mod tests {
         let rules = parsed["runs"][0]["tool"]["driver"]["rules"]
             .as_array()
             .unwrap();
-        assert_eq!(rules.len(), 8);
+        assert_eq!(rules.len(), 9);
     }
 
     #[test]

@@ -177,6 +177,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 mock_count,
                 mock_classes,
                 line_count,
+                how_not_what_count: 0,
                 suppressed_rules,
             },
         });
