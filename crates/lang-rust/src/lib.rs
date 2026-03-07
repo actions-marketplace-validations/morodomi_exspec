@@ -179,7 +179,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 line_count,
                 how_not_what_count: 0,
                 fixture_count: 0,
-                hardcoded_only: false,
+                hardcoded_only: false, // T104 deferred for Rust: false to suppress noise
                 suppressed_rules,
             },
         });

@@ -1179,6 +1179,24 @@ mod tests {
         assert!(diags.is_empty());
     }
 
+    #[test]
+    fn t104_t101_interaction_both_emitted() {
+        let funcs = vec![make_func(
+            "test_mock_and_hardcoded",
+            TestAnalysis {
+                assertion_count: 1,
+                hardcoded_only: true,
+                how_not_what_count: 1,
+                ..Default::default()
+            },
+        )];
+        let diags = evaluate_rules(&funcs, &Config::default());
+        assert_eq!(diags.len(), 2);
+        let rules: Vec<&str> = diags.iter().map(|d| d.rule.0.as_str()).collect();
+        assert!(rules.contains(&"T104"), "T104 should be emitted");
+        assert!(rules.contains(&"T101"), "T101 should be emitted");
+    }
+
     // --- T105: deterministic-no-metamorphic ---
 
     #[test]

@@ -55,7 +55,7 @@ Phase 5B complete (Tier 2 rules). T101-T105 implemented for Python + TypeScript.
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 431 passing | -- |
+| Tests | 437 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
@@ -70,7 +70,4 @@ Phase 5B complete (Tier 2 rules). T101-T105 implemented for Python + TypeScript.
 
 ## Open Issues
 
-- #16: T104 Python keyword_argument false negative
-- #17: T104 TypeScript test coverage gaps
-- #18: Rename stale test sarif_rules_has_10_entries
-- #19: T104 deferral comments + T101 interaction untested
+None.

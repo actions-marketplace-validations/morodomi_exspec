@@ -1057,6 +1057,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hardcoded_only_pass_computed() {
+        let source = fixture("t104_pass_computed.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_pass_computed.test.ts");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            !funcs[0].analysis.hardcoded_only,
+            "computed value in assertion should not be hardcoded_only"
+        );
+    }
+
+    #[test]
+    fn hardcoded_only_no_assertion() {
+        let source = fixture("t104_no_assertion.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_no_assertion.test.ts");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            !funcs[0].analysis.hardcoded_only,
+            "no assertion should not be hardcoded_only"
+        );
+    }
+
+    #[test]
+    fn hardcoded_only_pass_not_chain() {
+        let source = fixture("t104_pass_not_chain.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_pass_not_chain.test.ts");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            !funcs[0].analysis.hardcoded_only,
+            ".not chain with variable should not be hardcoded_only"
+        );
+    }
+
     // --- T105: deterministic-no-metamorphic ---
 
     #[test]

@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn sarif_rules_has_11_entries() {
+    fn sarif_rules_has_13_entries() {
         let output = format_sarif(&[]);
         let parsed = parse_sarif(&output);
         let rules = parsed["runs"][0]["tool"]["driver"]["rules"]

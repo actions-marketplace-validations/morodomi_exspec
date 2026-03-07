@@ -363,6 +363,13 @@ fn has_non_callee_identifier_py(node: Node, source: &[u8]) -> bool {
         }
         return true;
     }
+    if node.kind() == "keyword_argument" {
+        // Skip name field (parameter name), recurse into value only
+        if let Some(val) = node.child_by_field_name("value") {
+            return has_non_callee_identifier_py(val, source);
+        }
+        return false;
+    }
     if node.kind() == "call" {
         // Skip function field (callee), recurse into arguments only
         if let Some(args) = node.child_by_field_name("arguments") {
@@ -1163,6 +1170,34 @@ mod tests {
         assert!(
             !funcs[0].analysis.hardcoded_only,
             "loop variable in assertion should not be hardcoded_only"
+        );
+    }
+
+    #[test]
+    fn hardcoded_only_keyword_arg_is_violation() {
+        let source = fixture("t104_keyword_arg.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_keyword_arg.py");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            funcs[0].analysis.hardcoded_only,
+            "keyword_argument with only literals should be hardcoded_only"
+        );
+    }
+
+    #[test]
+    fn t104_t101_interaction_both_fire() {
+        let source = fixture("t104_t101_interaction.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_t101_interaction.py");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            funcs[0].analysis.how_not_what_count > 0,
+            "mock.assert_called() should trigger how_not_what"
+        );
+        assert!(
+            funcs[0].analysis.hardcoded_only,
+            "hardcoded assertion should trigger hardcoded_only"
         );
     }
 
