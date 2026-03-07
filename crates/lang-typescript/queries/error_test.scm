@@ -12,7 +12,10 @@
     property: (property_identifier) @_method2)
   (#eq? @_method2 "toThrowError")) @error_test
 
-; .rejects (property access within expect chain)
+; expect(...).rejects
 (member_expression
+  object: (call_expression
+    function: (identifier) @_fn)
   property: (property_identifier) @_prop
+  (#eq? @_fn "expect")
   (#eq? @_prop "rejects")) @error_test

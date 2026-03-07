@@ -986,6 +986,18 @@ mod tests {
     }
 
     #[test]
+    fn error_test_false_positive_non_self_receiver() {
+        let source = fixture("t103_false_positive_non_self_receiver.py");
+        let extractor = PythonExtractor::new();
+        let fa =
+            extractor.extract_file_analysis(&source, "t103_false_positive_non_self_receiver.py");
+        assert!(
+            !fa.has_error_test,
+            "mock_obj.assertRaises() should NOT set has_error_test"
+        );
+    }
+
+    #[test]
     fn error_test_no_patterns() {
         let source = fixture("t103_violation.py");
         let extractor = PythonExtractor::new();

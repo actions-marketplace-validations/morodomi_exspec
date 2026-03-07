@@ -873,6 +873,18 @@ mod tests {
     }
 
     #[test]
+    fn error_test_false_positive_rejects_property() {
+        let source = fixture("t103_false_positive_rejects_property.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor
+            .extract_file_analysis(&source, "t103_false_positive_rejects_property.test.ts");
+        assert!(
+            !fa.has_error_test,
+            "service.rejects should NOT set has_error_test"
+        );
+    }
+
+    #[test]
     fn error_test_no_patterns() {
         let source = fixture("t103_violation.test.ts");
         let extractor = TypeScriptExtractor::new();

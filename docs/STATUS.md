@@ -53,7 +53,7 @@ Phase 5B in progress (Tier 2 rules). T101 how-not-what + T102 fixture-sprawl + T
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 404 passing | -- |
+| Tests | 406 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
@@ -68,4 +68,4 @@ Phase 5B in progress (Tier 2 rules). T101 how-not-what + T102 fixture-sprawl + T
 
 ## Open Issues
 
-- [#15](https://github.com/morodomi/exspec/issues/15): T103 error_test.scm pattern precision (Python self. + TypeScript expect chain)
+None

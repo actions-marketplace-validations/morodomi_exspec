@@ -11,23 +11,31 @@
 ; self.assertRaises(...)
 (call
   function: (attribute
+    object: (identifier) @_obj2
     attribute: (identifier) @_method)
+  (#eq? @_obj2 "self")
   (#eq? @_method "assertRaises")) @error_test
 
 ; self.assertRaisesRegex(...)
 (call
   function: (attribute
+    object: (identifier) @_obj3
     attribute: (identifier) @_method2)
+  (#eq? @_obj3 "self")
   (#eq? @_method2 "assertRaisesRegex")) @error_test
 
 ; self.assertWarns(...)
 (call
   function: (attribute
+    object: (identifier) @_obj4
     attribute: (identifier) @_method3)
+  (#eq? @_obj4 "self")
   (#eq? @_method3 "assertWarns")) @error_test
 
 ; self.assertWarnsRegex(...)
 (call
   function: (attribute
+    object: (identifier) @_obj5
     attribute: (identifier) @_method4)
+  (#eq? @_obj5 "self")
   (#eq? @_method4 "assertWarnsRegex")) @error_test
