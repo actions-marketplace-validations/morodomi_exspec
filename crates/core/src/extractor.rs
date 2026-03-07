@@ -8,6 +8,7 @@ pub struct TestAnalysis {
     pub line_count: usize,
     pub how_not_what_count: usize,
     pub fixture_count: usize,
+    pub hardcoded_only: bool,
     pub suppressed_rules: Vec<RuleId>,
 }
 
@@ -33,6 +34,7 @@ pub struct FileAnalysis {
     pub has_pbt_import: bool,
     pub has_contract_import: bool,
     pub has_error_test: bool,
+    pub has_relational_assertion: bool,
     pub parameterized_count: usize,
 }
 
@@ -50,6 +52,7 @@ pub trait LanguageExtractor {
             has_pbt_import: false,
             has_contract_import: false,
             has_error_test: false,
+            has_relational_assertion: false,
             parameterized_count: 0,
         }
     }
@@ -68,6 +71,7 @@ mod tests {
         assert_eq!(analysis.line_count, 0);
         assert_eq!(analysis.how_not_what_count, 0);
         assert_eq!(analysis.fixture_count, 0);
+        assert!(!analysis.hardcoded_only);
         assert!(analysis.suppressed_rules.is_empty());
     }
 
@@ -79,6 +83,7 @@ mod tests {
             has_pbt_import: true,
             has_contract_import: false,
             has_error_test: true,
+            has_relational_assertion: false,
             parameterized_count: 3,
         };
         assert_eq!(fa.file, "test.py");
@@ -86,6 +91,7 @@ mod tests {
         assert!(fa.has_pbt_import);
         assert!(!fa.has_contract_import);
         assert!(fa.has_error_test);
+        assert!(!fa.has_relational_assertion);
         assert_eq!(fa.parameterized_count, 3);
     }
 
@@ -110,6 +116,7 @@ mod tests {
         assert!(!fa.has_pbt_import);
         assert!(!fa.has_contract_import);
         assert!(!fa.has_error_test);
+        assert!(!fa.has_relational_assertion);
         assert_eq!(fa.parameterized_count, 0);
     }
 }

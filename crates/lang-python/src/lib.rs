@@ -18,6 +18,7 @@ const IMPORT_CONTRACT_QUERY: &str = include_str!("../queries/import_contract.scm
 const HOW_NOT_WHAT_QUERY: &str = include_str!("../queries/how_not_what.scm");
 const PRIVATE_IN_ASSERTION_QUERY: &str = include_str!("../queries/private_in_assertion.scm");
 const ERROR_TEST_QUERY: &str = include_str!("../queries/error_test.scm");
+const RELATIONAL_ASSERTION_QUERY: &str = include_str!("../queries/relational_assertion.scm");
 
 fn python_language() -> tree_sitter::Language {
     tree_sitter_python::LANGUAGE.into()
@@ -37,6 +38,7 @@ static IMPORT_CONTRACT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static HOW_NOT_WHAT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static PRIVATE_IN_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static ERROR_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static RELATIONAL_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct PythonExtractor;
 
@@ -225,6 +227,9 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
         // Fixture count: number of function parameters (excluding `self`)
         let fixture_count = count_function_params(fn_node, source_bytes);
 
+        // T104: hardcoded-only detection
+        let hardcoded_only = is_hardcoded_only_py(assertion_query, fn_node, source_bytes);
+
         let suppress_row = tm.decorated_start_row.unwrap_or(tm.fn_start_row);
         let suppressed_rules = extract_suppression_from_previous_line(source, suppress_row);
 
@@ -240,6 +245,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 line_count,
                 how_not_what_count: how_not_what_count + private_in_assertion_count,
                 fixture_count,
+                hardcoded_only,
                 suppressed_rules,
             },
         });
@@ -269,6 +275,7 @@ impl LanguageExtractor for PythonExtractor {
                     has_pbt_import: false,
                     has_contract_import: false,
                     has_error_test: false,
+                    has_relational_assertion: false,
                     parameterized_count: 0,
                 };
             }
@@ -292,12 +299,20 @@ impl LanguageExtractor for PythonExtractor {
         let error_test_query = cached_query(&ERROR_TEST_QUERY_CACHE, ERROR_TEST_QUERY);
         let has_error_test = has_any_match(error_test_query, "error_test", root, source_bytes);
 
+        let relational_query = cached_query(
+            &RELATIONAL_ASSERTION_QUERY_CACHE,
+            RELATIONAL_ASSERTION_QUERY,
+        );
+        let has_relational_assertion =
+            has_any_match(relational_query, "relational", root, source_bytes);
+
         FileAnalysis {
             file: file_path.to_string(),
             functions,
             has_pbt_import,
             has_contract_import,
             has_error_test,
+            has_relational_assertion,
             parameterized_count,
         }
     }
@@ -334,6 +349,75 @@ fn count_function_params(fn_node: Node, source: &[u8]) -> usize {
         }
     }
     count
+}
+
+/// Python builtin constants that should be excluded from identifier checks.
+const PYTHON_BUILTIN_CONSTANTS: &[&str] = &["True", "False", "None"];
+
+/// Check if any non-callee identifier exists within the given node.
+/// Returns true if a variable/identifier (not a function call name, not a builtin constant) is found.
+fn has_non_callee_identifier_py(node: Node, source: &[u8]) -> bool {
+    if node.kind() == "identifier" {
+        if let Ok(name) = node.utf8_text(source) {
+            return !PYTHON_BUILTIN_CONSTANTS.contains(&name);
+        }
+        return true;
+    }
+    if node.kind() == "call" {
+        // Skip function field (callee), recurse into arguments only
+        if let Some(args) = node.child_by_field_name("arguments") {
+            for i in 0..args.named_child_count() {
+                if let Some(child) = args.named_child(i) {
+                    if has_non_callee_identifier_py(child, source) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    // For attribute access (e.g. obj.attr), check the object part
+    if node.kind() == "attribute" {
+        if let Some(obj) = node.child_by_field_name("object") {
+            return has_non_callee_identifier_py(obj, source);
+        }
+        return false;
+    }
+    // Recurse into children
+    for i in 0..node.named_child_count() {
+        if let Some(child) = node.named_child(i) {
+            if has_non_callee_identifier_py(child, source) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Determine if a test function has only hardcoded literals in its assertions.
+/// Returns true when assertion_count > 0 AND no non-callee identifier is found in any assertion.
+fn is_hardcoded_only_py(assertion_query: &Query, fn_node: Node, source: &[u8]) -> bool {
+    let assertion_idx = match assertion_query.capture_index_for_name("assertion") {
+        Some(idx) => idx,
+        None => return false,
+    };
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(assertion_query, fn_node, source);
+    let mut found_assertion = false;
+
+    while let Some(m) = matches.next() {
+        for capture in m.captures {
+            if capture.index == assertion_idx {
+                found_assertion = true;
+                if has_non_callee_identifier_py(capture.node, source) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    found_assertion
 }
 
 fn extract_mock_class_name(var_name: &str) -> String {
@@ -1014,6 +1098,126 @@ mod tests {
         assert!(
             q.capture_index_for_name("error_test").is_some(),
             "error_test.scm must define @error_test capture"
+        );
+    }
+
+    // --- T104: hardcoded-only ---
+
+    #[test]
+    fn hardcoded_only_violation() {
+        let source = fixture("t104_violation.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_violation.py");
+        assert!(!funcs.is_empty());
+        for func in &funcs {
+            assert!(
+                func.analysis.hardcoded_only,
+                "test '{}' should be hardcoded_only",
+                func.name
+            );
+        }
+    }
+
+    #[test]
+    fn hardcoded_only_pass_variable() {
+        let source = fixture("t104_pass_variable.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_pass_variable.py");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            !funcs[0].analysis.hardcoded_only,
+            "variable in assertion should not be hardcoded_only"
+        );
+    }
+
+    #[test]
+    fn hardcoded_only_pass_computed() {
+        let source = fixture("t104_pass_computed.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_pass_computed.py");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            !funcs[0].analysis.hardcoded_only,
+            "computed value in assertion should not be hardcoded_only"
+        );
+    }
+
+    #[test]
+    fn hardcoded_only_no_assertion() {
+        let source = fixture("t104_no_assertion.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_no_assertion.py");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            !funcs[0].analysis.hardcoded_only,
+            "no assertion should not be hardcoded_only"
+        );
+    }
+
+    #[test]
+    fn hardcoded_only_pass_loop() {
+        let source = fixture("t104_pass_loop.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_pass_loop.py");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            !funcs[0].analysis.hardcoded_only,
+            "loop variable in assertion should not be hardcoded_only"
+        );
+    }
+
+    // --- T105: deterministic-no-metamorphic ---
+
+    #[test]
+    fn relational_assertion_violation() {
+        let source = fixture("t105_violation.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t105_violation.py");
+        assert!(
+            !fa.has_relational_assertion,
+            "all equality file should not have relational"
+        );
+    }
+
+    #[test]
+    fn relational_assertion_pass_greater_than() {
+        let source = fixture("t105_pass_relational.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t105_pass_relational.py");
+        assert!(
+            fa.has_relational_assertion,
+            "assert x > 0 should set has_relational_assertion"
+        );
+    }
+
+    #[test]
+    fn relational_assertion_pass_contains() {
+        let source = fixture("t105_pass_contains.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t105_pass_contains.py");
+        assert!(
+            fa.has_relational_assertion,
+            "assert x in y should set has_relational_assertion"
+        );
+    }
+
+    #[test]
+    fn relational_assertion_pass_unittest() {
+        let source = fixture("t105_pass_unittest.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t105_pass_unittest.py");
+        assert!(
+            fa.has_relational_assertion,
+            "self.assertGreater should set has_relational_assertion"
+        );
+    }
+
+    #[test]
+    fn query_capture_names_relational_assertion() {
+        let q = make_query(include_str!("../queries/relational_assertion.scm"));
+        assert!(
+            q.capture_index_for_name("relational").is_some(),
+            "relational_assertion.scm must define @relational capture"
         );
     }
 }

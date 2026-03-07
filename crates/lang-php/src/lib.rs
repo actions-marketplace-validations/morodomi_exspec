@@ -195,6 +195,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 line_count,
                 how_not_what_count: 0,
                 fixture_count: 0,
+                hardcoded_only: false,
                 suppressed_rules,
             },
         });
@@ -272,6 +273,8 @@ impl LanguageExtractor for PhpExtractor {
                     has_contract_import: false,
                     // T103 deferred for PHP: true to suppress noise
                     has_error_test: true,
+                    // T105 deferred for PHP: true to suppress noise
+                    has_relational_assertion: true,
                     parameterized_count: 0,
                 };
             }
@@ -299,6 +302,8 @@ impl LanguageExtractor for PhpExtractor {
             has_contract_import,
             // T103 deferred for PHP: true to suppress noise
             has_error_test: true,
+            // T105 deferred for PHP: true to suppress noise
+            has_relational_assertion: true,
             parameterized_count,
         }
     }

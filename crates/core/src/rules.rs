@@ -78,6 +78,7 @@ pub struct Config {
     pub test_max_lines: usize,
     pub parameterized_min_ratio: f64,
     pub fixture_max: usize,
+    pub min_assertions_for_t105: usize,
     pub disabled_rules: Vec<RuleId>,
 }
 
@@ -89,6 +90,7 @@ impl Default for Config {
             test_max_lines: 50,
             parameterized_min_ratio: 0.1,
             fixture_max: 5,
+            min_assertions_for_t105: 5,
             disabled_rules: Vec::new(),
         }
     }
@@ -171,6 +173,21 @@ pub fn evaluate_rules(functions: &[TestFunction], config: &Config) -> Vec<Diagno
                     "fixture-sprawl: {} fixtures, threshold: {}",
                     analysis.fixture_count, config.fixture_max,
                 ),
+                details: None,
+            });
+        }
+
+        // T104: hardcoded-only
+        if !is_disabled(config, "T104")
+            && !is_suppressed(analysis, "T104")
+            && analysis.hardcoded_only
+        {
+            diagnostics.push(Diagnostic {
+                rule: RuleId::new("T104"),
+                severity: Severity::Info,
+                file: func.file.clone(),
+                line: Some(func.line),
+                message: "hardcoded-only: all assertion values are literals".to_string(),
                 details: None,
             });
         }
@@ -283,6 +300,29 @@ pub fn evaluate_file_rules(analyses: &[FileAnalysis], config: &Config) -> Vec<Di
                 message: "no-contract: no contract/schema library imported".to_string(),
                 details: None,
             });
+        }
+
+        // T105: deterministic-no-metamorphic
+        if !is_disabled(config, "T105") {
+            let total_assertions: usize = analysis
+                .functions
+                .iter()
+                .map(|f| f.analysis.assertion_count)
+                .sum();
+            if total_assertions >= config.min_assertions_for_t105
+                && !analysis.has_relational_assertion
+            {
+                diagnostics.push(Diagnostic {
+                    rule: RuleId::new("T105"),
+                    severity: Severity::Info,
+                    file: analysis.file.clone(),
+                    line: None,
+                    message: format!(
+                        "deterministic-no-metamorphic: {total_assertions} assertions, all exact equality",
+                    ),
+                    details: None,
+                });
+            }
         }
 
         // T103: missing-error-test
@@ -766,6 +806,7 @@ mod tests {
             has_pbt_import,
             has_contract_import,
             has_error_test,
+            has_relational_assertion: false,
             parameterized_count,
         }
     }
@@ -1071,6 +1112,183 @@ mod tests {
         let analyses = vec![make_file_analysis("test.py", vec![], false, false, 0)];
         let diags = evaluate_file_rules(&analyses, &Config::default());
         assert!(!diags.iter().any(|d| d.rule.0 == "T103"));
+    }
+
+    // --- T104: hardcoded-only ---
+
+    #[test]
+    fn t104_hardcoded_only_produces_info() {
+        let funcs = vec![make_func(
+            "test_add",
+            TestAnalysis {
+                assertion_count: 1,
+                hardcoded_only: true,
+                ..Default::default()
+            },
+        )];
+        let diags = evaluate_rules(&funcs, &Config::default());
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, RuleId::new("T104"));
+        assert_eq!(diags[0].severity, Severity::Info);
+    }
+
+    #[test]
+    fn t104_not_hardcoded_no_diagnostic() {
+        let funcs = vec![make_func(
+            "test_add",
+            TestAnalysis {
+                assertion_count: 1,
+                hardcoded_only: false,
+                ..Default::default()
+            },
+        )];
+        let diags = evaluate_rules(&funcs, &Config::default());
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn t104_disabled_no_diagnostic() {
+        let funcs = vec![make_func(
+            "test_add",
+            TestAnalysis {
+                assertion_count: 1,
+                hardcoded_only: true,
+                ..Default::default()
+            },
+        )];
+        let config = Config {
+            disabled_rules: vec![RuleId::new("T104")],
+            ..Config::default()
+        };
+        let diags = evaluate_rules(&funcs, &config);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn t104_suppressed_no_diagnostic() {
+        let funcs = vec![make_func(
+            "test_add",
+            TestAnalysis {
+                assertion_count: 1,
+                hardcoded_only: true,
+                suppressed_rules: vec![RuleId::new("T104")],
+                ..Default::default()
+            },
+        )];
+        let diags = evaluate_rules(&funcs, &Config::default());
+        assert!(diags.is_empty());
+    }
+
+    // --- T105: deterministic-no-metamorphic ---
+
+    #[test]
+    fn t105_all_equality_above_threshold_produces_info() {
+        let funcs: Vec<TestFunction> = (0..5)
+            .map(|i| {
+                make_func(
+                    &format!("test_{i}"),
+                    TestAnalysis {
+                        assertion_count: 1,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let analyses = vec![make_file_analysis_full(
+            "test.py", funcs, false, false, false, 0,
+        )];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(diags.iter().any(|d| d.rule.0 == "T105"));
+        let t105 = diags.iter().find(|d| d.rule.0 == "T105").unwrap();
+        assert_eq!(t105.severity, Severity::Info);
+        assert!(t105.message.contains("5 assertions"));
+    }
+
+    #[test]
+    fn t105_has_relational_no_diagnostic() {
+        let funcs: Vec<TestFunction> = (0..5)
+            .map(|i| {
+                make_func(
+                    &format!("test_{i}"),
+                    TestAnalysis {
+                        assertion_count: 1,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let mut analysis = make_file_analysis_full("test.py", funcs, false, false, false, 0);
+        analysis.has_relational_assertion = true;
+        let diags = evaluate_file_rules(&[analysis], &Config::default());
+        assert!(!diags.iter().any(|d| d.rule.0 == "T105"));
+    }
+
+    #[test]
+    fn t105_below_threshold_no_diagnostic() {
+        let funcs: Vec<TestFunction> = (0..2)
+            .map(|i| {
+                make_func(
+                    &format!("test_{i}"),
+                    TestAnalysis {
+                        assertion_count: 1,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let analyses = vec![make_file_analysis_full(
+            "test.py", funcs, false, false, false, 0,
+        )];
+        let diags = evaluate_file_rules(&analyses, &Config::default());
+        assert!(!diags.iter().any(|d| d.rule.0 == "T105"));
+    }
+
+    #[test]
+    fn t105_disabled_no_diagnostic() {
+        let funcs: Vec<TestFunction> = (0..5)
+            .map(|i| {
+                make_func(
+                    &format!("test_{i}"),
+                    TestAnalysis {
+                        assertion_count: 1,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let analyses = vec![make_file_analysis_full(
+            "test.py", funcs, false, false, false, 0,
+        )];
+        let config = Config {
+            disabled_rules: vec![RuleId::new("T105")],
+            ..Config::default()
+        };
+        let diags = evaluate_file_rules(&analyses, &config);
+        assert!(!diags.iter().any(|d| d.rule.0 == "T105"));
+    }
+
+    #[test]
+    fn t105_custom_threshold() {
+        let funcs: Vec<TestFunction> = (0..3)
+            .map(|i| {
+                make_func(
+                    &format!("test_{i}"),
+                    TestAnalysis {
+                        assertion_count: 1,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let analyses = vec![make_file_analysis_full(
+            "test.py", funcs, false, false, false, 0,
+        )];
+        let config = Config {
+            min_assertions_for_t105: 3,
+            ..Config::default()
+        };
+        let diags = evaluate_file_rules(&analyses, &config);
+        assert!(diags.iter().any(|d| d.rule.0 == "T105"));
     }
 
     #[test]

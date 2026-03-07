@@ -83,7 +83,7 @@ queries/
 | T102 | fixture-sprawl (共通helper依存過多) | WARN |
 | T103 | missing-error-test (異常系テストなし) | INFO |
 | T104 | hardcoded-only (リテラル値のみ) | INFO |
-| T105 | deterministic-no-metamorphic | WARN |
+| T105 | deterministic-no-metamorphic | INFO |
 
 ### Tier 3: v1.0 (AI検査プロンプト生成)
 

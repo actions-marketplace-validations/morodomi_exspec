@@ -121,6 +121,7 @@ mod tests {
             has_pbt_import: has_pbt,
             has_contract_import: has_contract,
             has_error_test: false,
+            has_relational_assertion: false,
             parameterized_count: parameterized,
         }
     }

@@ -212,6 +212,16 @@ const RULE_REGISTRY: &[RuleMeta] = &[
         name: "missing-error-test",
         short_description: "No error/exception test found in file",
     },
+    RuleMeta {
+        id: "T104",
+        name: "hardcoded-only",
+        short_description: "All assertion values are hardcoded literals",
+    },
+    RuleMeta {
+        id: "T105",
+        name: "deterministic-no-metamorphic",
+        short_description: "All assertions use exact equality, no relational checks",
+    },
 ];
 
 pub fn format_sarif(diagnostics: &[Diagnostic]) -> String {
@@ -649,7 +659,7 @@ mod tests {
         let rules = parsed["runs"][0]["tool"]["driver"]["rules"]
             .as_array()
             .unwrap();
-        assert_eq!(rules.len(), 11);
+        assert_eq!(rules.len(), 13);
     }
 
     #[test]
@@ -708,7 +718,7 @@ mod tests {
         let rules = parsed["runs"][0]["tool"]["driver"]["rules"]
             .as_array()
             .unwrap();
-        assert_eq!(rules.len(), 11);
+        assert_eq!(rules.len(), 13);
     }
 
     #[test]

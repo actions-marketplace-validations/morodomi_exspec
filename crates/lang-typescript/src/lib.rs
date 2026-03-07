@@ -18,6 +18,7 @@ const IMPORT_CONTRACT_QUERY: &str = include_str!("../queries/import_contract.scm
 const HOW_NOT_WHAT_QUERY: &str = include_str!("../queries/how_not_what.scm");
 const PRIVATE_IN_ASSERTION_QUERY: &str = include_str!("../queries/private_in_assertion.scm");
 const ERROR_TEST_QUERY: &str = include_str!("../queries/error_test.scm");
+const RELATIONAL_ASSERTION_QUERY: &str = include_str!("../queries/relational_assertion.scm");
 
 fn ts_language() -> tree_sitter::Language {
     tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
@@ -37,6 +38,7 @@ static IMPORT_CONTRACT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static HOW_NOT_WHAT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static PRIVATE_IN_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static ERROR_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static RELATIONAL_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct TypeScriptExtractor;
 
@@ -124,6 +126,115 @@ fn is_describe_callback_body(block: Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// TypeScript builtin constants that should be excluded from identifier checks.
+const TS_BUILTIN_CONSTANTS: &[&str] = &["undefined", "null", "true", "false", "NaN", "Infinity"];
+
+/// Check if any non-callee identifier exists within the given node (TypeScript).
+/// For `expect(x).toBe(y)`, we check arguments of ALL call_expressions in the chain,
+/// but skip function/method names (callees) themselves.
+fn has_non_callee_identifier_ts(node: Node, source: &[u8]) -> bool {
+    let kind = node.kind();
+    if kind == "identifier" {
+        if let Ok(name) = node.utf8_text(source) {
+            return !TS_BUILTIN_CONSTANTS.contains(&name);
+        }
+        return true;
+    }
+    if kind == "call_expression" {
+        // Recurse into arguments (full check)
+        if let Some(args) = node.child_by_field_name("arguments") {
+            for i in 0..args.named_child_count() {
+                if let Some(child) = args.named_child(i) {
+                    if has_non_callee_identifier_ts(child, source) {
+                        return true;
+                    }
+                }
+            }
+        }
+        // Walk the callee chain to find nested call arguments
+        // (e.g. expect(x).toBe(y) — x is in the inner expect() call's arguments)
+        if let Some(func) = node.child_by_field_name("function") {
+            if has_non_callee_identifier_in_callee_chain(func, source) {
+                return true;
+            }
+        }
+        return false;
+    }
+    // property_identifier is a method name, not a variable
+    if kind == "property_identifier" {
+        return false;
+    }
+    // Recurse into children
+    for i in 0..node.named_child_count() {
+        if let Some(child) = node.named_child(i) {
+            if has_non_callee_identifier_ts(child, source) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Walk the callee chain (function field of call_expressions) to find
+/// arguments of nested calls. Identifiers in callee position are skipped.
+/// e.g. in `expect(user.name).toBe('Alice')`:
+///   function: member_expression { object: call_expression { function: "expect", arguments: [user.name] } }
+///   → we recurse into the call_expression's arguments to find `user.name`
+fn has_non_callee_identifier_in_callee_chain(node: Node, source: &[u8]) -> bool {
+    let kind = node.kind();
+    if kind == "call_expression" {
+        // Check arguments of this nested call
+        if let Some(args) = node.child_by_field_name("arguments") {
+            for i in 0..args.named_child_count() {
+                if let Some(child) = args.named_child(i) {
+                    if has_non_callee_identifier_ts(child, source) {
+                        return true;
+                    }
+                }
+            }
+        }
+        // Continue walking the callee chain
+        if let Some(func) = node.child_by_field_name("function") {
+            return has_non_callee_identifier_in_callee_chain(func, source);
+        }
+        return false;
+    }
+    if kind == "member_expression" {
+        // Skip property name, recurse into object
+        if let Some(obj) = node.child_by_field_name("object") {
+            return has_non_callee_identifier_in_callee_chain(obj, source);
+        }
+        return false;
+    }
+    // identifier in callee position → skip (it's a function name like "expect")
+    false
+}
+
+/// Determine if a test function has only hardcoded literals in its assertions.
+fn is_hardcoded_only_ts(assertion_query: &Query, fn_node: Node, source: &[u8]) -> bool {
+    let assertion_idx = match assertion_query.capture_index_for_name("assertion") {
+        Some(idx) => idx,
+        None => return false,
+    };
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(assertion_query, fn_node, source);
+    let mut found_assertion = false;
+
+    while let Some(m) = matches.next() {
+        for capture in m.captures {
+            if capture.index == assertion_idx {
+                found_assertion = true;
+                if has_non_callee_identifier_ts(capture.node, source) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    found_assertion
 }
 
 fn extract_mock_class_name(var_name: &str) -> String {
@@ -227,6 +338,9 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
 
         let fixture_count = count_enclosing_describe_fixtures(root, tm.fn_start_byte, source_bytes);
 
+        // T104: hardcoded-only detection
+        let hardcoded_only = is_hardcoded_only_ts(assertion_query, fn_node, source_bytes);
+
         let suppressed_rules = extract_suppression_from_previous_line(source, tm.fn_start_row);
 
         functions.push(TestFunction {
@@ -241,6 +355,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 line_count,
                 how_not_what_count: how_not_what_count + private_in_assertion_count,
                 fixture_count,
+                hardcoded_only,
                 suppressed_rules,
             },
         });
@@ -270,6 +385,7 @@ impl LanguageExtractor for TypeScriptExtractor {
                     has_pbt_import: false,
                     has_contract_import: false,
                     has_error_test: false,
+                    has_relational_assertion: false,
                     parameterized_count: 0,
                 };
             }
@@ -293,12 +409,20 @@ impl LanguageExtractor for TypeScriptExtractor {
         let error_test_query = cached_query(&ERROR_TEST_QUERY_CACHE, ERROR_TEST_QUERY);
         let has_error_test = has_any_match(error_test_query, "error_test", root, source_bytes);
 
+        let relational_query = cached_query(
+            &RELATIONAL_ASSERTION_QUERY_CACHE,
+            RELATIONAL_ASSERTION_QUERY,
+        );
+        let has_relational_assertion =
+            has_any_match(relational_query, "relational", root, source_bytes);
+
         FileAnalysis {
             file: file_path.to_string(),
             functions,
             has_pbt_import,
             has_contract_import,
             has_error_test,
+            has_relational_assertion,
             parameterized_count,
         }
     }
@@ -901,6 +1025,79 @@ mod tests {
         assert!(
             q.capture_index_for_name("error_test").is_some(),
             "error_test.scm must define @error_test capture"
+        );
+    }
+
+    // --- T104: hardcoded-only ---
+
+    #[test]
+    fn hardcoded_only_violation() {
+        let source = fixture("t104_violation.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_violation.test.ts");
+        assert!(!funcs.is_empty());
+        for func in &funcs {
+            assert!(
+                func.analysis.hardcoded_only,
+                "test '{}' should be hardcoded_only",
+                func.name
+            );
+        }
+    }
+
+    #[test]
+    fn hardcoded_only_pass_variable() {
+        let source = fixture("t104_pass_variable.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_pass_variable.test.ts");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            !funcs[0].analysis.hardcoded_only,
+            "variable in assertion should not be hardcoded_only"
+        );
+    }
+
+    // --- T105: deterministic-no-metamorphic ---
+
+    #[test]
+    fn relational_assertion_violation() {
+        let source = fixture("t105_violation.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t105_violation.test.ts");
+        assert!(
+            !fa.has_relational_assertion,
+            "all toBe/toEqual file should not have relational"
+        );
+    }
+
+    #[test]
+    fn relational_assertion_pass_greater_than() {
+        let source = fixture("t105_pass_relational.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t105_pass_relational.test.ts");
+        assert!(
+            fa.has_relational_assertion,
+            "toBeGreaterThan should set has_relational_assertion"
+        );
+    }
+
+    #[test]
+    fn relational_assertion_pass_truthy() {
+        let source = fixture("t105_pass_truthy.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t105_pass_truthy.test.ts");
+        assert!(
+            fa.has_relational_assertion,
+            "toBeTruthy should set has_relational_assertion"
+        );
+    }
+
+    #[test]
+    fn query_capture_names_relational_assertion() {
+        let q = make_query(include_str!("../queries/relational_assertion.scm"));
+        assert!(
+            q.capture_index_for_name("relational").is_some(),
+            "relational_assertion.scm must define @relational capture"
         );
     }
 }
