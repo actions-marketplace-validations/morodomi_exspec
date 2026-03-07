@@ -2,7 +2,8 @@ use std::sync::OnceLock;
 
 use exspec_core::extractor::{FileAnalysis, LanguageExtractor, TestAnalysis, TestFunction};
 use exspec_core::query_utils::{
-    collect_mock_class_names, count_captures, extract_suppression_from_previous_line, has_any_match,
+    collect_mock_class_names, count_captures, count_captures_within_context,
+    extract_suppression_from_previous_line, has_any_match,
 };
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
@@ -15,6 +16,7 @@ const PARAMETERIZED_QUERY: &str = include_str!("../queries/parameterized.scm");
 const IMPORT_PBT_QUERY: &str = include_str!("../queries/import_pbt.scm");
 const IMPORT_CONTRACT_QUERY: &str = include_str!("../queries/import_contract.scm");
 const HOW_NOT_WHAT_QUERY: &str = include_str!("../queries/how_not_what.scm");
+const PRIVATE_IN_ASSERTION_QUERY: &str = include_str!("../queries/private_in_assertion.scm");
 
 fn python_language() -> tree_sitter::Language {
     tree_sitter_python::LANGUAGE.into()
@@ -32,6 +34,7 @@ static PARAMETERIZED_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static IMPORT_PBT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static IMPORT_CONTRACT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static HOW_NOT_WHAT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static PRIVATE_IN_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct PythonExtractor;
 
@@ -99,6 +102,10 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
     let mock_query = cached_query(&MOCK_QUERY_CACHE, MOCK_USAGE_QUERY);
     let mock_assign_query = cached_query(&MOCK_ASSIGN_QUERY_CACHE, MOCK_ASSIGNMENT_QUERY);
     let how_not_what_query = cached_query(&HOW_NOT_WHAT_QUERY_CACHE, HOW_NOT_WHAT_QUERY);
+    let private_query = cached_query(
+        &PRIVATE_IN_ASSERTION_QUERY_CACHE,
+        PRIVATE_IN_ASSERTION_QUERY,
+    );
 
     let name_idx = test_query
         .capture_index_for_name("name")
@@ -204,6 +211,15 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
         let how_not_what_count =
             count_captures(how_not_what_query, "how_pattern", fn_node, source_bytes);
 
+        let private_in_assertion_count = count_captures_within_context(
+            assertion_query,
+            "assertion",
+            private_query,
+            "private_access",
+            fn_node,
+            source_bytes,
+        );
+
         let suppress_row = tm.decorated_start_row.unwrap_or(tm.fn_start_row);
         let suppressed_rules = extract_suppression_from_previous_line(source, suppress_row);
 
@@ -217,7 +233,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 mock_count,
                 mock_classes,
                 line_count,
-                how_not_what_count,
+                how_not_what_count: how_not_what_count + private_in_assertion_count,
                 suppressed_rules,
             },
         });
@@ -741,6 +757,83 @@ mod tests {
         assert!(
             q.capture_index_for_name("how_pattern").is_some(),
             "how_not_what.scm must define @how_pattern capture"
+        );
+    }
+
+    // --- T101: private attribute access in assertions (#13) ---
+
+    #[test]
+    fn private_in_assertion_detected() {
+        let source = fixture("t101_private_violation.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_private_violation.py");
+        // test_checks_internal_count has assert service._count and assert service._processed
+        let func = funcs
+            .iter()
+            .find(|f| f.name == "test_checks_internal_count")
+            .unwrap();
+        assert!(
+            func.analysis.how_not_what_count >= 2,
+            "expected >= 2 private access in assertions, got {}",
+            func.analysis.how_not_what_count
+        );
+    }
+
+    #[test]
+    fn private_outside_assertion_not_counted() {
+        let source = fixture("t101_private_violation.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_private_violation.py");
+        // test_private_outside_assertion: obj._internal is outside assert, assert value == 42 has no private
+        let func = funcs
+            .iter()
+            .find(|f| f.name == "test_private_outside_assertion")
+            .unwrap();
+        assert_eq!(
+            func.analysis.how_not_what_count, 0,
+            "private access outside assertion should not count"
+        );
+    }
+
+    #[test]
+    fn dunder_not_counted() {
+        let source = fixture("t101_private_violation.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_private_violation.py");
+        // test_dunder_not_private: __class__, __dict__ should not match
+        let func = funcs
+            .iter()
+            .find(|f| f.name == "test_dunder_not_private")
+            .unwrap();
+        assert_eq!(
+            func.analysis.how_not_what_count, 0,
+            "__dunder__ should not be counted as private access"
+        );
+    }
+
+    #[test]
+    fn private_adds_to_how_not_what() {
+        let source = fixture("t101_private_violation.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t101_private_violation.py");
+        // test_mixed_private_and_mock: has assert_called_with (mock) + assert service._last_created (private)
+        let func = funcs
+            .iter()
+            .find(|f| f.name == "test_mixed_private_and_mock")
+            .unwrap();
+        assert!(
+            func.analysis.how_not_what_count >= 2,
+            "expected mock (1) + private (1) = >= 2, got {}",
+            func.analysis.how_not_what_count
+        );
+    }
+
+    #[test]
+    fn query_capture_names_private_in_assertion() {
+        let q = make_query(include_str!("../queries/private_in_assertion.scm"));
+        assert!(
+            q.capture_index_for_name("private_access").is_some(),
+            "private_in_assertion.scm must define @private_access capture"
         );
     }
 }

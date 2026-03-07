@@ -10,3 +10,6 @@ serde-sarif = { version = "0.8", features = ["opt-builder"] }
 toml = "0.8"
 tree-sitter = "0.24"
 streaming-iterator = "0.1"
+
+[dev-dependencies]
+tree-sitter-python = "0.23"

@@ -728,7 +728,10 @@ Comment must be on the line immediately before `#[test]` attribute.
 
 ### T101: how-not-what
 
-テストが「何を検証しているか (WHAT)」ではなく「どう実装されているか (HOW)」を検証しているパターンを検出する。mock検証メソッドの使用を検出しWARNを出力する。
+テストが「何を検証しているか (WHAT)」ではなく「どう実装されているか (HOW)」を検証しているパターンを検出する。以下の2種類のパターンを検出しWARNを出力する:
+
+1. **Mock検証メソッド**: `assert_called_with()`, `toHaveBeenCalledWith()` 等
+2. **Private attribute access in assertions**: assertion内での `obj._private` アクセス (#13)
 
 **Default**: WARN
 **Threshold**: なし (1つ以上でWARN)
@@ -788,12 +791,21 @@ test('creates user with correct name', () => {
 #### Expected Output
 
 ```
-WARN tests/test_api.py:1  T101 how-not-what: 2 mock verification pattern(s) detected
+WARN tests/test_api.py:1  T101 how-not-what: 2 implementation-testing pattern(s) detected
 ```
 
 #### Detection
 
+**Mock verification patterns** (how_not_what.scm の `@how_pattern`):
 - Python: `mock.assert_called()`, `mock.assert_called_with()`, `mock.assert_called_once()`, `mock.assert_called_once_with()`, `mock.assert_any_call()`, `mock.assert_has_calls()`, `mock.assert_not_called()`
 - TypeScript: `toHaveBeenCalled()`, `toHaveBeenCalledWith()`, `toHaveBeenCalledTimes()`, `toHaveBeenLastCalledWith()`, `toHaveBeenNthCalledWith()`, `toHaveReturned()`, `toHaveReturnedWith()`, `toHaveReturnedTimes()`, `toHaveLastReturnedWith()`, `toHaveNthReturnedWith()`
-- PHP/Rust: スコープ外 (how_not_what_count = 0 固定)
-- scm: `how_not_what.scm` の `@how_pattern` capture count
+
+**Private attribute access in assertions** (private_in_assertion.scm の `@private_access`, assertion.scm の `@assertion` 範囲内限定):
+- Python: `assert obj._private == x` (assertion文内の `obj._attr` アクセス)
+- TypeScript: `expect(obj._private)` (dot notation) / `expect(obj['_private'])` (bracket notation)
+- `__dunder__` は除外 (`^_[^_]` パターン)
+- assertion外の `_private` アクセスは検出しない (false positive 防止)
+
+**スコープ外**:
+- PHP/Rust: how_not_what_count = 0 固定
+- 2パス方式: `count_captures_within_context()` (core/query_utils.rs)

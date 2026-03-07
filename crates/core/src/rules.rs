@@ -166,7 +166,7 @@ pub fn evaluate_rules(functions: &[TestFunction], config: &Config) -> Vec<Diagno
                 file: func.file.clone(),
                 line: Some(func.line),
                 message: format!(
-                    "how-not-what: {} mock verification pattern(s) detected",
+                    "how-not-what: {} implementation-testing pattern(s) detected",
                     analysis.how_not_what_count,
                 ),
                 details: None,
@@ -531,7 +531,9 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].rule, RuleId::new("T101"));
         assert_eq!(diags[0].severity, Severity::Warn);
-        assert!(diags[0].message.contains("2 mock verification pattern(s)"));
+        assert!(diags[0]
+            .message
+            .contains("2 implementation-testing pattern(s)"));
     }
 
     #[test]
