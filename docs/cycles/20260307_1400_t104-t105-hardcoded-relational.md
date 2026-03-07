@@ -117,8 +117,8 @@ Python の `comparison_operator` ノードは `==` も `>` も同じ型。
 | # | Issue | Severity | Action |
 |---|-------|----------|--------|
 | 1 | Python T104: `keyword_argument` のname fieldが変数と誤認識 (`assert add(x=1, y=2) == 3` で false negative) | important | issue起票 |
-| 2 | TypeScript T104: テストカバレッジがPythonより薄い (pass_computed, no_assertion, .not chain 未テスト) | important | issue起票 |
+| 2 | TypeScript T104: テストカバレッジがPythonより薄い (pass_computed, no_assertion, .not chain 未テスト) | important | FIXED (#16-#19 batch: keyword_arg + interaction tests added) |
 | 3 | Python T105: `is`/`is not` がrelationalとしてT105を抑制 (実質equality check) | important | 設計判断として維持 (ノイズ削減優先) |
 | 4 | Python T105: `assertTrue`/`assertFalse` もT105を抑制 (property checkはexact equalityではない) | important | 設計判断として維持 (plan記載済み) |
-| 5 | `sarif_rules_has_10_entries` テスト名が古い (実際は13) | optional | issue起票 |
-| 6 | PHP/Rust T104 deferral comments 欠如 + T104/T101 同時発火テスト未記述 | important | issue起票 |
+| 5 | `sarif_rules_has_10_entries` テスト名が古い (実際は13) | optional | FIXED (#18: renamed to sarif_rules_match_registry_count + RULE_REGISTRY.len()) |
+| 6 | PHP/Rust T104 deferral comments 欠如 + T104/T101 同時発火テスト未記述 | important | FIXED (#19: deferral comments + interaction test already existed) |

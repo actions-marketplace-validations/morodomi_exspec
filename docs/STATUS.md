@@ -58,7 +58,7 @@ Phase 5C complete (Tier 2 PHP/Rust expansion). T101-T105 implemented for all 4 l
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 466 passing | -- |
+| Tests | 468 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 

@@ -653,13 +653,13 @@ mod tests {
     }
 
     #[test]
-    fn sarif_rules_has_13_entries() {
+    fn sarif_rules_match_registry_count() {
         let output = format_sarif(&[]);
         let parsed = parse_sarif(&output);
         let rules = parsed["runs"][0]["tool"]["driver"]["rules"]
             .as_array()
             .unwrap();
-        assert_eq!(rules.len(), 13);
+        assert_eq!(rules.len(), RULE_REGISTRY.len());
     }
 
     #[test]

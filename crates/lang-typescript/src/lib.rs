@@ -1093,6 +1093,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hardcoded_only_keyword_arg_is_violation() {
+        let source = fixture("t104_keyword_arg.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_keyword_arg.test.ts");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            funcs[0].analysis.hardcoded_only,
+            "keyword_argument with only literals should be hardcoded_only"
+        );
+    }
+
+    #[test]
+    fn t104_t101_interaction_both_fire() {
+        let source = fixture("t104_t101_interaction.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t104_t101_interaction.test.ts");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            funcs[0].analysis.how_not_what_count > 0,
+            "toHaveBeenCalled() should trigger how_not_what"
+        );
+        assert!(
+            funcs[0].analysis.hardcoded_only,
+            "hardcoded assertion should trigger hardcoded_only"
+        );
+    }
+
     // --- T105: deterministic-no-metamorphic ---
 
     #[test]
