@@ -241,7 +241,13 @@ fn main() {
                         continue;
                     }
                 };
-                all_analyses.push(extractor.extract_file_analysis(&source, file_path));
+                let mut file_analysis = extractor.extract_file_analysis(&source, file_path);
+                exspec_core::query_utils::apply_custom_assertion_fallback(
+                    &mut file_analysis,
+                    &source,
+                    &config.custom_assertion_patterns,
+                );
+                all_analyses.push(file_analysis);
             }
         }
     }

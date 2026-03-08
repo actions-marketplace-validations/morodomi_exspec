@@ -1384,4 +1384,92 @@ mod tests {
             funcs[0].analysis.duplicate_literal_count
         );
     }
+
+    // --- TC-11: Python custom helper + config -> T001 does NOT fire ---
+    #[test]
+    fn t001_custom_helper_with_config_no_violation() {
+        use exspec_core::query_utils::apply_custom_assertion_fallback;
+        use exspec_core::rules::{evaluate_rules, Config};
+
+        let source = fixture("t001_custom_helper.py");
+        let extractor = PythonExtractor::new();
+        let mut analysis = extractor.extract_file_analysis(&source, "t001_custom_helper.py");
+        let patterns = vec!["util.assertEqual(".to_string()];
+        apply_custom_assertion_fallback(&mut analysis, &source, &patterns);
+
+        let config = Config::default();
+        let diags = evaluate_rules(&analysis.functions, &config);
+        let t001_diags: Vec<_> = diags.iter().filter(|d| d.rule.0 == "T001").collect();
+        // test_with_custom_helper: should pass (custom pattern match)
+        // test_with_standard_assert: should pass (standard assert)
+        // test_no_assertion_at_all: should BLOCK (no assertion)
+        assert_eq!(
+            t001_diags.len(),
+            1,
+            "only test_no_assertion_at_all should trigger T001"
+        );
+        assert!(
+            t001_diags[0].message.contains("assertion-free"),
+            "should be T001 assertion-free"
+        );
+    }
+
+    // --- TC-12: Same test WITHOUT config -> T001 fires for custom helper ---
+    #[test]
+    fn t001_custom_helper_without_config_fires() {
+        use exspec_core::rules::{evaluate_rules, Config};
+
+        let source = fixture("t001_custom_helper.py");
+        let extractor = PythonExtractor::new();
+        let analysis = extractor.extract_file_analysis(&source, "t001_custom_helper.py");
+
+        let config = Config::default();
+        let diags = evaluate_rules(&analysis.functions, &config);
+        let t001_diags: Vec<_> = diags.iter().filter(|d| d.rule.0 == "T001").collect();
+        // Without config, both test_with_custom_helper and test_no_assertion_at_all should fire
+        assert_eq!(
+            t001_diags.len(),
+            2,
+            "without config, custom helper test should also trigger T001"
+        );
+    }
+
+    // --- TC-13: Standard assert + custom config -> T001 does NOT fire ---
+    #[test]
+    fn t001_standard_assert_with_custom_config_still_passes() {
+        use exspec_core::query_utils::apply_custom_assertion_fallback;
+        use exspec_core::rules::{evaluate_rules, Config};
+
+        let source = "def test_standard():\n    assert True\n";
+        let extractor = PythonExtractor::new();
+        let mut analysis = extractor.extract_file_analysis(source, "test_standard.py");
+        let patterns = vec!["util.assertEqual(".to_string()];
+        apply_custom_assertion_fallback(&mut analysis, source, &patterns);
+
+        let config = Config::default();
+        let diags = evaluate_rules(&analysis.functions, &config);
+        let t001_diags: Vec<_> = diags.iter().filter(|d| d.rule.0 == "T001").collect();
+        assert!(t001_diags.is_empty(), "standard assert should still work");
+    }
+
+    // --- TC-15: Pattern only in comment -> T001 does NOT fire (documented behavior) ---
+    #[test]
+    fn t001_custom_pattern_in_comment_prevents_t001() {
+        use exspec_core::query_utils::apply_custom_assertion_fallback;
+        use exspec_core::rules::{evaluate_rules, Config};
+
+        let source = "def test_commented():\n    # util.assertEqual(x, 1)\n    pass\n";
+        let extractor = PythonExtractor::new();
+        let mut analysis = extractor.extract_file_analysis(source, "test_commented.py");
+        let patterns = vec!["util.assertEqual(".to_string()];
+        apply_custom_assertion_fallback(&mut analysis, source, &patterns);
+
+        let config = Config::default();
+        let diags = evaluate_rules(&analysis.functions, &config);
+        let t001_diags: Vec<_> = diags.iter().filter(|d| d.rule.0 == "T001").collect();
+        assert!(
+            t001_diags.is_empty(),
+            "comment match is included by design - T001 should not fire"
+        );
+    }
 }

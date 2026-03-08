@@ -190,6 +190,46 @@ pub fn count_duplicate_literals(
     counts.values().copied().max().unwrap_or(0)
 }
 
+/// Text-based fallback for T001 escape hatch. Patterns are literal substrings, not regex.
+/// Matches in comments, strings, and imports are included by design.
+/// Returns the number of source lines that contain any pattern as a substring.
+pub fn count_custom_assertion_lines(source_lines: &[&str], patterns: &[String]) -> usize {
+    if patterns.is_empty() {
+        return 0;
+    }
+    source_lines
+        .iter()
+        .filter(|line| patterns.iter().any(|p| line.contains(p.as_str())))
+        .count()
+}
+
+/// Apply custom assertion pattern fallback to functions with assertion_count == 0.
+/// Only functions with no detected assertions are augmented; others are untouched.
+pub fn apply_custom_assertion_fallback(
+    analysis: &mut crate::extractor::FileAnalysis,
+    source: &str,
+    patterns: &[String],
+) {
+    if patterns.is_empty() {
+        return;
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    for func in &mut analysis.functions {
+        if func.analysis.assertion_count > 0 {
+            continue;
+        }
+        // line/end_line are 1-based
+        let start = func.line.saturating_sub(1);
+        let end = func.end_line.min(lines.len());
+        if start >= end {
+            continue;
+        }
+        let body_lines = &lines[start..end];
+        let count = count_custom_assertion_lines(body_lines, patterns);
+        func.analysis.assertion_count += count;
+    }
+}
+
 pub fn extract_suppression_from_previous_line(source: &str, start_row: usize) -> Vec<RuleId> {
     if start_row == 0 {
         return Vec::new();
@@ -452,6 +492,148 @@ mod tests {
             &["integer", "float", "string"],
         );
         assert_eq!(count, 0, "no assertions, should return 0");
+    }
+
+    // --- count_custom_assertion_lines ---
+
+    // TC-04: empty patterns -> 0
+    #[test]
+    fn count_custom_assertion_lines_empty_patterns() {
+        let lines = vec!["util.assertEqual(x, 1)", "assert True"];
+        assert_eq!(count_custom_assertion_lines(&lines, &[]), 0);
+    }
+
+    // TC-05: matching pattern returns correct count
+    #[test]
+    fn count_custom_assertion_lines_matching() {
+        let lines = vec![
+            "    util.assertEqual(x, 1)",
+            "    util.assertEqual(y, 2)",
+            "    print(result)",
+        ];
+        let patterns = vec!["util.assertEqual(".to_string()];
+        assert_eq!(count_custom_assertion_lines(&lines, &patterns), 2);
+    }
+
+    // TC-06: pattern in comment still counts (by design)
+    #[test]
+    fn count_custom_assertion_lines_in_comment() {
+        let lines = vec!["    # util.assertEqual(x, 1)", "    pass"];
+        let patterns = vec!["util.assertEqual(".to_string()];
+        assert_eq!(count_custom_assertion_lines(&lines, &patterns), 1);
+    }
+
+    // TC-07: no matches -> 0
+    #[test]
+    fn count_custom_assertion_lines_no_match() {
+        let lines = vec!["    result = compute(42)", "    print(result)"];
+        let patterns = vec!["util.assertEqual(".to_string()];
+        assert_eq!(count_custom_assertion_lines(&lines, &patterns), 0);
+    }
+
+    // TC-08: same pattern on multiple lines returns line count
+    #[test]
+    fn count_custom_assertion_lines_multiple_occurrences() {
+        let lines = vec!["    myAssert(a) and myAssert(b)", "    myAssert(c)"];
+        let patterns = vec!["myAssert(".to_string()];
+        // Line count, not occurrence count: line 1 has 2 but counts as 1
+        assert_eq!(count_custom_assertion_lines(&lines, &patterns), 2);
+    }
+
+    // TC-16: multiple patterns, one matches
+    #[test]
+    fn count_custom_assertion_lines_multiple_patterns() {
+        let lines = vec!["    customCheck(x)"];
+        let patterns = vec!["util.assertEqual(".to_string(), "customCheck(".to_string()];
+        assert_eq!(count_custom_assertion_lines(&lines, &patterns), 1);
+    }
+
+    // --- apply_custom_assertion_fallback ---
+
+    // TC-09: assertion_count > 0 -> unchanged
+    #[test]
+    fn apply_fallback_skips_functions_with_assertions() {
+        use crate::extractor::{FileAnalysis, TestAnalysis, TestFunction};
+
+        let source = "def test_foo():\n    util.assertEqual(x, 1)\n    assert True\n";
+        let mut analysis = FileAnalysis {
+            file: "test.py".to_string(),
+            functions: vec![TestFunction {
+                name: "test_foo".to_string(),
+                file: "test.py".to_string(),
+                line: 1,
+                end_line: 3,
+                analysis: TestAnalysis {
+                    assertion_count: 1,
+                    ..Default::default()
+                },
+            }],
+            has_pbt_import: false,
+            has_contract_import: false,
+            has_error_test: false,
+            has_relational_assertion: false,
+            parameterized_count: 0,
+        };
+        let patterns = vec!["util.assertEqual(".to_string()];
+        apply_custom_assertion_fallback(&mut analysis, source, &patterns);
+        assert_eq!(analysis.functions[0].analysis.assertion_count, 1);
+    }
+
+    // TC-10: assertion_count == 0 + custom match -> incremented
+    #[test]
+    fn apply_fallback_increments_assertion_count() {
+        use crate::extractor::{FileAnalysis, TestAnalysis, TestFunction};
+
+        let source = "def test_foo():\n    util.assertEqual(x, 1)\n    util.assertEqual(y, 2)\n";
+        let mut analysis = FileAnalysis {
+            file: "test.py".to_string(),
+            functions: vec![TestFunction {
+                name: "test_foo".to_string(),
+                file: "test.py".to_string(),
+                line: 1,
+                end_line: 3,
+                analysis: TestAnalysis {
+                    assertion_count: 0,
+                    ..Default::default()
+                },
+            }],
+            has_pbt_import: false,
+            has_contract_import: false,
+            has_error_test: false,
+            has_relational_assertion: false,
+            parameterized_count: 0,
+        };
+        let patterns = vec!["util.assertEqual(".to_string()];
+        apply_custom_assertion_fallback(&mut analysis, source, &patterns);
+        assert_eq!(analysis.functions[0].analysis.assertion_count, 2);
+    }
+
+    // Empty patterns -> no-op
+    #[test]
+    fn apply_fallback_empty_patterns_noop() {
+        use crate::extractor::{FileAnalysis, TestAnalysis, TestFunction};
+
+        let source = "def test_foo():\n    util.assertEqual(x, 1)\n";
+        let mut analysis = FileAnalysis {
+            file: "test.py".to_string(),
+            functions: vec![TestFunction {
+                name: "test_foo".to_string(),
+                file: "test.py".to_string(),
+                line: 1,
+                end_line: 2,
+                analysis: TestAnalysis {
+                    assertion_count: 0,
+                    ..Default::default()
+                },
+            }],
+            has_pbt_import: false,
+            has_contract_import: false,
+            has_error_test: false,
+            has_relational_assertion: false,
+            parameterized_count: 0,
+        };
+        apply_custom_assertion_fallback(&mut analysis, source, &[]);
+        assert_eq!(analysis.functions[0].analysis.assertion_count, 0);
     }
 
     #[test]

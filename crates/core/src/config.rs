@@ -12,6 +12,14 @@ pub struct ExspecConfig {
     pub thresholds: ThresholdsConfig,
     #[serde(default)]
     pub paths: PathsConfig,
+    #[serde(default)]
+    pub assertions: AssertionsConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct AssertionsConfig {
+    #[serde(default)]
+    pub custom_patterns: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -80,6 +88,7 @@ impl From<ExspecConfig> for Config {
                 .min_duplicate_count
                 .unwrap_or(defaults.min_duplicate_count),
             disabled_rules: ec.rules.disable.iter().map(|s| RuleId::new(s)).collect(),
+            custom_assertion_patterns: ec.assertions.custom_patterns,
         }
     }
 }
@@ -258,6 +267,45 @@ mod tests {
             config.parameterized_min_ratio, defaults.parameterized_min_ratio,
             "-Inf should fall back to default"
         );
+    }
+
+    // --- TC-01: custom_patterns populated from toml ---
+    #[test]
+    fn parse_custom_assertions_config() {
+        let content = fixture("custom_assertions.toml");
+        let ec = ExspecConfig::from_toml(&content).unwrap();
+        assert_eq!(
+            ec.assertions.custom_patterns,
+            vec!["util.assertEqual(", "myAssert(", "customCheck("]
+        );
+    }
+
+    // --- TC-02: missing [assertions] section -> empty vec ---
+    #[test]
+    fn parse_config_without_assertions_section() {
+        let content = fixture("valid.toml");
+        let ec = ExspecConfig::from_toml(&content).unwrap();
+        assert!(ec.assertions.custom_patterns.is_empty());
+    }
+
+    // --- TC-03: ExspecConfig -> Config preserves custom_assertion_patterns ---
+    #[test]
+    fn convert_config_preserves_custom_assertion_patterns() {
+        let ec = ExspecConfig {
+            assertions: AssertionsConfig {
+                custom_patterns: vec!["myAssert(".to_string()],
+            },
+            ..Default::default()
+        };
+        let config: Config = ec.into();
+        assert_eq!(config.custom_assertion_patterns, vec!["myAssert("]);
+    }
+
+    #[test]
+    fn convert_config_empty_assertions_gives_empty_patterns() {
+        let ec = ExspecConfig::default();
+        let config: Config = ec.into();
+        assert!(config.custom_assertion_patterns.is_empty());
     }
 
     #[test]

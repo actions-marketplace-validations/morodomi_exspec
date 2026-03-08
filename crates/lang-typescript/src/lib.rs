@@ -1285,4 +1285,29 @@ describe('d', () => {
             "TS assertion_message_count should equal assertion_count to skip T107"
         );
     }
+
+    // --- TC-14: TS test with myAssert() + config -> T001 does NOT fire ---
+    #[test]
+    fn t001_custom_helper_with_config_no_violation() {
+        use exspec_core::query_utils::apply_custom_assertion_fallback;
+        use exspec_core::rules::{evaluate_rules, Config};
+
+        let source = fixture("t001_custom_helper.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let mut analysis = extractor.extract_file_analysis(&source, "t001_custom_helper.test.ts");
+        let patterns = vec!["myAssert(".to_string()];
+        apply_custom_assertion_fallback(&mut analysis, &source, &patterns);
+
+        let config = Config::default();
+        let diags = evaluate_rules(&analysis.functions, &config);
+        let t001_diags: Vec<_> = diags.iter().filter(|d| d.rule.0 == "T001").collect();
+        // "uses custom assertion" -> pass (custom pattern)
+        // "uses standard expect" -> pass (standard detection)
+        // "has no assertion" -> BLOCK
+        assert_eq!(
+            t001_diags.len(),
+            1,
+            "only 'has no assertion' test should trigger T001"
+        );
+    }
 }
