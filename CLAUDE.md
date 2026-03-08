@@ -9,6 +9,13 @@ Claudeは日本語。開発者は日本語しか理解できない。
 
 テストは仕様の実行可能な表現である。このツールは、テストが「仕様」として機能しているかを静的解析で高速・言語横断に検証する。
 
+## Philosophy
+
+4つの性質 (What not How / Living Documentation / Compositional / Single Source of Truth) を軸に、テストの構造的品質を静的解析で検出する。意味的品質 (テストが本当に仕様として読めるか) は判定しない。
+
+詳細: [docs/philosophy.md](docs/philosophy.md)
+思想の源流: [test_architecture.md](../../docs/test_architecture.md) (MorodomiHoldings 全社共通)
+
 ## Why
 
 - AI生成コード時代、テストを「書く」コストは激減するが「テストの質」担保は未成熟

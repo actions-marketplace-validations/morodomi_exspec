@@ -12,6 +12,25 @@ Static analyzer for test design quality. Verifies that tests function as executa
 
 exspec checks whether your tests are well-designed *specifications*, not just code that runs.
 
+## Philosophy
+
+exspec enforces 4 properties of executable specifications:
+
+| Property | What it means | Rules |
+|----------|--------------|-------|
+| **What not How** | Tests describe behavior, not implementation. Mocks for uncontrollable boundaries (time, external APIs) are OK | T002, T101 |
+| **Living Documentation** | Tests are readable as specs without separate docs | T107, T109 |
+| **Compositional** | Each test verifies one responsibility (line count and assertion count are proxy indicators) | T003, T006, T102, T108 |
+| **Single Source of Truth** | One spec, one place (within same level/viewpoint) | T106 |
+
+For the full design rationale, see [docs/philosophy.md](docs/philosophy.md).
+
+### What exspec does NOT do
+
+- **Semantic validation**: exspec cannot judge whether your test *name* truly describes the behavior, or whether your Property invariant is sound
+- **Coverage measurement**: Use lcov, istanbul, or coverage.py for that
+- **LLM calls**: exspec runs in milliseconds with zero API cost
+
 ## Install
 
 ```bash
