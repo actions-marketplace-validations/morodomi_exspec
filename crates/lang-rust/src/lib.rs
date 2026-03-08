@@ -89,8 +89,56 @@ struct TestMatch {
     attr_start_row: usize,
 }
 
-/// Count direct `let` declarations in a Rust function body.
-fn count_let_bindings(fn_node: Node) -> usize {
+/// Find the root object of a field_expression chain (method call chain).
+/// e.g. `Config::builder().timeout(30).build()`:
+///   call_expression { function: field_expression { value: call_expression { function: field_expression { value: call_expression { function: scoped_identifier } } } } }
+///   → root call_expression's function is scoped_identifier
+/// Check if a call_expression is a "constructor" (setup) or "method on local" (action).
+/// Returns true for fixture-like calls: Type::new(), free_func(), builder chains from constructors.
+/// Returns false for method calls on local variables: service.create(), result.unwrap().
+fn is_constructor_call(node: Node) -> bool {
+    let func = match node.child_by_field_name("function") {
+        Some(f) => f,
+        None => return true, // conservative
+    };
+    match func.kind() {
+        // Type::new(), Config::default() — constructor
+        "scoped_identifier" => true,
+        // add(1, 2), create_user() — free function call
+        "identifier" => true,
+        // obj.method() or chain.method() — need to find the root
+        "field_expression" => {
+            let value = match func.child_by_field_name("value") {
+                Some(v) => v,
+                None => return true,
+            };
+            if value.kind() == "call_expression" {
+                // Chain: inner_call().method() — recurse to check inner call
+                is_constructor_call(value)
+            } else {
+                // Root is a local variable: service.create(), result.unwrap()
+                false
+            }
+        }
+        _ => true,
+    }
+}
+
+/// Check if a let value expression represents fixture/setup (not action/prep).
+/// In tree-sitter-rust, `obj.method()` is `call_expression { function: field_expression }`.
+/// Fixture: Type::new(), struct literals, macros, free function calls, builder chains from constructors.
+/// Non-fixture: method calls on local variables (e.g. service.create(), result.unwrap()).
+fn is_fixture_value(node: Node) -> bool {
+    match node.kind() {
+        "call_expression" => is_constructor_call(node),
+        "struct_expression" | "macro_invocation" => true,
+        _ => true, // literals, etc. are test data (fixture-like)
+    }
+}
+
+/// Count fixture-like `let` declarations in a Rust function body.
+/// Excludes method calls on local variables (action/assertion prep).
+fn count_fixture_lets(fn_node: Node) -> usize {
     let body = match fn_node.child_by_field_name("body") {
         Some(n) => n,
         None => return 0,
@@ -100,8 +148,16 @@ fn count_let_bindings(fn_node: Node) -> usize {
     let mut cursor = body.walk();
     if cursor.goto_first_child() {
         loop {
-            if cursor.node().kind() == "let_declaration" {
-                count += 1;
+            let node = cursor.node();
+            if node.kind() == "let_declaration" {
+                match node.child_by_field_name("value") {
+                    Some(value) => {
+                        if is_fixture_value(value) {
+                            count += 1;
+                        }
+                    }
+                    None => count += 1, // `let x;` without value — count conservatively
+                }
             }
             if !cursor.goto_next_sibling() {
                 break;
@@ -212,7 +268,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
             source_bytes,
         );
 
-        let fixture_count = count_let_bindings(fn_node);
+        let fixture_count = count_fixture_lets(fn_node);
 
         // Suppression comment is the line before the attribute_item
         let suppressed_rules = extract_suppression_from_previous_line(source, tm.attr_start_row);
@@ -815,6 +871,17 @@ mod tests {
         assert_eq!(
             funcs[0].analysis.fixture_count, 1,
             "expected 1 let binding as fixture_count"
+        );
+    }
+
+    #[test]
+    fn fixture_count_excludes_method_calls_on_locals() {
+        let source = fixture("t102_method_chain.rs");
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t102_method_chain.rs");
+        assert_eq!(
+            funcs[0].analysis.fixture_count, 6,
+            "scoped calls (3) + struct (1) + macro (1) + builder chain (1) = 6, method calls on locals excluded"
         );
     }
 }
