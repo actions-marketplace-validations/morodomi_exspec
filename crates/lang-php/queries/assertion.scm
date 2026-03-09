@@ -29,6 +29,22 @@
   (#eq? @_expect_obj3 "this")
   (#eq? @_expect_method3 "expectExceptionCode")) @assertion
 
+; Mockery: ->shouldReceive(...) — sets mock expectation (verified at teardown)
+(member_call_expression
+  name: (name) @_m1 (#eq? @_m1 "shouldReceive")) @assertion
+
+; Mockery: ->shouldHaveReceived(...) — post-execution mock verification
+(member_call_expression
+  name: (name) @_m2 (#eq? @_m2 "shouldHaveReceived")) @assertion
+
+; Mockery: ->shouldNotHaveReceived(...) — negative mock verification
+(member_call_expression
+  name: (name) @_m3 (#eq? @_m3 "shouldNotHaveReceived")) @assertion
+
+; PHPUnit mock: ->expects(...) — mock expectation
+(member_call_expression
+  name: (name) @_e (#eq? @_e "expects")) @assertion
+
 ; Pest: expect(...)->toBe(...) and similar
 (member_call_expression
   object: (function_call_expression

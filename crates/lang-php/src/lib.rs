@@ -567,6 +567,81 @@ mod tests {
         assert_eq!(funcs[0].analysis.assertion_count, 0);
     }
 
+    // --- T001 FP fix: Mockery + PHPUnit mock expectations (#38) ---
+
+    #[test]
+    fn t001_mockery_should_receive_counts_as_assertion() {
+        // TC-01: $mock->shouldReceive('x')->once() -> assertion_count >= 1
+        let source = fixture("t001_pass_mockery.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_mockery.php");
+        assert!(funcs.len() >= 1);
+        assert!(
+            funcs[0].analysis.assertion_count >= 1,
+            "shouldReceive() should count as assertion, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_mockery_should_have_received_counts_as_assertion() {
+        // TC-02: $mock->shouldHaveReceived('x')->once() -> assertion_count >= 1
+        let source = fixture("t001_pass_mockery.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_mockery.php");
+        // test_verifies_post_execution is the 2nd test
+        assert!(funcs.len() >= 2);
+        assert!(
+            funcs[1].analysis.assertion_count >= 1,
+            "shouldHaveReceived() should count as assertion, got {}",
+            funcs[1].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_mockery_should_not_have_received_counts_as_assertion() {
+        // TC-03: $mock->shouldNotHaveReceived('x') -> assertion_count >= 1
+        let source = fixture("t001_pass_mockery.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_mockery.php");
+        // test_negative_verification is the 3rd test
+        assert!(funcs.len() >= 3);
+        assert!(
+            funcs[2].analysis.assertion_count >= 1,
+            "shouldNotHaveReceived() should count as assertion, got {}",
+            funcs[2].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_phpunit_expects_counts_as_assertion() {
+        // TC-04: $mock->expects($this->once())->method('x') -> assertion_count >= 1
+        let source = fixture("t001_pass_phpunit_mock.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_phpunit_mock.php");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            funcs[0].analysis.assertion_count >= 1,
+            "expects() should count as assertion, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_mockery_multiple_expectations_counted() {
+        // TC-06: 3x shouldReceive calls -> assertion_count >= 3
+        let source = fixture("t001_pass_mockery.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_mockery.php");
+        // test_multiple_mock_expectations is the 4th test
+        assert!(funcs.len() >= 4);
+        assert!(
+            funcs[3].analysis.assertion_count >= 3,
+            "3x shouldReceive() should count as >= 3 assertions, got {}",
+            funcs[3].analysis.assertion_count
+        );
+    }
+
     // --- camelCase test detection ---
 
     #[test]

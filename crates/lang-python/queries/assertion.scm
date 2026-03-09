@@ -18,6 +18,12 @@
   (#eq? @_pytest_obj "pytest")
   (#eq? @_pytest_attr "raises")) @assertion
 
+; unittest.mock: mock.assert_*() methods (assert_called_once, assert_not_called, etc.)
+(call
+  function: (attribute
+    attribute: (identifier) @_mock_method)
+  (#match? @_mock_method "^assert_")) @assertion
+
 ; pytest.warns() — warning verification counts as assertion
 ; (also matched in error_test.scm for T103)
 (call

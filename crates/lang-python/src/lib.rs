@@ -1372,6 +1372,92 @@ mod tests {
         );
     }
 
+    // --- T001 FP fix: mock.assert_*() methods (#38) ---
+
+    #[test]
+    fn t001_mock_assert_called_once_counts_as_assertion() {
+        // TC-07: mock.assert_called_once() -> assertion_count >= 1
+        let source = fixture("t001_pass_mock_assert.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_mock_assert.py");
+        assert!(funcs.len() >= 1);
+        assert!(
+            funcs[0].analysis.assertion_count >= 1,
+            "mock.assert_called_once() should count as assertion, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_mock_assert_called_once_with_counts_as_assertion() {
+        // TC-08: mock.assert_called_once_with(arg) -> assertion_count >= 1
+        let source = fixture("t001_pass_mock_assert.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_mock_assert.py");
+        assert!(funcs.len() >= 2);
+        assert!(
+            funcs[1].analysis.assertion_count >= 1,
+            "mock.assert_called_once_with() should count as assertion, got {}",
+            funcs[1].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_mock_assert_not_called_counts_as_assertion() {
+        // TC-09: mock.assert_not_called() -> assertion_count >= 1
+        let source = fixture("t001_pass_mock_assert.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_mock_assert.py");
+        assert!(funcs.len() >= 3);
+        assert!(
+            funcs[2].analysis.assertion_count >= 1,
+            "mock.assert_not_called() should count as assertion, got {}",
+            funcs[2].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_mock_assert_has_calls_counts_as_assertion() {
+        // TC-10: mock.assert_has_calls([...]) -> assertion_count >= 1
+        let source = fixture("t001_pass_mock_assert.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_mock_assert.py");
+        assert!(funcs.len() >= 4);
+        assert!(
+            funcs[3].analysis.assertion_count >= 1,
+            "mock.assert_has_calls() should count as assertion, got {}",
+            funcs[3].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_chained_mock_assert_counts_as_assertion() {
+        // TC-11: mock.return_value.assert_called_once() -> assertion_count >= 1
+        let source = fixture("t001_pass_mock_assert.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_mock_assert.py");
+        assert!(funcs.len() >= 5);
+        assert!(
+            funcs[4].analysis.assertion_count >= 1,
+            "chained mock.assert_called_once() should count as assertion, got {}",
+            funcs[4].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_self_assert_equal_no_double_count_regression() {
+        // TC-12: self.assertEqual still works, no double-count
+        let source = "import unittest\n\nclass TestMath(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(1 + 1, 2)\n";
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "test_math.py");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(
+            funcs[0].analysis.assertion_count, 1,
+            "self.assertEqual should count as exactly 1 assertion, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
     #[test]
     fn t106_pass_trivial_literals() {
         let source = fixture("t106_pass_trivial_literals.py");
