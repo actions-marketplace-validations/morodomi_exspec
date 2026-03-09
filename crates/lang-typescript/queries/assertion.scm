@@ -65,6 +65,39 @@
         (#eq? @_fn4 "expect")
         (#match? @_prop4 "^(soft|element|poll)$"))))) @assertion
 
+;; expect.soft/element/poll depth-3: expect.soft(x).not.toBe(y)
+(call_expression
+  function: (member_expression
+    object: (member_expression
+      object: (call_expression
+        function: (member_expression
+          object: (identifier) @_fn_sep3
+          property: (property_identifier) @_prop_sep3
+          (#eq? @_fn_sep3 "expect")
+          (#match? @_prop_sep3 "^(soft|element|poll)$")))
+      property: (property_identifier) @_mod_sep3
+      (#match? @_mod_sep3 "^(not|resolves|rejects)$"))
+    property: (property_identifier) @_term_sep3
+    (#match? @_term_sep3 "^to[A-Z]"))) @assertion
+
+;; expect.soft/element/poll depth-4: expect.soft(x).resolves.not.toBe(y)
+(call_expression
+  function: (member_expression
+    object: (member_expression
+      object: (member_expression
+        object: (call_expression
+          function: (member_expression
+            object: (identifier) @_fn_sep4
+            property: (property_identifier) @_prop_sep4
+            (#eq? @_fn_sep4 "expect")
+            (#match? @_prop_sep4 "^(soft|element|poll)$")))
+        property: (property_identifier) @_mod_sep4a
+        (#match? @_mod_sep4a "^(not|resolves|rejects)$"))
+      property: (property_identifier) @_mod_sep4b
+      (#match? @_mod_sep4b "^(not|resolves|rejects)$"))
+    property: (property_identifier) @_term_sep4
+    (#match? @_term_sep4 "^to[A-Z]"))) @assertion
+
 ;; Chai BDD property-style assertions (no trailing parentheses).
 ;; Terminal property allowlist: ok|true|false|null|undefined|exist|exists|empty|NaN|
 ;;   extensible|sealed|frozen|arguments|Arguments|finite|
