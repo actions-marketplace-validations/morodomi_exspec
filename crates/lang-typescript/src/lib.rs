@@ -1301,6 +1301,108 @@ describe('d', () => {
         }
     }
 
+    // --- T001 FP fix: Chai method-call chain assertions (#40) ---
+
+    #[test]
+    fn t001_chai_method_call_fixture_all_detected() {
+        // TC-01~07 should have assertions, TC-08~09 should not
+        let source = fixture("t001_chai_method_call.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_chai_method_call.test.ts");
+        assert_eq!(funcs.len(), 10);
+
+        // TC-01: expect(x).to.equal(y) — depth 2, exactly 1 (no double-count)
+        assert_eq!(
+            funcs[0].analysis.assertion_count, 1,
+            "TC-01 to.equal should count exactly 1, got {}",
+            funcs[0].analysis.assertion_count
+        );
+
+        // TC-02: expect(x).to.be.a('string') — depth 3
+        assert!(
+            funcs[1].analysis.assertion_count >= 1,
+            "TC-02 to.be.a should have assertion_count >= 1, got {}",
+            funcs[1].analysis.assertion_count
+        );
+
+        // TC-03: expect(spy).to.have.callCount(3) — depth 3
+        assert!(
+            funcs[2].analysis.assertion_count >= 1,
+            "TC-03 to.have.callCount should have assertion_count >= 1, got {}",
+            funcs[2].analysis.assertion_count
+        );
+
+        // TC-04: expect(spy).to.have.been.calledWith(arg) — depth 4
+        assert!(
+            funcs[3].analysis.assertion_count >= 1,
+            "TC-04 to.have.been.calledWith should have assertion_count >= 1, got {}",
+            funcs[3].analysis.assertion_count
+        );
+
+        // TC-05: expect(spy).to.not.have.been.calledWith(arg) — depth 5
+        assert!(
+            funcs[4].analysis.assertion_count >= 1,
+            "TC-05 to.not.have.been.calledWith should have assertion_count >= 1, got {}",
+            funcs[4].analysis.assertion_count
+        );
+
+        // TC-06: mixed property (.to.be.true) + method (.to.equal) — both counted
+        assert!(
+            funcs[5].analysis.assertion_count >= 2,
+            "TC-06 mixed property+method should have assertion_count >= 2, got {}",
+            funcs[5].analysis.assertion_count
+        );
+
+        // TC-07: multiple method assertions
+        assert!(
+            funcs[6].analysis.assertion_count >= 2,
+            "TC-07 multiple methods should have assertion_count >= 2, got {}",
+            funcs[6].analysis.assertion_count
+        );
+
+        // TC-08: no assertion (regression guard)
+        assert_eq!(
+            funcs[7].analysis.assertion_count, 0,
+            "TC-08 no assertion should have assertion_count == 0, got {}",
+            funcs[7].analysis.assertion_count
+        );
+
+        // TC-09: expect(x).to.customHelper() — NOT in terminal vocabulary
+        assert_eq!(
+            funcs[8].analysis.assertion_count, 0,
+            "TC-09 customHelper should have assertion_count == 0, got {}",
+            funcs[8].analysis.assertion_count
+        );
+
+        // TC-10: expect(x).not.to.equal(y) — depth 3, not at position 1
+        assert!(
+            funcs[9].analysis.assertion_count >= 1,
+            "TC-10 not.to.equal should have assertion_count >= 1, got {}",
+            funcs[9].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_chai_method_call_depth2_no_double_count() {
+        // expect(x).to.equal(y) should count exactly 1 (not double-counted with depth-1)
+        let source = r#"
+import { expect } from 'chai';
+describe('d', () => {
+  it('t', () => {
+    expect(x).to.equal(y);
+  });
+});
+"#;
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(source, "test.ts");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(
+            funcs[0].analysis.assertion_count, 1,
+            "depth 2 method-call should count exactly 1, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
     #[test]
     fn t107_skipped_for_typescript() {
         // TypeScript expect() has no message argument, so T107 should never fire.
