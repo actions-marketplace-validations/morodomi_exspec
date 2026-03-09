@@ -1328,4 +1328,213 @@ mod tests {
             funcs[0].analysis.assertion_count
         );
     }
+
+    // --- #44: T001 FP: arbitrary-object ->assert*() and self::assert*() ---
+
+    #[test]
+    fn t001_response_assert_status() {
+        let source = fixture("t001_pass_obj_assert.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_obj_assert.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_response_assert_status")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "$response->assertStatus() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_chained_response_assertions() {
+        let source = fixture("t001_pass_obj_assert.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_obj_assert.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_chained_response_assertions")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 2,
+            "chained ->assertStatus()->assertJsonCount() should count >= 2, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_assertion_helper_not_counted() {
+        let source = fixture("t001_pass_obj_assert.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_obj_assert.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_assertion_helper_not_counted")
+            .unwrap();
+        assert_eq!(
+            f.analysis.assertion_count, 0,
+            "assertionHelper() should NOT count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_self_assert_equals() {
+        let source = fixture("t001_pass_self_assert.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_self_assert.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_self_assert_equals")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "self::assertEquals() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_static_assert_true() {
+        let source = fixture("t001_pass_self_assert.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_self_assert.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_static_assert_true")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "static::assertTrue() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_artisan_expects_output() {
+        let source = fixture("t001_pass_artisan_expects.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_artisan_expects.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_artisan_expects_output")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 2,
+            "expectsOutput + assertExitCode should count >= 2, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_artisan_expects_question() {
+        let source = fixture("t001_pass_artisan_expects.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_artisan_expects.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_artisan_expects_question")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "expectsQuestion() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_expect_not_to_perform_assertions() {
+        let source = fixture("t001_pass_artisan_expects.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_artisan_expects.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_expect_not_to_perform_assertions")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "expectNotToPerformAssertions() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_expect_output_string() {
+        let source = fixture("t001_pass_artisan_expects.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_artisan_expects.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_expect_output_string")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "expectOutputString() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_existing_this_assert_still_works() {
+        // Regression: $this->assertEquals still detected after Pattern A change
+        let source = fixture("t001_pass.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass.php");
+        assert_eq!(funcs.len(), 1);
+        assert!(
+            funcs[0].analysis.assertion_count >= 1,
+            "$this->assertEquals() regression: should still count, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_bare_assert_counted() {
+        let source = fixture("t001_pass_obj_assert.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_obj_assert.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_bare_assert_call")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "->assert() bare call should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_parent_assert_same() {
+        // parent:: is relative_scope in tree-sitter-php; intentionally counted as oracle
+        let source = fixture("t001_pass_self_assert.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_self_assert.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_parent_assert_same")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "parent::assertSame() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_artisan_expects_no_output() {
+        let source = fixture("t001_pass_artisan_expects.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_artisan_expects.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_artisan_expects_no_output")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "expectsNoOutput() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
 }

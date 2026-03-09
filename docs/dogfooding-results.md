@@ -10,8 +10,9 @@ exspec version: 0.1.0 (commit 5957cd0)
 | exspec (self) | Rust | 51 | 0 real (3 fixture) | 0% | N/A |
 | requests | Python | 339 | 14 | ~20% (est.) | mock.assert_*(), delegation |
 | fastapi | Python | 2121 | 19 | 21% (4/19) | mock.assert_*(), nested fn |
-| vitest | TypeScript | 3120 | 212 real | ~60% | .not/.resolves chains |
-| laravel | PHP | 10790 | 1305 | ~85% (est.) | Mockery shouldReceive |
+| vitest | TypeScript | 3120 | 326 (post-fix) | see below | .not/.resolves chains, Chai, expect.soft |
+| laravel (pre-fix) | PHP | 10790 | 1305 | ~85% | Mockery shouldReceive |
+| laravel (post-#38) | PHP | 10790 | 776 | 71% (552/776) | $obj->assert*, ->expects*, self::assert* |
 
 ### Acceptance Criteria Status
 
@@ -98,6 +99,25 @@ and the `assert` statement in `test_get_db` after the nested function is not cou
 PHPUnit's built-in mock: `$mock->expects($this->once())->method('name')`.
 Same issue as Mockery, combined in same issue.
 
+## Laravel Post-#38 Dogfooding (2026-03-09)
+
+Post-Mockery fix: 1305 → 776 BLOCK (-529). Remaining 776 breakdown:
+
+| Category | Count | FP? | Pattern |
+|----------|-------|-----|---------|
+| `$obj->assert*()` | 449 | FP | `$response->assertStatus()`, `->assertJson()`, etc. |
+| `->expects*()` | 85 | FP | Artisan `->expectsOutput()`, `->expectsQuestion()` |
+| `self::assert*()` | 13 | FP | PHPUnit static assertion calls |
+| `->should*()` | 5 | FP | Mockery edge cases |
+| Truly assertion-free | 278 | TP | Smoke tests, delegation, no oracle |
+
+**Root cause**: assertion.scm only matches `$this->assert*()`. Three missing patterns:
+
+1. **Any-object `->assert*()`**: Laravel TestResponse, Fluent assertions, Mail assertions, etc.
+   Top methods: assertStatus(105), assertHeader(63), assertExactJson(54), assertJsonPath(53), assertSent(52)
+2. **`self::assert*()` / `static::assert*()`**: PHPUnit static calls (13 cases)
+3. **`->expects*()` as assertion**: Artisan `expectsOutput`(115), `expectsOutputToContain`(35), etc.
+
 ## WARN Analysis
 
 ### T107 (assertion-roulette)
@@ -157,6 +177,28 @@ Based on dogfooding data:
 2. **T101 WARN is appropriate**: Low rates (0.3-2.7%) except Laravel (needs post-#38 recheck).
 3. **T003 WARN is appropriate**: Rates are reasonable (1.6-9.9%).
 4. **T001 BLOCK is correct**: After FP fixes, remaining BLOCKs are genuine assertion-free tests.
+
+## vitest T001 Hardening Summary (CLOSED)
+
+**Period**: 2026-03-09
+**Issues**: #37, #39, #40, #42, #43
+**BLOCK progression**: 432 → 350 (#37) → 339 (#39) → 334 (#40) → 326 (#42+#43)
+**Cumulative reduction**: -106 (24.5%)
+
+| Fix | Issue | Impact |
+|-----|-------|--------|
+| expect .not/.resolves chains | #37 | -82 |
+| expect.assertions/unreachable | #39 | -11 |
+| Chai method-call chain terminals | #40 | -5 |
+| Chai intermediate vocabulary + returned | #42 | -5 |
+| expect.soft modifier chains | #43 | -3 |
+
+**Conclusion**: Generic query-fixable FP clusters exhausted. Remaining 326 BLOCKs are:
+- Project-local custom assertion helpers (→ `.exspec.toml` `custom_patterns` escape hatch)
+- True positives (assertion-free tests)
+- Edge cases not worth query complexity (diminishing returns)
+
+**Status**: CLOSED. No further vitest-specific T001 work planned.
 
 ## Reproduction
 

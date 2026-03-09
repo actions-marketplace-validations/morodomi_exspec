@@ -1,9 +1,9 @@
-; PHPUnit: $this->assert*()
+; Any ->assert*() method call (covers $this, $response, chained calls, etc.)
+; In PHP test files, object methods beginning with assert... are treated as assertion oracles by convention.
+; ^assert([A-Z_]|$) ensures: assertStatus YES, assertEquals YES, assert() bare YES, but assertionHelper NO.
 (member_call_expression
-  object: (variable_name (name) @_obj)
   name: (name) @_method
-  (#eq? @_obj "this")
-  (#match? @_method "^assert")) @assertion
+  (#match? @_method "^assert([A-Z_]|$)")) @assertion
 
 ; PHPUnit: $this->expectException() — exception verification counts as assertion
 ; (also matched in error_test.scm for T103)
@@ -29,6 +29,14 @@
   (#eq? @_expect_obj3 "this")
   (#eq? @_expect_method3 "expectExceptionCode")) @assertion
 
+; PHPUnit static: self::assert*() / static::assert*() / parent::assert*()
+; In tree-sitter-php, self/static/parent are parsed as relative_scope (not name).
+; parent::assert*() is intentionally included: valid oracle in PHPUnit inheritance chains.
+(scoped_call_expression
+  scope: (relative_scope) @_scope
+  name: (name) @_smethod
+  (#match? @_smethod "^assert([A-Z_]|$)")) @assertion
+
 ; Mockery: ->shouldReceive(...) — sets mock expectation (verified at teardown)
 (member_call_expression
   name: (name) @_m1 (#eq? @_m1 "shouldReceive")) @assertion
@@ -52,3 +60,18 @@
     (#eq? @_fn "expect"))
   name: (name) @_method
   (#match? @_method "^to")) @assertion
+
+; Laravel Artisan console testing: expects* expectation methods
+(member_call_expression
+  name: (name) @_artisan
+  (#match? @_artisan "^expects(Output|OutputToContain|NoOutput|Question|Choice|Confirmation|Search|DatabaseQueryCount|Table)$")) @assertion
+
+; PHPUnit: expectNotToPerformAssertions() — marks test as intentionally assertion-free
+(member_call_expression
+  name: (name) @_npa
+  (#eq? @_npa "expectNotToPerformAssertions")) @assertion
+
+; PHPUnit: expectOutputString() — output assertion
+(member_call_expression
+  name: (name) @_eos
+  (#eq? @_eos "expectOutputString")) @assertion
