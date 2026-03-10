@@ -91,7 +91,7 @@ queries/
 | T103 | missing-error-test (異常系テストなし) | INFO |
 | T105 | deterministic-no-metamorphic | INFO |
 | T106 | duplicate-literal-assertion | INFO |
-| T107 | assertion-roulette | WARN |
+| T107 | assertion-roulette | INFO |
 | T108 | wait-and-see | WARN |
 | T109 | undescriptive-test-name | INFO |
 

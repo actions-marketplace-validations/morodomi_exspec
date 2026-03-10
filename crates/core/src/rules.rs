@@ -219,7 +219,7 @@ pub fn evaluate_rules(functions: &[TestFunction], config: &Config) -> Vec<Diagno
         {
             diagnostics.push(Diagnostic {
                 rule: RuleId::new("T107"),
-                severity: Severity::Warn,
+                severity: Severity::Info,
                 file: func.file.clone(),
                 line: Some(func.line),
                 message: format!(
@@ -1584,7 +1584,7 @@ mod tests {
     // --- T107: assertion-roulette ---
 
     #[test]
-    fn t107_multiple_assertions_no_messages_produces_warn() {
+    fn t107_multiple_assertions_no_messages_produces_info() {
         let funcs = vec![make_func(
             "test_multiple_asserts_no_messages",
             TestAnalysis {
@@ -1599,7 +1599,7 @@ mod tests {
             .filter(|d| d.rule == RuleId::new("T107"))
             .collect();
         assert_eq!(t107.len(), 1);
-        assert_eq!(t107[0].severity, Severity::Warn);
+        assert_eq!(t107[0].severity, Severity::Info);
         assert!(t107[0].message.contains("assertion-roulette"));
     }
 

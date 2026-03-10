@@ -52,7 +52,7 @@ Phase 6 (Release Hardening) in progress. Dogfooding (#23) complete, custom asser
 | T103 | missing-error-test | INFO | Yes | Yes | Yes | Yes* |
 | T105 | deterministic-no-metamorphic | INFO | Yes | Yes | Yes | Yes* |
 | T106 | duplicate-literal-assertion | INFO | Yes | Yes | Yes | Yes |
-| T107 | assertion-roulette | WARN | Yes | -- | Yes | Yes |
+| T107 | assertion-roulette | INFO | Yes | -- | Yes | Yes |
 | T108 | wait-and-see | WARN | Yes | Yes | Yes | Yes |
 | T109 | undescriptive-test-name | INFO | Yes | Yes | Yes | Yes |
 
