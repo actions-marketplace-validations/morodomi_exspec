@@ -31,6 +31,12 @@ For the full design rationale, see [docs/philosophy.md](docs/philosophy.md).
 - **Coverage measurement**: Use lcov, istanbul, or coverage.py for that
 - **LLM calls**: exspec runs in milliseconds with zero API cost
 
+### Known Constraints
+
+- **Rust `macro_rules!`**: tree-sitter parses macro bodies as opaque `token_tree` nodes. Custom assertion macros inside `macro_rules!` may not be detected
+- **TypeScript T107 (assertion-roulette)**: Always set to `assertion_count` rather than independently counting message arguments. This avoids false positives but means T107 never fires for TypeScript
+- **Helper delegation**: Test functions that delegate assertions to project-local helpers (e.g. `self.assertValid(...)`, `assertJsonStructure(...)`) are not recognized unless configured via `[assertions] custom_patterns`
+
 ## Install
 
 ```bash
@@ -112,6 +118,69 @@ exspec --format sarif .       # SARIF (GitHub Code Scanning)
 ### Tier 3 (v1.0) -- AI Prompt Generation
 
 For semantic checks that require LLM reasoning, exspec generates review prompts instead of making judgments.
+
+## Gradual Adoption
+
+Start with Tier 1 rules only. Disable Tier 2 until your codebase is clean:
+
+```toml
+# .exspec.toml -- starter config
+[rules]
+disable = ["T101", "T102", "T103", "T105", "T106", "T107", "T108", "T109"]
+```
+
+Once Tier 1 passes cleanly, enable Tier 2 rules one at a time. Use inline suppression for known exceptions:
+
+```python
+# exspec-ignore: T002
+def test_complex_integration():
+    # This test legitimately needs many mocks for external boundaries
+    ...
+```
+
+For projects with custom assertion helpers, add them to the config to avoid T001 false positives:
+
+```toml
+[assertions]
+custom_patterns = ["assertJsonStructure", "self.assertValid"]
+```
+
+## CI Integration
+
+### GitHub Actions (SARIF)
+
+Upload results to GitHub Code Scanning for inline PR annotations:
+
+```yaml
+# .github/workflows/exspec.yml
+name: Test Quality
+on: [pull_request]
+jobs:
+  exspec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo install exspec
+      - run: exspec --format sarif . > results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+```
+
+### Simple CI (exit code)
+
+For any CI system -- exspec exits 1 on BLOCK violations:
+
+```yaml
+- run: cargo install exspec
+- run: exspec .
+```
+
+Use `--strict` to also fail on WARN:
+
+```yaml
+- run: exspec --strict .
+```
 
 ## Configuration
 
