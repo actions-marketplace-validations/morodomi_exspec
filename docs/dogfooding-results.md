@@ -13,6 +13,9 @@ exspec version: 0.1.0 (commit 5957cd0)
 | vitest | TypeScript | 3120 | 326 (post-fix) | see below | .not/.resolves chains, Chai, expect.soft |
 | laravel (pre-fix) | PHP | 10790 | 1305 | ~85% | Mockery shouldReceive |
 | laravel (post-#38) | PHP | 10790 | 776 | 71% (552/776) | $obj->assert*, ->expects*, self::assert* |
+| laravel (post-#44) | PHP | 10790 | ~224 | -- | named-class assert, Facade assert |
+| laravel (post-#45/46) | PHP | 10790 | 222 | -- | helper delegation ($this->fails(), $assert->has()) |
+| pydantic | Python | ~2500 | 105 | ~55% (58/105) | benchmark() fixture (43), helper/nested (15) |
 
 ### Acceptance Criteria Status
 
