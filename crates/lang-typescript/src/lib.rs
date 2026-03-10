@@ -1559,6 +1559,58 @@ describe('d', () => {
         );
     }
 
+    // --- T001 FP fix: supertest .expect() method-call oracle (#47) ---
+
+    #[test]
+    fn t001_supertest_expect_method_call() {
+        let source = fixture("t001_supertest.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_supertest.test.ts");
+        assert_eq!(funcs.len(), 6);
+
+        // TC-01: single .expect(200) on chain — assertion_count == 1
+        assert_eq!(
+            funcs[0].analysis.assertion_count, 1,
+            "TC-01 single .expect(200) should have assertion_count == 1, got {}",
+            funcs[0].analysis.assertion_count
+        );
+
+        // TC-02: two .expect() on same chain — assertion_count == 2
+        assert_eq!(
+            funcs[1].analysis.assertion_count, 2,
+            "TC-02 two .expect() should have assertion_count == 2, got {}",
+            funcs[1].analysis.assertion_count
+        );
+
+        // TC-03: chain with .set() and two .expect() — assertion_count == 2
+        assert_eq!(
+            funcs[2].analysis.assertion_count, 2,
+            "TC-03 .set() + two .expect() should have assertion_count == 2, got {}",
+            funcs[2].analysis.assertion_count
+        );
+
+        // TC-04: no assertion (plain request) — assertion_count == 0
+        assert_eq!(
+            funcs[3].analysis.assertion_count, 0,
+            "TC-04 no assertion should have assertion_count == 0, got {}",
+            funcs[3].analysis.assertion_count
+        );
+
+        // TC-05: standalone expect(x).toBe(y) — assertion_count == 1 (no double-count)
+        assert_eq!(
+            funcs[4].analysis.assertion_count, 1,
+            "TC-05 standalone expect should have assertion_count == 1, got {}",
+            funcs[4].analysis.assertion_count
+        );
+
+        // TC-06: non-supertest chain: someBuilder().expect('foo') — assertion_count == 1
+        assert_eq!(
+            funcs[5].analysis.assertion_count, 1,
+            "TC-06 non-supertest builder .expect() should have assertion_count == 1, got {}",
+            funcs[5].analysis.assertion_count
+        );
+    }
+
     #[test]
     fn t107_skipped_for_typescript() {
         // TypeScript expect() has no message argument, so T107 should never fire.

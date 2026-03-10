@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 6 (Release Hardening) in progress. Dogfooding (#23) complete, custom assertion helpers (#33) done. P0 FP fixes done (#37, #38). 16 active rules, 4 languages, 568 tests. Remaining FP issues: #39-#41.
+Phase 6 (Release Hardening) in progress. NestJS dogfooding T001 FP fixes in progress (#47-#49). 16 active rules, 4 languages, 596 tests.
 
 ## Progress
 
@@ -69,7 +69,7 @@ Phase 6 (Release Hardening) in progress. Dogfooding (#23) complete, custom asser
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 568 passing | -- |
+| Tests | 596 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
@@ -86,15 +86,13 @@ Phase 6 (Release Hardening) in progress. Dogfooding (#23) complete, custom asser
 
 | # | Title | Priority |
 |---|-------|----------|
-| #24 | Severity / default-on review | P1 |
 | #26 | README Limitations and gradual adoption guide | P2 |
 | #27 | CI integration examples in README | P2 |
 | #29 | Rust should_panic tighten substring match | P3 (Phase 8) |
 | #30 | PHP $this matching style alignment | P3 (Phase 8) |
 | #35 | T001: Chai property in return/assignment context | P2 (Phase 8) |
 | #36 | Custom assertion improvements | P3 (Phase 8) |
-| #37 | T001 FP: TS expect modifier chains (.not/.resolves) | P0 (DONE) |
-| #38 | T001 FP: PHP/Python mock expectations as assertions | P0 (DONE) |
-| #39 | T001 FP: TS expect.assertions / expect.unreachable | P1 |
-| #40 | T001 FP: TS Chai method-call chain terminals | P1 |
 | #41 | T001 FP: Python nested test function assertion counting | P2 |
+| #47 | T001 FP: TS supertest .expect() method-call oracle | P0 (DONE) |
+| #48 | T001 FP: TS Chai/Sinon vocabulary expansion for Jest/NestJS | P0 |
+| #49 | T001 FP: Chai property terminal in .then() callback | P0 |

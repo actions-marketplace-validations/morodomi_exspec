@@ -239,6 +239,19 @@
     property: (property_identifier) @_chai_mc5_term
     (#match? @_chai_mc5_term "^(equal|eql|a|an|include|contain|throw|match|property|keys|lengthOf|members|satisfy|closeTo|above|below|least|most|within|instanceOf|respondTo|oneOf|change|increase|decrease|by|string|calledWith|calledOnceWith|calledWithExactly|calledOn|callCount|returned|thrown)$"))) @assertion
 
+;; Supertest-style .expect() method-call chained on another call_expression.
+;; e.g., request(app).get('/').expect(200), app.inject({...}).expect(201)
+;; Broad by design: also matches someBuilder().expect('foo').
+;; Risk direction: false negative (misses assertion-free), not false positive.
+;; No double-count with depth-1 expect pattern: depth-1 requires
+;; `function: (identifier)` as the call root, while this pattern requires
+;; `object: (call_expression)` — structurally disjoint.
+(call_expression
+  function: (member_expression
+    object: (call_expression)
+    property: (property_identifier) @_supertest_prop
+    (#eq? @_supertest_prop "expect"))) @assertion
+
 ;; Match assert.* (Node assert module)
 (call_expression
   function: (member_expression
