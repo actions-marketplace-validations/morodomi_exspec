@@ -33,7 +33,7 @@ For the full design rationale, see [docs/philosophy.md](docs/philosophy.md).
 
 ### Known Constraints
 
-- **Rust `macro_rules!`**: tree-sitter parses macro bodies as opaque `token_tree` nodes. Custom assertion macros inside `macro_rules!` may not be detected
+- **Rust macro-generated tests**: tree-sitter parses macro bodies as opaque `token_tree` nodes. Test functions generated inside macros (e.g. `rgtest!`, custom test harnesses) are **not detected**. Custom assertion macros (e.g. `assert_pending!`, `assert_ready!`) are also invisible. Use `[assertions] custom_patterns` for assertion macros
 - **TypeScript T107 (assertion-roulette)**: Always set to `assertion_count` rather than independently counting message arguments. This avoids false positives but means T107 never fires for TypeScript
 - **Helper delegation**: Test functions that delegate assertions to project-local helpers (e.g. `self.assertValid(...)`, `assertJsonStructure(...)`) are not recognized unless configured via `[assertions] custom_patterns`
 

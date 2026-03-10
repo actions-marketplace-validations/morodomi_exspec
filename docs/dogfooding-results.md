@@ -19,7 +19,7 @@ exspec version: 0.1.0 (commit 5957cd0)
 | nestjs (pre-fix) | TypeScript | 2675 | 90 | 90% (81/90) | Chai aliases, Sinon mock .verify() |
 | nestjs (post-#50) | TypeScript | 2675 | 34 | ~26% (est.) | Sinon .verify(), return wrapper, helper delegation |
 | nestjs (post-#51) | TypeScript | 2675 | 17 (confirmed) | 0% | helper delegation, done() callback, bare expect() |
-| ripgrep | Rust | 16 | 0 | 0% | N/A |
+| ripgrep | Rust | 16 (of ~346) | 0 | 0% | ~330 tests in `rgtest!` macro not detected (token_tree) |
 | tokio | Rust | 1582 | 388 | 33.8% (131/388) | custom assert macros (124), select! token_tree (7) |
 
 ### Acceptance Criteria Status
@@ -294,15 +294,21 @@ Sinon mock `.verify()` is the primary use of `.verify()` in test code. Rather th
 
 ### ripgrep
 
-**16 tests, 15 files, 0 T001 BLOCK. FP rate: 0%.**
+**16 tests detected (of ~346 actual), 15 files, 0 T001 BLOCK.**
 
-Clean results. Only WARN/INFO diagnostics:
+**Important caveat**: ripgrep's test suite uses a custom `rgtest!` macro that generates `#[test] fn` internally. tree-sitter parses macro invocations as `macro_invocation > token_tree`, making the ~330 `rgtest!` tests invisible to exspec. Only 16 tests in `crates/` with bare `#[test]` were detected.
+
+This is a **significant limitation of Rust support**: projects using macro-generated test functions will have most tests undetected. The `rgtest!` macro also uses `eqnice!` (a custom assertion macro using `panic!`), so even if tests were detected, assertions would be missed.
+
+Detected tests (16) had clean results:
 
 | Rule | Count | Notes |
 |------|-------|-------|
 | T003 (giant-test) | 2 | 102 and 126 lines. TP |
 | T107 (assertion-roulette) | 12 | All TP (assert! without messages) |
 | T109 (undescriptive-name) | 3 | "find", "captures", "replace" |
+
+**Conclusion**: ripgrep is not usable as a Rust dogfooding benchmark due to macro-heavy test structure. Use tokio instead.
 
 ### tokio
 
