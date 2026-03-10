@@ -81,13 +81,13 @@ exspec --format sarif .       # SARIF (GitHub Code Scanning)
 
 ## Supported Languages
 
-| Language | Test Frameworks | Phase |
+| Language | Test Frameworks | Since |
 |----------|----------------|-------|
-| Python | pytest | MVP |
-| TypeScript | Jest, Vitest | MVP |
-| PHP | PHPUnit, Pest | v0.2 |
-| Rust | cargo test | v0.2 |
-| Dart | flutter_test | v1.0 (best-effort) |
+| Python | pytest | v0.1.0 |
+| TypeScript | Jest, Vitest | v0.1.0 |
+| PHP | PHPUnit, Pest | v0.1.0 |
+| Rust | cargo test | v0.1.0 |
+| Dart | flutter_test | Planned |
 
 ## Check Rules
 
