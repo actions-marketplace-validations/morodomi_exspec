@@ -19,6 +19,8 @@ exspec version: 0.1.0 (commit 5957cd0)
 | nestjs (pre-fix) | TypeScript | 2675 | 90 | 90% (81/90) | Chai aliases, Sinon mock .verify() |
 | nestjs (post-#50) | TypeScript | 2675 | 34 | ~26% (est.) | Sinon .verify(), return wrapper, helper delegation |
 | nestjs (post-#51) | TypeScript | 2675 | 17 (confirmed) | 0% | helper delegation, done() callback, bare expect() |
+| ripgrep | Rust | 16 | 0 | 0% | N/A |
+| tokio | Rust | 1582 | 388 | 33.8% (131/388) | custom assert macros (124), select! token_tree (7) |
 
 ### Acceptance Criteria Status
 
@@ -288,6 +290,60 @@ Intermediate `and` / `rejected` / `fulfilled` were missing from the chain vocabu
 
 Sinon mock `.verify()` is the primary use of `.verify()` in test code. Rather than constraining to Sinon-specific patterns, broad matching (`any_expr.verify()` counts as assertion) was chosen. The risk of false negatives (non-assertion `.verify()`) is acceptable for T001's purpose of detecting oracle-free tests.
 
+## Rust Dogfooding (2026-03-10)
+
+### ripgrep
+
+**16 tests, 15 files, 0 T001 BLOCK. FP rate: 0%.**
+
+Clean results. Only WARN/INFO diagnostics:
+
+| Rule | Count | Notes |
+|------|-------|-------|
+| T003 (giant-test) | 2 | 102 and 126 lines. TP |
+| T107 (assertion-roulette) | 12 | All TP (assert! without messages) |
+| T109 (undescriptive-name) | 3 | "find", "captures", "replace" |
+
+### tokio
+
+**1582 tests, 271 files, 388 T001 BLOCK. FP rate: 33.8% (131/388).**
+
+#### BLOCK Breakdown
+
+| Category | Count | Type | Notes |
+|----------|-------|------|-------|
+| Truly assertion-free | 187 | TP | Smoke tests, concurrency setup, no oracle |
+| Custom assert macros (`assert_pending!`, `assert_ready!`, etc.) | 124 | FP | `tokio-test` macros not detected. Fixable via `custom_patterns` |
+| loom model check | 34 | TP | `loom::model()` verifies concurrency, no explicit assertions |
+| trybuild/compile-fail | 21 | TP | `#[tokio::test]` macro error tests |
+| `panic!` only | 15 | TP | panic is not an oracle |
+| `assert!` inside `select!` macro | 5 | FP | token_tree limitation (Known Constraint) |
+| std assert missed | 2 | FP | assert inside `tokio::select!` nested closures |
+
+#### Key Findings
+
+1. **Custom assert macros are the dominant FP source** (124/131 = 95% of FPs). `tokio-test` provides `assert_pending!`, `assert_ready!`, `assert_ok!`, `assert_elapsed!` etc. These are not recognized because tree-sitter parses macro invocations as `macro_invocation > token_tree`, hiding the assertion semantics.
+
+2. **`custom_patterns` is the correct mitigation**:
+   ```toml
+   [assertions]
+   custom_patterns = ["assert_pending!", "assert_ready!", "assert_ok!", "assert_elapsed!", "assert_done!", "assert_next_eq!", "assert_err!", "assert_ready_eq!", "assert_ready_ok!", "assert_next_err!", "assert_next_pending!", "assert_ready_err!"]
+   ```
+
+3. **`select!` macro token_tree issue** (5 FPs): `assert!` inside `tokio::select!` body is invisible to tree-sitter. Already documented as Known Constraint.
+
+4. **loom tests are correctly TP**: `loom::model(|| { ... })` tests verify concurrency properties through the loom runtime, not through explicit assertions. T001 is correct to flag these.
+
+#### WARN Summary
+
+| Rule | Count | % of Tests |
+|------|-------|-----------|
+| T102 (fixture-sprawl) | 77 | 4.9% |
+| T003 (giant-test) | 59 | 3.7% |
+| T108 (wait-and-see) | 43 | 2.7% |
+| T006 (low-assertion-density) | 38 | 2.4% |
+| T101 (how-not-what) | 8 | 0.5% |
+
 ## Reproduction
 
 ```bash
@@ -301,4 +357,6 @@ cargo build --release
 ./target/release/exspec --lang typescript --format json /tmp/vitest/test
 ./target/release/exspec --lang php --format json /tmp/laravel/tests
 ./target/release/exspec --lang typescript --format json /tmp/nestjs
+./target/release/exspec --lang rust --format json /tmp/ripgrep
+./target/release/exspec --lang rust --format json /tmp/tokio
 ```
