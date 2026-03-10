@@ -1611,6 +1611,69 @@ describe('d', () => {
         );
     }
 
+    // --- T001 FP fix: Chai/Sinon vocabulary expansion (#48) ---
+
+    #[test]
+    fn t001_chai_vocab_expansion_fixture_all_detected() {
+        let source = fixture("t001_chai_vocab_expansion.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_chai_vocab_expansion.test.ts");
+        assert_eq!(funcs.len(), 18);
+
+        // TC-01 through TC-16: all should have assertion_count >= 1
+        for (i, f) in funcs.iter().enumerate().take(16) {
+            assert!(
+                f.analysis.assertion_count >= 1,
+                "TC-{:02} '{}' should have assertion_count >= 1, got {}",
+                i + 1,
+                f.name,
+                f.analysis.assertion_count
+            );
+        }
+
+        // TC-17: sinon.stub() — NOT an assertion
+        assert_eq!(
+            funcs[16].analysis.assertion_count, 0,
+            "TC-17 sinon.stub should have assertion_count == 0, got {}",
+            funcs[16].analysis.assertion_count
+        );
+
+        // TC-18: no assertion
+        assert_eq!(
+            funcs[17].analysis.assertion_count, 0,
+            "TC-18 no assertion should have assertion_count == 0, got {}",
+            funcs[17].analysis.assertion_count
+        );
+    }
+
+    // --- T001 FP fix: Chai property in arrow body (#49) ---
+
+    #[test]
+    fn t001_chai_property_arrow_fixture_all_detected() {
+        let source = fixture("t001_chai_property_arrow.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_chai_property_arrow.test.ts");
+        assert_eq!(funcs.len(), 8);
+
+        // TC-01 through TC-07: all should have assertion_count >= 1
+        for (i, f) in funcs.iter().enumerate().take(7) {
+            assert!(
+                f.analysis.assertion_count >= 1,
+                "TC-{:02} '{}' should have assertion_count >= 1, got {}",
+                i + 1,
+                f.name,
+                f.analysis.assertion_count
+            );
+        }
+
+        // TC-08: negative — no assertion
+        assert_eq!(
+            funcs[7].analysis.assertion_count, 0,
+            "TC-08 no assertion should have assertion_count == 0, got {}",
+            funcs[7].analysis.assertion_count
+        );
+    }
+
     #[test]
     fn t107_skipped_for_typescript() {
         // TypeScript expect() has no message argument, so T107 should never fire.
