@@ -2,6 +2,11 @@
 name = "exspec-core"
 version = "0.1.0"
 edition = "2021"
+description = "Core analysis engine for exspec"
+license = "MIT"
+repository = "https://github.com/morodomi/exspec"
+authors = ["morodomi"]
+publish = false
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -1,0 +1,43 @@
+name: False Negative Report
+description: A rule should have flagged code but did not
+labels: ["false-negative"]
+body:
+  - type: input
+    id: rule
+    attributes:
+      label: Rule ID
+      description: "Which rule should have fired? (e.g. T001, T002)"
+      placeholder: "T001"
+    validations:
+      required: true
+  - type: input
+    id: language
+    attributes:
+      label: Language
+      description: "Which language is the test file written in?"
+      placeholder: "Python / TypeScript / PHP / Rust"
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Test Code
+      description: "Minimal test code that should be flagged but is not"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: "What violation should exspec report?"
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: ".exspec.toml (if any)"
+      description: "Your exspec config, if relevant"
+      render: toml
+    validations:
+      required: false

@@ -40,8 +40,10 @@ For the full design rationale, see [docs/philosophy.md](docs/philosophy.md).
 ## Install
 
 ```bash
-cargo install exspec
+cargo install --git https://github.com/morodomi/exspec.git
 ```
+
+> **Note**: exspec is not yet published to crates.io. Install from the Git repository.
 
 ## Quick Start
 
@@ -160,7 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo install exspec
+      - run: cargo install --git https://github.com/morodomi/exspec.git
       - run: exspec --format sarif . > results.sarif
       - uses: github/codeql-action/upload-sarif@v3
         with:
@@ -172,7 +174,7 @@ jobs:
 For any CI system -- exspec exits 1 on BLOCK violations:
 
 ```yaml
-- run: cargo install exspec
+- run: cargo install --git https://github.com/morodomi/exspec.git
 - run: exspec .
 ```
 

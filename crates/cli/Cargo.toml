@@ -2,6 +2,12 @@
 name = "exspec-cli"
 version = "0.1.0"
 edition = "2021"
+description = "Static analyzer for test design quality -- verifies tests function as executable specifications"
+license = "MIT"
+repository = "https://github.com/morodomi/exspec"
+authors = ["morodomi"]
+keywords = ["testing", "static-analysis", "test-quality", "tdd", "tree-sitter"]
+categories = ["development-tools::testing", "command-line-utilities"]
 
 [[bin]]
 name = "exspec"
