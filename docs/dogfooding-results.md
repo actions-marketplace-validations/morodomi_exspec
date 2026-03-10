@@ -18,7 +18,7 @@ exspec version: 0.1.0 (commit 5957cd0)
 | pydantic | Python | ~2500 | 105 | ~55% (58/105) | benchmark() fixture (43), helper/nested (15) |
 | nestjs (pre-fix) | TypeScript | 2675 | 90 | 90% (81/90) | Chai aliases, Sinon mock .verify() |
 | nestjs (post-#50) | TypeScript | 2675 | 34 | ~26% (est.) | Sinon .verify(), return wrapper, helper delegation |
-| nestjs (post-#51) | TypeScript | 2675 | ~17 (est.) | -- | return wrapper, helper delegation, done() callback |
+| nestjs (post-#51) | TypeScript | 2675 | 17 (confirmed) | 0% | helper delegation, done() callback, bare expect() |
 
 ### Acceptance Criteria Status
 
@@ -242,6 +242,21 @@ Based on dogfooding data:
 | #51 | T001 FP: TS Sinon mock .verify() method-call oracle | -17 FPs (DONE) |
 | #52 | T001 FP: TS return-wrapped Chai property assertions | -2 FPs |
 
+### Post-#51 Verification (2026-03-10)
+
+Re-dogfooding confirmed: **90 → 34 (#50) → 17 (#51)**. All 17 remaining are TP:
+
+| Category | Count | Examples |
+|----------|-------|---------|
+| Helper delegation (return helper()) | 8 | file-type.validator.spec.ts, injector.spec.ts |
+| done() callback oracle | 3 | router-response-controller.spec.ts |
+| Bare expect() no-op | 2 | bar.service.spec.ts (expect(stub.called) without chain) |
+| @ts-expect-error compile check | 1 | reflector.service.spec.ts |
+| Assertion in try/catch only | 2 | parse-bool.pipe.spec.ts, validation.pipe.spec.ts |
+| client helper delegation | 1 | client-tcp.spec.ts |
+
+**FP rate: 0%**. No query-fixable FP clusters remain. #52 (return-wrapped, -2 est.) is the only remaining FP issue but may not be worth the query complexity.
+
 ### WARN/INFO Summary
 
 | Rule | Count | % of Tests |
@@ -254,6 +269,24 @@ Based on dogfooding data:
 | T003 (giant-test) | 18 | 0.7% |
 | T108 (wait-and-see) | 12 | 0.4% |
 | T002 (mock-overuse) | 4 | 0.1% |
+
+## Key Technical Discoveries
+
+### instanceof is a safe Chai terminal alias (NestJS #50)
+
+tree-sitter parses `.instanceof(Error)` as `property_identifier: "instanceof"`, NOT as the JavaScript keyword. This means it can be safely matched in member-expression property position as a Chai method terminal, alongside `throw`, `throws`, `contains`, etc.
+
+### Deep Chai chains require depth > 5 support (NestJS #50)
+
+vitest-oriented patterns capped at depth-5 (`expect(x).a.b.c.d.e()`). NestJS Chai usage revealed depth-6 and depth-7 chains:
+- `expect(x).to.eventually.be.rejected.and.be.an.instanceof(Error)` (depth-7)
+- `expect(x).to.be.rejected.and.have.property('message')` (depth-6)
+
+Intermediate `and` / `rejected` / `fulfilled` were missing from the chain vocabulary.
+
+### Broad .verify() matching is safe for T001 (NestJS #51)
+
+Sinon mock `.verify()` is the primary use of `.verify()` in test code. Rather than constraining to Sinon-specific patterns, broad matching (`any_expr.verify()` counts as assertion) was chosen. The risk of false negatives (non-assertion `.verify()`) is acceptable for T001's purpose of detecting oracle-free tests.
 
 ## Reproduction
 
