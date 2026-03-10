@@ -14,6 +14,8 @@ Static analyzer for test design quality. Verifies that tests function as executa
 
 exspec checks whether your tests are well-designed *specifications*, not just code that runs. It enforces 4 properties: **What not How**, **Living Documentation**, **Compositional**, **Single Source of Truth**. See [docs/philosophy.md](docs/philosophy.md) for the full rationale.
 
+Validated against 9 real-world OSS projects (~23,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
+
 ## Install
 
 ```bash
@@ -54,31 +56,14 @@ Each language has specific detection patterns and known gaps. See [docs/language
 
 ## Check Rules
 
-### Tier 1
+16 rules across 2 tiers. **Tier 1** catches structural issues (assertion-free tests, mock overuse, giant tests). **Tier 2** catches design smells (implementation coupling, fixture sprawl, undescriptive names).
 
-| ID | Rule | Level | Description |
-|----|------|-------|-------------|
-| T001 | assertion-free | BLOCK | Test has no assertions |
-| T002 | mock-overuse | WARN | Too many mocks/stubs/spies |
-| T003 | giant-test | WARN | Test function exceeds line limit |
-| T004 | no-parameterized | INFO | Low parameterized test ratio |
-| T005 | pbt-missing | INFO | No property-based testing |
-| T006 | low-assertion-density | WARN | assertions/tests < 1.0 |
-| T007 | test-source-ratio | INFO | Test file to source file ratio |
-| T008 | no-contract | INFO | No schema validation in tests |
+| Tier | Rules | Levels |
+|------|-------|--------|
+| Tier 1 | T001-T008 | 1 BLOCK, 3 WARN, 4 INFO |
+| Tier 2 | T101-T109 | 3 WARN, 5 INFO |
 
-### Tier 2
-
-| ID | Rule | Level |
-|----|------|-------|
-| T101 | how-not-what | WARN |
-| T102 | fixture-sprawl | WARN |
-| T103 | missing-error-test | INFO |
-| T105 | deterministic-no-metamorphic | INFO |
-| T106 | duplicate-literal-assertion | INFO |
-| T107 | assertion-roulette | INFO |
-| T108 | wait-and-see | WARN |
-| T109 | undescriptive-test-name | INFO |
+See [docs/SPEC.md](docs/SPEC.md) for the full rule reference.
 
 ## Gradual Adoption
 
