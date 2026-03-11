@@ -46,5 +46,5 @@ First public release. Dogfooded across 9 projects, 4 languages, ~23,000 tests.
 ### Install
 
 ```bash
-cargo install --git https://github.com/morodomi/exspec.git
+cargo install exspec
 ```

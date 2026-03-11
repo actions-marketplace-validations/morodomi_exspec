@@ -6,7 +6,6 @@ description = "Core analysis engine for exspec"
 license = "MIT"
 repository = "https://github.com/morodomi/exspec"
 authors = ["morodomi"]
-publish = false
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

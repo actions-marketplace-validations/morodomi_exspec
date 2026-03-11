@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo install --git https://github.com/morodomi/exspec.git
+      - run: cargo install exspec
       - run: exspec --format sarif . > results.sarif
       - uses: github/codeql-action/upload-sarif@v3
         with:
@@ -34,7 +34,7 @@ jobs:
 For any CI system:
 
 ```yaml
-- run: cargo install --git https://github.com/morodomi/exspec.git
+- run: cargo install exspec
 - run: exspec .
 ```
 

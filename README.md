@@ -19,10 +19,14 @@ Validated against 10 real-world OSS projects (~25,000 tests across Python, TypeS
 ## Install
 
 ```bash
-cargo install --git https://github.com/morodomi/exspec.git
+cargo install exspec
 ```
 
-> Not yet published to crates.io. Install from the Git repository.
+Or install from source:
+
+```bash
+cargo install --git https://github.com/morodomi/exspec.git
+```
 
 ## Quick Start
 
@@ -113,7 +117,7 @@ exspec --min-severity warn .   # CLI equivalent of [output] min_severity
 ## CI Integration
 
 ```yaml
-- run: cargo install --git https://github.com/morodomi/exspec.git
+- run: cargo install exspec
 - run: exspec .
 ```
 
