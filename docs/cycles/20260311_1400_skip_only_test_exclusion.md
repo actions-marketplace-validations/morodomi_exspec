@@ -29,4 +29,4 @@ Follow `has_wait` pattern: add `has_skip_call: bool` to TestAnalysis, detect via
 - [x] GREEN (669 tests pass, clippy clean, fmt clean, self-dogfooding OK)
 - [x] REFACTOR (no changes needed - follows has_wait pattern exactly)
 - [x] REVIEW (security 5/100 PASS, correctness 22/100 PASS)
-- [ ] COMMIT
+- [x] COMMIT (42516ad)
