@@ -73,6 +73,13 @@ pub struct Diagnostic {
     pub details: Option<String>,
 }
 
+/// Canonical list of all known rule IDs.
+/// Single source of truth — used for config validation and SARIF output.
+pub const KNOWN_RULE_IDS: &[&str] = &[
+    "T001", "T002", "T003", "T004", "T005", "T006", "T007", "T008", "T101", "T102", "T103", "T105",
+    "T106", "T107", "T108", "T109",
+];
+
 pub struct Config {
     pub mock_max: usize,
     pub mock_class_max: usize,

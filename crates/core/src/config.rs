@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use serde::Deserialize;
 
-use crate::rules::{Config, RuleId, Severity};
+use crate::rules::{Config, RuleId, Severity, KNOWN_RULE_IDS};
 
 #[derive(Debug, Deserialize, Default)]
 pub struct ExspecConfig {
@@ -71,12 +71,6 @@ impl ExspecConfig {
     }
 }
 
-/// Known rule IDs for validation.
-const KNOWN_RULES: &[&str] = &[
-    "T001", "T002", "T003", "T004", "T005", "T006", "T007", "T008", "T101", "T102", "T103", "T105",
-    "T106", "T107", "T108", "T109",
-];
-
 impl From<ExspecConfig> for Config {
     fn from(ec: ExspecConfig) -> Self {
         let defaults = Config::default();
@@ -86,7 +80,7 @@ impl From<ExspecConfig> for Config {
         let mut severity_overrides = HashMap::new();
 
         for (rule_id, severity_str) in &ec.rules.severity {
-            if !KNOWN_RULES.contains(&rule_id.as_str()) {
+            if !KNOWN_RULE_IDS.contains(&rule_id.as_str()) {
                 eprintln!("warning: unknown rule '{rule_id}' in [rules.severity] config");
                 continue;
             }
