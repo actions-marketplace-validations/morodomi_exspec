@@ -458,8 +458,11 @@ pub fn is_undescriptive_test_name(name: &str) -> bool {
     } else {
         // No test prefix - check if the whole name is very short/generic
         // e.g. TypeScript `it('works', ...)` -> name="works"
-        // Single word or very short: undescriptive
-        let is_single_word = !normalized.contains('_') && !normalized.contains(' ');
+        // Non-ASCII names (CJK, Arabic, Devanagari, etc.) skip single-word heuristic:
+        // CJK languages don't use spaces/underscores between words.
+        let has_non_ascii = !normalized.is_ascii();
+        let is_single_word =
+            !has_non_ascii && !normalized.contains('_') && !normalized.contains(' ');
         return is_single_word || GENERIC_TEST_NAMES.contains(&normalized.as_str());
     };
 
@@ -471,7 +474,10 @@ pub fn is_undescriptive_test_name(name: &str) -> bool {
     }
 
     // Single short word (4 chars or less, no underscores = single word)
-    if !suffix.contains('_') && suffix.len() <= 4 {
+    // Non-ASCII suffixes skip this check (CJK chars are multi-byte, and even
+    // a single CJK character carries semantic meaning).
+    let has_non_ascii_suffix = !suffix.is_ascii();
+    if !has_non_ascii_suffix && !suffix.contains('_') && suffix.len() <= 4 {
         return true;
     }
 
@@ -1509,6 +1515,50 @@ mod tests {
         assert!(!is_undescriptive_test_name("test_empty_input_raises_error"));
         assert!(!is_undescriptive_test_name("test_calculate_total_price"));
         assert!(!is_undescriptive_test_name("test_login"));
+    }
+
+    // TC-01: CJK Japanese test name without prefix → descriptive
+    #[test]
+    fn t109_cjk_japanese_no_prefix_is_descriptive() {
+        assert!(!is_undescriptive_test_name(
+            "ローディング中にスケルトンが表示される"
+        ));
+    }
+
+    // TC-02: CJK Japanese test name with prefix → descriptive
+    #[test]
+    fn t109_cjk_japanese_with_prefix_is_descriptive() {
+        assert!(!is_undescriptive_test_name(
+            "test_ユーザー作成が有効なIDを返す"
+        ));
+    }
+
+    // TC-03: CJK single character with prefix → descriptive (FP削減トレードオフ)
+    #[test]
+    fn t109_cjk_single_char_with_prefix_is_descriptive() {
+        assert!(!is_undescriptive_test_name("test_中"));
+    }
+
+    // TC-04: CJK Chinese test name without prefix → descriptive
+    #[test]
+    fn t109_cjk_chinese_no_prefix_is_descriptive() {
+        assert!(!is_undescriptive_test_name("测试用户创建返回有效ID"));
+    }
+
+    // TC-05: CJK Korean test name with underscores → descriptive
+    #[test]
+    fn t109_cjk_korean_with_underscores_is_descriptive() {
+        assert!(!is_undescriptive_test_name(
+            "사용자_생성이_유효한_ID를_반환한다"
+        ));
+    }
+
+    // TC-08: TypeScript string-style CJK name → descriptive
+    #[test]
+    fn t109_cjk_typescript_string_style_is_descriptive() {
+        assert!(!is_undescriptive_test_name(
+            "'ローディング中にスケルトンが表示される'"
+        ));
     }
 
     #[test]

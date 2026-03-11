@@ -1068,6 +1068,22 @@ mod tests {
         }
     }
 
+    // TC-09: CJK fixture → all names should be descriptive (no T109 FP)
+    #[test]
+    fn t109_cjk_pass_descriptive_names() {
+        let source = fixture("t109_cjk_pass.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t109_cjk_pass.test.ts");
+        assert!(!funcs.is_empty());
+        for func in &funcs {
+            assert!(
+                !exspec_core::rules::is_undescriptive_test_name(&func.name),
+                "CJK test '{}' should be descriptive",
+                func.name
+            );
+        }
+    }
+
     // --- T106: duplicate-literal-assertion ---
 
     #[test]
