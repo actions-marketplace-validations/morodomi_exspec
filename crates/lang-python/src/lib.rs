@@ -20,6 +20,7 @@ const PRIVATE_IN_ASSERTION_QUERY: &str = include_str!("../queries/private_in_ass
 const ERROR_TEST_QUERY: &str = include_str!("../queries/error_test.scm");
 const RELATIONAL_ASSERTION_QUERY: &str = include_str!("../queries/relational_assertion.scm");
 const WAIT_AND_SEE_QUERY: &str = include_str!("../queries/wait_and_see.scm");
+const SKIP_TEST_QUERY: &str = include_str!("../queries/skip_test.scm");
 
 fn python_language() -> tree_sitter::Language {
     tree_sitter_python::LANGUAGE.into()
@@ -41,6 +42,7 @@ static PRIVATE_IN_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static ERROR_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static RELATIONAL_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static WAIT_AND_SEE_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static SKIP_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct PythonExtractor;
 
@@ -132,6 +134,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
         PRIVATE_IN_ASSERTION_QUERY,
     );
     let wait_query = cached_query(&WAIT_AND_SEE_QUERY_CACHE, WAIT_AND_SEE_QUERY);
+    let skip_query = cached_query(&SKIP_TEST_QUERY_CACHE, SKIP_TEST_QUERY);
 
     let name_idx = test_query
         .capture_index_for_name("name")
@@ -259,6 +262,9 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
         // T108: wait-and-see detection
         let has_wait = has_any_match(wait_query, "wait", fn_node, source_bytes);
 
+        // #64: skip-only test detection
+        let has_skip_call = has_any_match(skip_query, "skip", fn_node, source_bytes);
+
         // T107: assertion message count
         let assertion_message_count =
             count_assertion_messages_py(assertion_query, fn_node, source_bytes);
@@ -287,6 +293,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 how_not_what_count: how_not_what_count + private_in_assertion_count,
                 fixture_count,
                 has_wait,
+                has_skip_call,
                 assertion_message_count,
                 duplicate_literal_count,
                 suppressed_rules,
@@ -1644,6 +1651,66 @@ mod tests {
         assert!(
             t001_diags.is_empty(),
             "comment match is included by design - T001 should not fire"
+        );
+    }
+
+    // --- #64: T001 FP: skip-only test exclusion ---
+
+    #[test]
+    fn t001_skip_only_pytest_skip() {
+        let source = fixture("t001_pass_skip_only.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_skip_only.py");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_skipped_feature")
+            .expect("test_skipped_feature not found");
+        assert!(
+            f.analysis.has_skip_call,
+            "pytest.skip() should set has_skip_call=true"
+        );
+    }
+
+    #[test]
+    fn t001_skip_only_self_skip_test() {
+        let source = fixture("t001_pass_skip_only.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_skip_only.py");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_incomplete")
+            .expect("test_incomplete not found");
+        assert!(
+            f.analysis.has_skip_call,
+            "self.skipTest() should set has_skip_call=true"
+        );
+    }
+
+    #[test]
+    fn t001_skip_only_no_t001_block() {
+        use exspec_core::rules::{evaluate_rules, Config, RuleId, Severity};
+
+        let source = fixture("t001_pass_skip_only.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_skip_only.py");
+        let diags: Vec<_> = evaluate_rules(&funcs, &Config::default())
+            .into_iter()
+            .filter(|d| d.rule == RuleId::new("T001") && d.severity == Severity::Block)
+            .collect();
+        assert!(
+            diags.is_empty(),
+            "Expected 0 T001 BLOCKs for skip-only fixture, got {}: {:?}",
+            diags.len(),
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn query_capture_names_skip_test() {
+        let q = make_query(include_str!("../queries/skip_test.scm"));
+        assert!(
+            q.capture_index_for_name("skip").is_some(),
+            "skip_test.scm must define @skip capture"
         );
     }
 

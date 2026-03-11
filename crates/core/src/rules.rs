@@ -126,6 +126,7 @@ pub fn evaluate_rules(functions: &[TestFunction], config: &Config) -> Vec<Diagno
         if !is_disabled(config, "T001")
             && !is_suppressed(analysis, "T001")
             && analysis.assertion_count == 0
+            && !analysis.has_skip_call
         {
             diagnostics.push(Diagnostic {
                 rule: RuleId::new("T001"),
@@ -618,6 +619,24 @@ mod tests {
         )];
         let diags = evaluate_rules(&funcs, &Config::default());
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn t001_has_skip_call_suppresses_t001() {
+        let funcs = vec![make_func(
+            "test_skipped",
+            TestAnalysis {
+                assertion_count: 0,
+                has_skip_call: true,
+                ..Default::default()
+            },
+        )];
+        let diags = evaluate_rules(&funcs, &Config::default());
+        let t001_diags: Vec<_> = diags.iter().filter(|d| d.rule.0 == "T001").collect();
+        assert!(
+            t001_diags.is_empty(),
+            "T001 should not fire when has_skip_call=true"
+        );
     }
 
     // --- T002: mock-overuse ---

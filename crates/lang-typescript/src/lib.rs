@@ -258,6 +258,7 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 how_not_what_count: how_not_what_count + private_in_assertion_count,
                 fixture_count,
                 has_wait,
+                has_skip_call: false,
                 assertion_message_count: assertion_count, // T107 skipped for TypeScript: expect() has no msg arg
                 duplicate_literal_count,
                 suppressed_rules,
