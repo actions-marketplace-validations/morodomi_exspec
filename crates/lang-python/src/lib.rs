@@ -1500,6 +1500,36 @@ mod tests {
         );
     }
 
+    // --- #62: T001 FP fix: obj.assert*() without underscore ---
+
+    #[test]
+    fn t001_assert_no_underscore_counts_as_assertion() {
+        // obj.assertoutcome() without underscore should count as assertion
+        let source = fixture("t001_pass_assert_no_underscore.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_assert_no_underscore.py");
+        assert!(funcs.len() >= 1);
+        assert!(
+            funcs[0].analysis.assertion_count >= 1,
+            "reprec.assertoutcome() should count as assertion, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_assert_status_no_underscore_counts_as_assertion() {
+        // obj.assertStatus() without underscore should count as assertion
+        let source = fixture("t001_pass_assert_no_underscore.py");
+        let extractor = PythonExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_assert_no_underscore.py");
+        assert!(funcs.len() >= 2);
+        assert!(
+            funcs[1].analysis.assertion_count >= 1,
+            "response.assertStatus() should count as assertion, got {}",
+            funcs[1].analysis.assertion_count
+        );
+    }
+
     #[test]
     fn t001_self_assert_equal_no_double_count_regression() {
         // TC-12: self.assertEqual still works, no double-count
@@ -1568,11 +1598,13 @@ mod tests {
         let config = Config::default();
         let diags = evaluate_rules(&analysis.functions, &config);
         let t001_diags: Vec<_> = diags.iter().filter(|d| d.rule.0 == "T001").collect();
-        // Without config, both test_with_custom_helper and test_no_assertion_at_all should fire
+        // Without config, only test_no_assertion_at_all should fire.
+        // test_with_custom_helper has util.assertEqual() which is now detected
+        // by the broadened obj.assert*() pattern (#62).
         assert_eq!(
             t001_diags.len(),
-            2,
-            "without config, custom helper test should also trigger T001"
+            1,
+            "only test_no_assertion_at_all should trigger T001 (util.assertEqual is now detected)"
         );
     }
 

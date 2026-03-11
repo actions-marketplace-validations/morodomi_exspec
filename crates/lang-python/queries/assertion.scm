@@ -18,11 +18,22 @@
   (#eq? @_pytest_obj "pytest")
   (#eq? @_pytest_attr "raises")) @assertion
 
-; unittest.mock: mock.assert_*() methods (assert_called_once, assert_not_called, etc.)
+; arbitrary object: obj.assert*() methods (mock, reprec, custom test helpers)
+; self.assert* is handled above (lines 4-10), so exclude self here
 (call
   function: (attribute
+    object: (identifier) @_assert_obj
     attribute: (identifier) @_mock_method)
-  (#match? @_mock_method "^assert_")) @assertion
+  (#match? @_mock_method "^assert")
+  (#not-match? @_assert_obj "^self$")) @assertion
+
+; chained call: expr.something.assert_*() (e.g., mock.return_value.assert_called_once())
+; object is not an identifier, so no self overlap concern
+(call
+  function: (attribute
+    object: (attribute)
+    attribute: (identifier) @_chained_assert_method)
+  (#match? @_chained_assert_method "^assert_")) @assertion
 
 ; pytest.warns() — warning verification counts as assertion
 ; (also matched in error_test.scm for T103)
