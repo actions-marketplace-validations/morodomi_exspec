@@ -2,7 +2,7 @@
 
 Static analyzer for test design quality. Verifies that tests function as executable specifications -- fast, language-agnostic, zero LLM cost.
 
-> **Public beta** (v0.1.0). Dogfooded across 9 projects / 4 languages / ~23,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
+> **Public beta** (v0.1.0). Dogfooded across 10 projects / 4 languages / ~25,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
 
 ## Why exspec?
 
@@ -14,7 +14,7 @@ Static analyzer for test design quality. Verifies that tests function as executa
 
 exspec checks whether your tests are well-designed *specifications*, not just code that runs. It enforces 4 properties: **What not How**, **Living Documentation**, **Compositional**, **Single Source of Truth**. See [docs/philosophy.md](docs/philosophy.md) for the full rationale.
 
-Validated against 9 real-world OSS projects (~23,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
+Validated against 10 real-world OSS projects (~25,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
 
 ## Install
 
@@ -50,9 +50,8 @@ Score: BLOCK 1 | WARN 1 | INFO 0 | PASS 8
 | TypeScript | Jest, Vitest | v0.1.0 |
 | PHP | PHPUnit, Pest | v0.1.0 |
 | Rust | cargo test | v0.1.0 |
-| Dart | flutter_test | Planned |
 
-Each language has specific detection patterns and known gaps. See [docs/languages.md](docs/languages.md) for details.
+Each language has specific detection patterns and known gaps. See [docs/languages/](docs/languages/) for details.
 
 ## Check Rules
 
@@ -109,19 +108,20 @@ See [docs/known-constraints.md](docs/known-constraints.md) for details, workarou
 
 ## Validation
 
-Dogfooded across 9 real-world projects:
+Dogfooded across 10 real-world projects:
 
 | Project | Language | Tests | Result |
 |---------|----------|-------|--------|
 | exspec (self) | Rust | 51 | 0 FP |
 | requests | Python | 339 | ~20% FP |
 | fastapi | Python | 2,121 | 21% FP |
-| pydantic | Python | ~2,500 | ~55% FP |
+| pydantic | Python | ~2,500 | 43 TP (benchmark), 15 FP (helper/nested) |
 | vitest | TypeScript | 3,120 | Remaining = project-local helpers |
 | nestjs | TypeScript | 2,675 | 0% FP (17 remaining = all TP) |
 | laravel | PHP | 10,790 | Remaining = helper delegation |
 | ripgrep | Rust | ~346 | 330 tests in macros (not detected) |
 | tokio | Rust | 1,582 | 33.8% FP (custom assert macros) |
+| clap | Rust | 1,455 | 41.3% FP (assert_data_eq! macro + helper delegation) |
 
 Full results: [docs/dogfooding-results.md](docs/dogfooding-results.md)
 
@@ -129,7 +129,7 @@ Full results: [docs/dogfooding-results.md](docs/dogfooding-results.md)
 
 | Doc | Content |
 |-----|---------|
-| [docs/languages.md](docs/languages.md) | Language-specific detection, assertions, known gaps |
+| [docs/languages/](docs/languages/) | Language-specific detection, assertions, known gaps |
 | [docs/known-constraints.md](docs/known-constraints.md) | Limitations, workarounds, dogfooding data |
 | [docs/configuration.md](docs/configuration.md) | `.exspec.toml` reference, inline suppression |
 | [docs/ci.md](docs/ci.md) | CI setup, SARIF, exit codes, score semantics |
