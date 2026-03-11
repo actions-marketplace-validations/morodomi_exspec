@@ -37,7 +37,7 @@ Phase 8 (Post-Release, feedback-driven)
 | P1 | FP fixes + threshold tuning | User feedback |
 | P2 | T201 spec-quality (advisory mode) | "I want semantic quality checks" |
 | P3 | T203 AST similarity duplicate detection | "I want duplicate test detection" |
-| P4 | Responsibility-based test observation | Demand confirmed (separate tool?) |
+| P4 | Test observability (`exspec observe`) | See below |
 
 ## Non-goals
 
@@ -61,6 +61,20 @@ Phase 8 (Post-Release, feedback-driven)
 | 5B | Tier 2 rules T101-T105 (Python + TypeScript) |
 | 5C | Tier 2 PHP/Rust expansion (T101-T105, T104 removed) |
 | 5.5 | Gap rules T106-T109 |
+
+## Explore: Test Observability (`exspec observe`)
+
+4-AI brainstorm (Grok/Gemini/GPT/Claude, 2026-03-11). Not committed -- exploring feasibility.
+
+**Idea**: Route/method-level test density visualization. "What is tested, where are the gaps?" Not a lint (no FAIL), purely descriptive hints.
+
+**OSS gap**: No tool does static test-to-code mapping (all competitors use dynamic instrumentation), automatic test classification (happy/error/validation), or OpenAPI-free route coverage. All three are wide open.
+
+**Open question**: Can AST-only static analysis achieve useful anchor precision? All existing tools (Microsoft TIA, Launchable, SeaLights) chose dynamic instrumentation for a reason. Need prototype experiment on 1 project before committing.
+
+**Consensus**: Lint FP reduction and crates.io publish come first. Observe is Phase 8+ at earliest. If pursued, start with route view on 1 language (TypeScript/supertest), subcommand architecture (`exspec observe`), never FAIL.
+
+**Alternative worth considering** (Gemini): Instead of observe, deepen lint with Contract/PBT enforcement rules (Tier 3 territory). This leverages exspec's existing moat rather than entering a new domain.
 
 ## Key Design Decisions
 
