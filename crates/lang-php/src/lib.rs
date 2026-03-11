@@ -1683,4 +1683,78 @@ mod tests {
             f.analysis.assertion_count
         );
     }
+
+    // --- T001 FP fix: Facade::shouldReceive() static Mockery calls (#58) ---
+
+    #[test]
+    fn t001_facade_should_receive_counts_as_assertion() {
+        // TC-01: Log::shouldReceive('error')->once() -> assertion_count >= 1
+        let source = fixture("t001_pass_facade_mockery.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_facade_mockery.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_log_should_receive")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "Log::shouldReceive() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_facade_should_have_received_counts_as_assertion() {
+        // TC-02: Log::shouldHaveReceived('info') -> assertion_count >= 1
+        let source = fixture("t001_pass_facade_mockery.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_facade_mockery.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_log_should_have_received")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "Log::shouldHaveReceived() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_facade_should_not_have_received_counts_as_assertion() {
+        // TC-03: Log::shouldNotHaveReceived('debug') -> assertion_count >= 1
+        let source = fixture("t001_pass_facade_mockery.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_facade_mockery.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_log_should_not_have_received")
+            .unwrap();
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "Log::shouldNotHaveReceived() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_facade_mockery_fixture_no_blocks() {
+        // TC-04: facade fixture全体 -> T001 BLOCK 0件
+        use exspec_core::rules::{evaluate_rules, Config, RuleId, Severity};
+
+        let source = fixture("t001_pass_facade_mockery.php");
+        let extractor = PhpExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_facade_mockery.php");
+        let config = Config::default();
+        let diags: Vec<_> = evaluate_rules(&funcs, &config)
+            .into_iter()
+            .filter(|d| d.rule == RuleId::new("T001") && d.severity == Severity::Block)
+            .collect();
+        assert!(
+            diags.is_empty(),
+            "Expected 0 T001 BLOCKs for facade mockery fixture, got {}: {:?}",
+            diags.len(),
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
 }

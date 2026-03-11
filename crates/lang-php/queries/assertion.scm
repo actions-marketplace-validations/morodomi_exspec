@@ -64,6 +64,18 @@
 (member_call_expression
   name: (name) @_m3 (#eq? @_m3 "shouldNotHaveReceived")) @assertion
 
+; Facade Mockery: Log::shouldReceive(...) — static Mockery via Laravel Facade (#58)
+(scoped_call_expression
+  name: (name) @_fs1 (#eq? @_fs1 "shouldReceive")) @assertion
+
+; Facade Mockery: Log::shouldHaveReceived(...) — static post-execution verification (#58)
+(scoped_call_expression
+  name: (name) @_fs2 (#eq? @_fs2 "shouldHaveReceived")) @assertion
+
+; Facade Mockery: Log::shouldNotHaveReceived(...) — static negative verification (#58)
+(scoped_call_expression
+  name: (name) @_fs3 (#eq? @_fs3 "shouldNotHaveReceived")) @assertion
+
 ; PHPUnit mock: $this->expects(...) — mock expectation (constrained to $this only)
 ; $mock->expects() and other non-$this calls are NOT counted as assertions,
 ; because ->expects() is a common method name that may not be a test oracle.
