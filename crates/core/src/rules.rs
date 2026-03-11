@@ -479,7 +479,7 @@ pub fn is_undescriptive_test_name(name: &str) -> bool {
     // Non-ASCII suffixes skip this check (CJK chars are multi-byte, and even
     // a single CJK character carries semantic meaning).
     let has_non_ascii_suffix = !suffix.is_ascii();
-    if !has_non_ascii_suffix && !suffix.contains('_') && suffix.len() <= 4 {
+    if !has_non_ascii_suffix && !suffix.contains('_') && suffix.chars().count() <= 4 {
         return true;
     }
 
@@ -1516,7 +1516,10 @@ mod tests {
         assert!(is_undescriptive_test_name("test_it"));
         assert!(is_undescriptive_test_name("test_foo"));
         assert!(is_undescriptive_test_name("test_run"));
+        // 4-char suffix = boundary (chars().count() <= 4)
         assert!(is_undescriptive_test_name("test_main"));
+        // 5-char suffix = descriptive
+        assert!(!is_undescriptive_test_name("test_login"));
     }
 
     #[test]
