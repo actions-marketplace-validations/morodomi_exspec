@@ -1757,4 +1757,23 @@ mod tests {
             diags.iter().map(|d| &d.message).collect::<Vec<_>>()
         );
     }
+
+    // --- T001 FP fix: addToAssertionCount() (#63) ---
+
+    #[test]
+    fn t001_add_to_assertion_count() {
+        let source = fixture("t001_pass_add_to_assertion_count.php");
+        let extractor = PhpExtractor::new();
+        let funcs =
+            extractor.extract_test_functions(&source, "t001_pass_add_to_assertion_count.php");
+        let f = funcs
+            .iter()
+            .find(|f| f.name == "test_add_to_assertion_count")
+            .expect("test function not found");
+        assert!(
+            f.analysis.assertion_count >= 1,
+            "addToAssertionCount() should count as assertion, got {}",
+            f.analysis.assertion_count
+        );
+    }
 }

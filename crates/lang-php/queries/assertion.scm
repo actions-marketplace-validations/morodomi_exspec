@@ -107,3 +107,8 @@
 (member_call_expression
   name: (name) @_eos
   (#eq? @_eos "expectOutputString")) @assertion
+
+; PHPUnit: addToAssertionCount(N) — official assertion counter for custom assertion logic
+(member_call_expression
+  name: (name) @_atac
+  (#eq? @_atac "addToAssertionCount")) @assertion
