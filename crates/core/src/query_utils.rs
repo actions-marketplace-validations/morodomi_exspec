@@ -199,7 +199,11 @@ pub fn count_custom_assertion_lines(source_lines: &[&str], patterns: &[String]) 
     }
     source_lines
         .iter()
-        .filter(|line| patterns.iter().any(|p| line.contains(p.as_str())))
+        .filter(|line| {
+            patterns
+                .iter()
+                .any(|p| !p.is_empty() && line.contains(p.as_str()))
+        })
         .count()
 }
 
@@ -634,6 +638,112 @@ mod tests {
         };
         apply_custom_assertion_fallback(&mut analysis, source, &[]);
         assert_eq!(analysis.functions[0].analysis.assertion_count, 0);
+    }
+
+    // --- empty string pattern filter ---
+
+    #[test]
+    fn empty_string_pattern_ignored() {
+        let lines = vec!["assert True", "x = 1", "print(result)"];
+        let patterns = vec!["".to_string()];
+        assert_eq!(
+            count_custom_assertion_lines(&lines, &patterns),
+            0,
+            "empty string pattern should not match any line"
+        );
+    }
+
+    #[test]
+    fn mixed_empty_and_valid_patterns() {
+        let lines = vec!["    assert_custom(x)", "    print(result)"];
+        let patterns = vec!["".to_string(), "assert_custom".to_string()];
+        assert_eq!(
+            count_custom_assertion_lines(&lines, &patterns),
+            1,
+            "only valid patterns should match"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_pattern_matches() {
+        // Whitespace-only patterns are NOT filtered (only empty string is)
+        let lines = vec!["assert_true", "no_space_here"];
+        let patterns = vec![" ".to_string()];
+        assert_eq!(
+            count_custom_assertion_lines(&lines, &patterns),
+            0,
+            "whitespace pattern should not match lines without spaces"
+        );
+        let lines_with_space = vec!["assert true", "nospace"];
+        assert_eq!(
+            count_custom_assertion_lines(&lines_with_space, &patterns),
+            1,
+            "whitespace pattern should match lines containing spaces"
+        );
+    }
+
+    // --- apply_custom_assertion_fallback edge cases ---
+
+    #[test]
+    fn apply_fallback_end_line_exceeds_source() {
+        use crate::extractor::{FileAnalysis, TestAnalysis, TestFunction};
+
+        let source = "def test_foo():\n    custom_assert(x)\n";
+        let mut analysis = FileAnalysis {
+            file: "test.py".to_string(),
+            functions: vec![TestFunction {
+                name: "test_foo".to_string(),
+                file: "test.py".to_string(),
+                line: 1,
+                end_line: 12, // well beyond source length (2 lines)
+                analysis: TestAnalysis {
+                    assertion_count: 0,
+                    ..Default::default()
+                },
+            }],
+            has_pbt_import: false,
+            has_contract_import: false,
+            has_error_test: false,
+            has_relational_assertion: false,
+            parameterized_count: 0,
+        };
+        let patterns = vec!["custom_assert".to_string()];
+        apply_custom_assertion_fallback(&mut analysis, source, &patterns);
+        assert_eq!(
+            analysis.functions[0].analysis.assertion_count, 1,
+            "should handle end_line > source length without panic"
+        );
+    }
+
+    #[test]
+    fn apply_fallback_empty_string_pattern_noop() {
+        use crate::extractor::{FileAnalysis, TestAnalysis, TestFunction};
+
+        let source = "def test_foo():\n    some_call(x)\n    another_call(y)\n";
+        let mut analysis = FileAnalysis {
+            file: "test.py".to_string(),
+            functions: vec![TestFunction {
+                name: "test_foo".to_string(),
+                file: "test.py".to_string(),
+                line: 1,
+                end_line: 3,
+                analysis: TestAnalysis {
+                    assertion_count: 0,
+                    ..Default::default()
+                },
+            }],
+            has_pbt_import: false,
+            has_contract_import: false,
+            has_error_test: false,
+            has_relational_assertion: false,
+            parameterized_count: 0,
+        };
+        let patterns = vec!["".to_string()];
+        apply_custom_assertion_fallback(&mut analysis, source, &patterns);
+        assert_eq!(
+            analysis.functions[0].analysis.assertion_count, 0,
+            "empty-string-only patterns should not increment assertion_count"
+        );
     }
 
     #[test]

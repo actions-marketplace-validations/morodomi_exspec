@@ -95,6 +95,11 @@ This is orthogonal to `--min-severity` / `[output] min_severity`: severity overr
 
 Custom patterns use substring matching. A test function containing any of these patterns in its body will not trigger T001 (assertion-free), even if no standard assertion is found.
 
+**Important notes:**
+- Empty string patterns (`""`) are silently ignored to prevent accidental matching of all lines.
+- Whitespace-only patterns (e.g. `" "`) are **not** filtered — avoid them as they will match most lines.
+- Matching includes comments and string literals (text-based fallback, not AST-aware). This is by design for simplicity and reliability.
+
 ## Inline Suppression
 
 Suppress specific rules per function with a comment directly above the test:

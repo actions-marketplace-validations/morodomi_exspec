@@ -75,6 +75,21 @@ BLOCK tests/test_api.py:1  T001 assertion-free
 - `pytest.warns()` — warning verification
 - `pytest.fail()` — explicit failure oracle (unconditionally fails the test)
 
+#### Escape Hatch: custom_patterns
+
+`.exspec.toml` の `[assertions] custom_patterns` でプロジェクト固有のアサーションヘルパーを登録できる。
+標準のアサーションが検出されなかったテスト関数に対してのみ適用される（assertion_count == 0 の関数のみ）。
+
+- パターンはリテラル部分文字列マッチ（正規表現ではない）
+- コメント・文字列内のマッチも含む（by design: tree-sitter非使用のテキストベースフォールバック）
+- 空文字列パターン `""` は無視される（全行マッチを防止）
+- マッチした行数が assertion_count に加算される
+
+```toml
+[assertions]
+custom_patterns = ["assertJsonStructure", "self.assertValid"]
+```
+
 ---
 
 ### T002: mock-overuse
@@ -373,6 +388,8 @@ WARN tests/test_user.py  T006 low-assertion-density (0.33 assertions/test)
 #### Detection
 
 - `assertion.scm` のマッチ数 / `test_function.scm` のマッチ数
+
+**Note**: `[assertions] custom_patterns` によるカスタムアサーションカウントは T006 の density 計算にも影響する。custom_patterns で assertion_count が増加した関数は、T006 の分子（総アサーション数）に含まれる。
 
 ---
 
