@@ -587,6 +587,85 @@ mod tests {
         );
     }
 
+    // --- Helper delegation assertion detection (#66) ---
+
+    #[test]
+    fn simple_assert_fn_call_detected() {
+        // T1: assert_matches() function call counts as assertion
+        let source = fixture("t001_pass_helper_delegation.rs");
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_helper_delegation.rs");
+        let simple = funcs
+            .iter()
+            .find(|f| f.name == "test_simple_helper")
+            .unwrap();
+        assert!(
+            simple.analysis.assertion_count >= 1,
+            "assert_matches() fn call should be counted as assertion, got {}",
+            simple.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn scoped_assert_fn_call_detected() {
+        // T2: common::assert_matches() scoped function call counts as assertion
+        let source = fixture("t001_pass_helper_delegation.rs");
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_helper_delegation.rs");
+        let scoped = funcs
+            .iter()
+            .find(|f| f.name == "test_scoped_helper")
+            .unwrap();
+        assert!(
+            scoped.analysis.assertion_count >= 1,
+            "common::assert_matches() should be counted as assertion, got {}",
+            scoped.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn mixed_macro_and_fn_call_counted() {
+        // T3: Both macro and function call counted
+        let source = fixture("t001_pass_helper_delegation.rs");
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_helper_delegation.rs");
+        let mixed = funcs
+            .iter()
+            .find(|f| f.name == "test_mixed_macro_and_fn")
+            .unwrap();
+        assert_eq!(
+            mixed.analysis.assertion_count, 2,
+            "assert_eq! macro + assert_matches() fn call should total 2, got {}",
+            mixed.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn assertion_prefix_not_counted() {
+        // T5: assertion_helper() should NOT be counted (^assert_ not ^assert)
+        let source = "#[test]\nfn test_foo() {\n    assertion_helper(expected, actual);\n}\n";
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "test_negative.rs");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(
+            funcs[0].analysis.assertion_count, 0,
+            "assertion_helper() should NOT be counted as assertion"
+        );
+    }
+
+    #[test]
+    fn ordinary_helper_not_counted() {
+        // T6: helper_check() should NOT be counted
+        let source = "#[test]\nfn test_foo() {\n    helper_check(expected, actual);\n}\n";
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "test_negative2.rs");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(
+            funcs[0].analysis.assertion_count, 0,
+            "helper_check() should NOT be counted as assertion"
+        );
+    }
+
     // --- Mock detection (TC-08, TC-09, TC-10, TC-11) ---
 
     #[test]
