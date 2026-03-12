@@ -9,15 +9,16 @@
 
 ## Now
 
-Phase 7 (v0.1.2 Release)
+Phase 7 (v0.1.2 Release) -- v0.1.2 published 2026-03-12.
 
 | Task | Status |
 |------|--------|
-| Version bump (all crates 0.1.1 -> 0.1.2) | TODO |
-| README version references update | TODO |
-| CHANGELOG v0.1.2 + v0.1.0 historical correction | TODO |
-| Quality gate (test + clippy + fmt + self-dogfooding) | TODO |
-| crates.io publish (core -> lang-* -> cli) | TODO |
+| Version bump (all crates 0.1.1 -> 0.1.2) | DONE |
+| README version references update | DONE |
+| CHANGELOG v0.1.2 + v0.1.0 historical correction | DONE |
+| Quality gate (test + clippy + fmt + self-dogfooding) | DONE |
+| crates.io publish (core -> lang-* -> cli) | DONE |
+| GitHub Release + tag | DONE |
 | Note.com article | TODO |
 
 ## Later
