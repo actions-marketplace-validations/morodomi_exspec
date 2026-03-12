@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.1.2 (2026-03-12)
+
+Continued false-positive reduction from extended dogfooding (13 projects / 4 languages / ~45,000 tests) and a new rule.
+
+### Features
+
+- **T110 skip-only-test detection** (#65): New INFO rule that flags test functions whose only logic is `skip()` / `markTestSkipped()` / `pytest.skip()`. These are placeholder tests that should either be implemented or removed.
+
+### Bug Fixes
+
+- **Python `^assert_` -> `^assert` broadening** (#62): Python assertion pattern now matches `assertoutcome()` and other helpers without underscore after `assert`. Fixes ~148 FPs in pytest's own test suite.
+- **PHP `addToAssertionCount()`** (#63): Recognized as a valid assertion for T001. Fixes 91 FPs in Symfony.
+- **Skip-only tests excluded from T001** (#64): Test functions that only call skip/markTestSkipped are no longer flagged as assertion-free. Fixes 91 FPs in Symfony.
+- **Rust `assert*()` helper function calls** (#66): Simple `assert_matches()` and scoped `common::assert_foo()` function calls are now detected as assertions for T001.
+- **Return-wrapped Chai property assertions** (#52): `return expect(x).to.be.true` is now correctly counted as an assertion.
+
+### Documentation
+
+- v0.1.0 historical correction: crates.io publish happened at v0.1.1, not deferred as originally stated.
+
 ## v0.1.1 (2026-03-11)
 
 Bug fixes and two new configuration features since the initial public beta.
@@ -39,7 +59,7 @@ First public release. Dogfooded across 9 projects, 4 languages, ~23,000 tests.
 ### What this release does NOT promise
 
 - **Not production-ready**: This is a public beta for trial and gradual adoption
-- **Not on crates.io**: Install via `cargo install --git`. crates.io publish is intentionally deferred
+- **~~Not on crates.io~~**: *(Correction: published to crates.io at v0.1.1. At v0.1.0 release time, install was git-only.)*
 - **No stability guarantee**: Rule IDs, severity levels, and config format may change in minor versions
 - **Known false positives**: Helper delegation patterns require `custom_patterns` config. See [Known Constraints](README.md#known-constraints) in README
 

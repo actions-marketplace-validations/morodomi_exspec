@@ -9,23 +9,15 @@
 
 ## Now
 
-Phase 6 (Release Hardening) -- in progress.
-
-- Dogfooding complete across 10 projects / 4 languages / ~25,000 tests
-- FP fixes done (#25-#51, except #41 and #52 still open)
-- Severity review done (T107 WARN->INFO)
-- Remaining open issues: FP edge cases (#41, #52, #55-#57), internal cleanup (#29, #30, #36)
-
-## Next
-
-Phase 7 (OSS Release polish)
+Phase 7 (v0.1.2 Release)
 
 | Task | Status |
 |------|--------|
-| LICENSE (MIT) | DONE |
-| README: Limitations + gradual adoption guide (#26) | DONE |
-| README: CI integration examples (#27) | DONE |
-| crates.io publish (`cargo install exspec`) | TODO |
+| Version bump (all crates 0.1.1 -> 0.1.2) | TODO |
+| README version references update | TODO |
+| CHANGELOG v0.1.2 + v0.1.0 historical correction | TODO |
+| Quality gate (test + clippy + fmt + self-dogfooding) | TODO |
+| crates.io publish (core -> lang-* -> cli) | TODO |
 | Note.com article | TODO |
 
 ## Later
@@ -35,6 +27,8 @@ Phase 8 (Post-Release, feedback-driven)
 | Priority | Task | Trigger |
 |----------|------|---------|
 | P1 | FP fixes + threshold tuning | User feedback |
+| P1 | T001 FP: Python nested test functions (#41) | Deferred from Phase 6 |
+| P1 | T001 FP: return-wrapped Chai property (#52) | Deferred from Phase 6 |
 | P2 | T201 spec-quality (advisory mode) | "I want semantic quality checks" |
 | P3 | T203 AST similarity duplicate detection | "I want duplicate test detection" |
 | P4 | Test observability (`exspec observe`) | See below |
@@ -61,6 +55,8 @@ Phase 8 (Post-Release, feedback-driven)
 | 5B | Tier 2 rules T101-T105 (Python + TypeScript) |
 | 5C | Tier 2 PHP/Rust expansion (T101-T105, T104 removed) |
 | 5.5 | Gap rules T106-T109 |
+| 6 | Release Hardening: dogfooding 13 projects / 4 langs / ~45k tests, FP fixes (#25-#66), severity review, T110 |
+| 7 (partial) | OSS Release polish: LICENSE, README (#26, #27), crates.io v0.1.1 initial publish |
 
 ## Explore: Test Observability (`exspec observe`)
 

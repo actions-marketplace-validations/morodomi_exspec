@@ -1,6 +1,6 @@
 [package]
 name = "exspec"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Static analyzer for test design quality -- verifies tests function as executable specifications"
 license = "MIT"
@@ -14,11 +14,11 @@ name = "exspec"
 path = "src/main.rs"
 
 [dependencies]
-exspec-core = { path = "../core", version = "0.1.1" }
-exspec-lang-python = { path = "../lang-python", version = "0.1.1" }
-exspec-lang-typescript = { path = "../lang-typescript", version = "0.1.1" }
-exspec-lang-php = { path = "../lang-php", version = "0.1.1" }
-exspec-lang-rust = { path = "../lang-rust", version = "0.1.1" }
+exspec-core = { path = "../core", version = "0.1.2" }
+exspec-lang-python = { path = "../lang-python", version = "0.1.2" }
+exspec-lang-typescript = { path = "../lang-typescript", version = "0.1.2" }
+exspec-lang-php = { path = "../lang-php", version = "0.1.2" }
+exspec-lang-rust = { path = "../lang-rust", version = "0.1.2" }
 clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
 toml = "0.8"

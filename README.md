@@ -2,7 +2,7 @@
 
 Static analyzer for test design quality. Verifies that tests function as executable specifications -- fast, language-agnostic, zero LLM cost.
 
-> **Public beta** (v0.1.1). Dogfooded across 10 projects / 4 languages / ~25,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
+> **Public beta** (v0.1.2). Dogfooded across 13 projects / 4 languages / ~45,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
 
 ## Why exspec?
 
@@ -14,7 +14,7 @@ Static analyzer for test design quality. Verifies that tests function as executa
 
 exspec checks whether your tests are well-designed *specifications*, not just code that runs. It enforces 4 properties: **What not How**, **Living Documentation**, **Compositional**, **Single Source of Truth**. See [docs/philosophy.md](docs/philosophy.md) for the full rationale.
 
-Validated against 10 real-world OSS projects (~25,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
+Validated against 13 real-world OSS projects (~45,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
 
 ## Install
 
@@ -40,7 +40,7 @@ exspec --strict .                     # WARN also fails
 Example output:
 
 ```
-exspec v0.1.1 -- 8 test files, 10 test functions
+exspec v0.1.2 -- 8 test files, 10 test functions
 BLOCK tests/test_example.py:5 T001 assertion-free: test has no assertions
 WARN  tests/test_example.py:20 T002 mock-overuse: 6 mocks (6 classes), threshold: 5 mocks / 3 classes
 Score: BLOCK 1 | WARN 1 | INFO 0 | PASS 8
@@ -133,7 +133,7 @@ See [docs/known-constraints.md](docs/known-constraints.md) for details, workarou
 
 ## Validation
 
-Dogfooded across 10 real-world projects:
+Dogfooded across 13 real-world projects:
 
 | Project | Language | Tests | Result |
 |---------|----------|-------|--------|
@@ -147,6 +147,9 @@ Dogfooded across 10 real-world projects:
 | ripgrep | Rust | ~346 | 330 tests in macros (not detected) |
 | tokio | Rust | 1,582 | 33.8% FP (custom assert macros) |
 | clap | Rust | 1,455 | 41.3% FP (assert_data_eq! macro + helper delegation) |
+| django | Python | 1,047 | 39% FP (helper delegation) |
+| pytest | Python | 2,380 | High FP (helper functions) |
+| symfony | PHP | 17,148 | ~24% FP (addToAssertionCount, skip-only) |
 
 Full results: [docs/dogfooding-results.md](docs/dogfooding-results.md)
 
