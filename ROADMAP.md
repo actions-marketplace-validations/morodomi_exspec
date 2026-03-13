@@ -13,9 +13,13 @@
 
 Goal: Measure and improve FP rates across all severity levels (BLOCK/WARN/INFO), establishing lint reliability as the foundation for all future directions.
 
+**Why 8a first**: Every future direction (observe, GitHub Action, Go support, Note.com articles) depends on users trusting exspec output. A lint that cries wolf at WARN/INFO level trains users to ignore all output. Phase 6 dogfooding proved BLOCK FP rate is manageable, but WARN/INFO has never been validated -- that's half the output users see.
+
+**Phase closure policy**: Items stay open until re-dogfooding confirms improvement and docs are updated. A merged PR is not closure -- validated behavior change is.
+
 #### 8a-1: Known BLOCK FP fixes
 
-Query-fixable BLOCK FPs with known fix strategies.
+Query-fixable BLOCK FPs with known fix strategies. These are addressed first because fix strategies are already determined from Phase 6 dogfooding -- no investigation needed.
 
 | Task | Status |
 |------|--------|
@@ -27,6 +31,8 @@ Query-fixable BLOCK FPs with known fix strategies.
 #### 8a-2: WARN/INFO dogfooding survey
 
 Only BLOCK FPs have been classified so far. WARN/INFO counts exist but content is unverified.
+
+**Why this matters**: Phase 6 dogfooding collected WARN/INFO hit counts (e.g. T101 at 16% in Laravel, T109 at 13% in NestJS) but never sampled individual hits to determine TP/FP. Without this data, we cannot know whether WARN/INFO rules are useful signals or noise. T107 was demoted WARN->INFO based on exactly this kind of analysis; other rules may need the same treatment.
 
 **Method**: Sample 20-30 hits per rule per project, classify as TP/FP.
 
@@ -57,6 +63,8 @@ Scope determined by 8a-2 results. Expected remediation types:
 
 Remaining BLOCK FPs from helper delegation. Not query-fixable but impacts user experience.
 
+**Why this is a separate decision**: These FPs cannot be fixed by improving tree-sitter queries -- the helpers are project-specific and don't follow detectable naming conventions (e.g. `fnmatch_lines()`, `$assert->has()`). The question is where the responsibility sits: exspec's built-in knowledge, `exspec init` tooling, or user configuration.
+
 | Project | Remaining FPs | Pattern |
 |---------|--------------|---------|
 | pytest | 415 | fnmatch_lines() |
@@ -65,9 +73,9 @@ Remaining BLOCK FPs from helper delegation. Not query-fixable but impacts user e
 | tokio | 124 | assert_pending!, assert_ready! etc. |
 
 **Options**:
-- A: Enhanced `exspec init` (framework detection -> auto-suggest custom_patterns)
-- B: Built-in framework patterns (recognize major frameworks by default)
-- C: Documentation only (custom_patterns usage guide)
+- A: Enhanced `exspec init` (framework detection -> auto-suggest custom_patterns). Keeps exspec language-agnostic; users see the config and can modify it.
+- B: Built-in framework patterns (recognize major frameworks by default). Better out-of-box experience, but couples exspec to specific frameworks and requires maintenance as frameworks evolve.
+- C: Documentation only (custom_patterns usage guide). Lowest effort, but ~1000 FPs remain for users to configure manually.
 
 Decision after 8a-2/3 results. Implementation may be deferred to Phase 8c.
 
@@ -87,7 +95,8 @@ Decision after 8a-2/3 results. Implementation may be deferred to Phase 8c.
 
 Goal: Validate whether static AST-only test-to-code mapping can achieve practical precision. 1-2 week timebox.
 
-- **Why**: Zero competitors in static approach (all existing tools use dynamic instrumentation). Asymmetric risk.
+**Why observe, why now**: No existing tool does static test-to-code mapping -- Microsoft TIA, Launchable, SeaLights all use dynamic instrumentation. If AST-only analysis works, exspec creates a new category with zero competition. The risk is asymmetric: failure costs 1-2 weeks; success opens a product narrative ("AI generates code -> exspec lint checks quality -> exspec observe finds coverage gaps") that no competitor can match. This comes after 8a because observe's credibility depends on lint being trustworthy first.
+
 - **Scope**: 1 language (TypeScript), 1 project (NestJS), route/method test density report
 - **Success**: 70%+ of major routes correctly mapped
 - **Failure**: <50% precision, or AST limitations make practical mapping impossible
@@ -101,6 +110,12 @@ Goal: Validate whether static AST-only test-to-code mapping can achieve practica
 | GitHub Action + marketplace | GitHub Action |
 | Note.com article | Tier 3 rules (T201 spec-quality etc.) |
 
+**Why this branching**: If observe succeeds, the product story shifts from "lint tool" to "test intelligence platform" -- Go support becomes less urgent because the differentiator is observe, not language breadth. If observe fails, exspec's moat is lint depth and language coverage, making Go support and Tier 3 rules the natural next investment.
+
+**Decision: Go language support** is rejected before Phase 8a reliability work is complete. Adding a 5th language while existing 4 languages have unresolved FP patterns dilutes quality. It becomes reconsiderable only in the fallback branch where observe fails and lint reliability is already established.
+
+**Definition: "GitHub Action"** here means an opinionated distribution/integration path (marketplace action, reusable workflow) beyond the current CI documentation examples in `docs/ci.md`.
+
 ## Backlog
 
 | Priority | Task | Trigger |
@@ -111,6 +126,10 @@ Goal: Validate whether static AST-only test-to-code mapping can achieve practica
 | P3 | T203 AST similarity duplicate detection | "I want duplicate test detection" |
 | Rejected | LSP/VSCode extension | Too early -- low user count for UI investment |
 | Rejected | Go language (before FP cleanup) | Horizontal expansion with remaining FPs is a reliability risk |
+
+**Decision: #41 backlog retention** -- The main nested-function FP fix landed on 2026-03-12, but this remains listed as issue-family bookkeeping. The roadmap keeps visibility on the surrounding limitation space (e.g. deeply nested helpers, decorator-wrapped tests) rather than treating the broader topic as permanently closed.
+
+**Decision: LSP/VSCode rejection** -- exspec has near-zero external users as of v0.1.2. Building an IDE extension before establishing a user base invests in distribution UX before the core product has proven its value. Reconsiderable after external adoption signals (GitHub stars, issues from non-maintainers).
 
 ## Non-goals
 

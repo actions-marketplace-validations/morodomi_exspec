@@ -13,7 +13,7 @@ Claudeは日本語。開発者は日本語しか理解できない。
 
 | 何を知りたいか | どこを見るか |
 |---------------|-------------|
-| プロジェクトの方向性 | [ROADMAP.md](ROADMAP.md) |
+| プロジェクトの方向性と判断理由 | [ROADMAP.md](ROADMAP.md) |
 | 設計思想 | [docs/philosophy.md](docs/philosophy.md) |
 | 既知の制約 | [docs/known-constraints.md](docs/known-constraints.md) |
 | 設定とエスケープハッチ | [docs/configuration.md](docs/configuration.md) |
@@ -25,8 +25,22 @@ Claudeは日本語。開発者は日本語しか理解できない。
 ## Source of Truth
 
 - **振る舞い**: コード + テスト + fixtures
+- **判断理由 (なぜそうしたか)**: [ROADMAP.md](ROADMAP.md) Key Design Decisions + 各セクションの **Why** / **Decision**
 - **設定**: [docs/configuration.md](docs/configuration.md)
 - **ユーザー向け**: [README.md](README.md)
+
+## ドキュメント配置ルール
+
+新しい情報が出たら、まず自問する:
+
+| 問い | 置き場 |
+|------|--------|
+| ユーザーが知るべきか？ | [README.md](README.md) |
+| 作業者/AIが知るべきか？ | このファイル (CLAUDE.md) |
+| 判断理由か？ | [ROADMAP.md](ROADMAP.md) の Decision / Why |
+| 長期的な制約か？ | [docs/known-constraints.md](docs/known-constraints.md) |
+| 言語固有か？ | [docs/languages/](docs/languages/) |
+| executableに落ちるか？ | コード / テスト / .exspec.toml |
 
 ## Tech Stack
 
