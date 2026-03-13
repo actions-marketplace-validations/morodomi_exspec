@@ -529,6 +529,147 @@ This stays within static analysis scope (no type/return-value analysis needed) a
 | #64 | T001: exclude skip-only test functions from evaluation | P1 |
 | #65 | T110: skip-only-test detection (INFO) | P2 |
 
+## Phase 8a-2: WARN/INFO FP Rate Survey (2026-03-13)
+
+**exspec version**: 0.1.2 (commit 79dd714)
+**Method**: 20-30 samples per rule per project, classified as TP/FP by reading source code.
+
+### Re-dogfooding: 8a-1 verification
+
+| Project | Metric | Before (#62/#63/#64) | After | Change |
+|---------|--------|---------------------|-------|--------|
+| pytest | T001 BLOCK | 594 | 515 | -79 (-13.3%) |
+| symfony | T001 BLOCK | 759 | 615 | -144 (-19.0%) |
+
+pytest remaining 515 BLOCKs: ~415 fnmatch_lines() helper delegation (8a-4 scope), rest are TP or other helpers.
+symfony remaining 615 BLOCKs: majority TP (mock verification, parent delegation), helper delegation addressed by 8a-4.
+
+### Updated WARN/INFO counts (all projects)
+
+| Rule | laravel | nestjs | tokio | fastapi | symfony | pytest | django |
+|------|---------|--------|-------|---------|---------|--------|--------|
+| T101 (Warn) | 1728 (16.0%) | 38 (1.4%) | 8 (0.5%) | 7 (0.3%) | 1283 (7.5%) | 27 (1.1%) | 30 (2.9%) |
+| T102 (Warn) | -- | 378 (14.1%) | 77 (4.9%) | -- | -- | -- | -- |
+| T003 (Warn) | 171 (1.6%) | 18 (0.7%) | 59 (3.7%) | 209 (9.9%) | 247 (1.4%) | 73 (3.1%) | 8 (0.8%) |
+| T109 (Info) | 122 (1.1%) | 348 (13.0%) | 88 (5.6%) | 81 (3.8%) | 347 (2.0%) | 65 (2.7%) | 26 (2.5%) |
+| T105 (Info) | 192 (1.8%) | 145 (5.4%) | 112 (7.1%) | 238 (11.2%) | 444 (2.6%) | 9 (0.4%) | 10 (1.0%) |
+| T106 (Info) | 1181 (10.9%) | 22 (0.8%) | 44 (2.8%) | 316 (14.9%) | 944 (5.5%) | 57 (2.4%) | 39 (3.7%) |
+| T108 (Warn) | 10 (0.1%) | 12 (0.4%) | 43 (2.7%) | 1 (0.0%) | 106 (0.6%) | 5 (0.2%) | -- |
+
+### FP Rate Survey Results
+
+| Rule | Severity | Sampled Projects | TP Rate | FP Rate | Verdict |
+|------|----------|-----------------|---------|---------|---------|
+| T105 | INFO | fastapi, NestJS | 92% | 8% | Healthy. Keep INFO |
+| T101 | WARN | Laravel, Symfony | 53% | 47% | Demote WARN→INFO |
+| T109 | INFO | NestJS, tokio | 50% | 50% | Keep INFO |
+| T102 | WARN | NestJS, tokio | 20% | 80% | Demote WARN→INFO or threshold↑ |
+| T003 | WARN | fastapi | 5% | 95% | Threshold↑ or snapshot exclusion |
+| T108 | WARN | tokio, Symfony | 7% | 93% | Demote WARN→INFO or OFF |
+| T106 | INFO | fastapi, laravel | 7% | 93% | Demote INFO→OFF |
+
+### T101 (how-not-what) — FP 47%
+
+**Sampled**: Laravel 15, Symfony 15
+
+| Project | TP | FP | TP Rate |
+|---------|----|----|---------|
+| Laravel | 11 | 4 | 73% |
+| Symfony | 5 | 10 | 33% |
+
+**FP causes**:
+1. **Fire-and-forget verification**: broadcast(), dispatch() with no return value — mock assertions ARE the specification
+2. **Delegating wrappers**: TraceableMessageBus, MarshallingSessionHandler — verifying delegation IS the contract
+3. **Contract boundaries**: Repository.find(), decision manager, lock store — collaborator invocation is part of the API contract
+4. **Security-critical operations**: password verification (hasher.check()) must be mocked
+
+**Why Laravel > Symfony TP rate**: Laravel tests more often use shouldReceive() chains to verify internal query construction (implementation detail). Symfony tests more often use mock expectations to define collaborator contracts (specification).
+
+### T102 (fixture-sprawl) — FP 80%
+
+**Sampled**: NestJS 15, tokio 10
+
+| Project | TP | FP | TP Rate |
+|---------|----|----|---------|
+| NestJS | 5 | 10 | 33% |
+| tokio | 0-2 | 8-10 | 0-20% |
+
+**FP causes**:
+1. **DI framework overhead**: NestJS modules require provider, service, controller, guard, interceptor fixtures as minimum setup
+2. **Network test setup**: tokio tests need sender, receiver, addr, buffer, message as inherent components
+3. **Tracing/observability tests**: span builders, event matchers, subscriber setup are legitimate test data
+4. **Threshold too low**: default threshold catches legitimate integration tests. Most FPs have 6-9 fixtures.
+
+### T003 (giant-test) — FP 95%
+
+**Sampled**: fastapi 20
+
+| Project | TP | FP | TP Rate |
+|---------|----|----|---------|
+| fastapi | 1 | 19 | 5% |
+
+**FP cause**: OpenAPI schema snapshot testing. Pattern: single `assert response.json() == {large_dict}`. The dict is 50-1200+ lines of schema definition. Logically cohesive (single assertion), length is data size not logic complexity.
+
+**Caveat**: fastapi is worst-case for T003 due to snapshot-heavy tests. Other projects show 0.7-3.7% hit rate with likely higher TP rates. fastapi-specific, not systemic.
+
+### T109 (undescriptive-name) — FP 50%
+
+**Sampled**: NestJS 15, tokio 10
+
+| Project | TP | FP | TP Rate |
+|---------|----|----|---------|
+| NestJS | 10 | 5 | 67% |
+| tokio | 2 | 8 | 20% |
+
+**FP causes**:
+1. **API method names**: test names like `read()`, `write()`, `pin()` directly match the public API being tested
+2. **Domain-specific terms**: `coop` (cooperative scheduling), `empty` (container state) are clear to ecosystem developers
+3. **Framework operations**: NestJS REPL commands (`get()`, `$()`, `debug()`) are recognizable method names
+4. **Describe block context**: parent describe/mod provides context that makes short names sufficient
+
+**TP pattern**: Generic version numbers (`V1`, `V2`, `V3`) and placeholder names (`usage`, `shell`) are genuinely undescriptive.
+
+### T105 (deterministic) — FP 8%
+
+**Sampled**: fastapi 10, NestJS 5
+
+| Project | TP | FP | TP Rate |
+|---------|----|----|---------|
+| fastapi | 8 | 2 | 80% |
+| NestJS | 5 | 0 | 100% |
+
+**Healthy rule**. Minor FP from OpenAPI schema snapshot tests where exact equality is the correct approach. No action needed.
+
+### T106 (duplicate-literal) — FP 93%
+
+**Sampled**: fastapi 10, laravel 5
+
+| Project | TP | FP | TP Rate |
+|---------|----|----|---------|
+| fastapi | 1 | 9 | 10% |
+| laravel | 0 | 5 | 0% |
+
+**FP causes**:
+1. **Snapshot/schema tests**: `"application/json"`, `"type"`, `"schema"` appear in multiple nested paths — structural necessity in OpenAPI validation
+2. **Message passthrough testing**: same string tested through different code paths to verify consistency
+3. **Realistic test data**: array/string literals are intentional, not parameterization candidates
+
+### T108 (wait-and-see) — FP 93%
+
+**Sampled**: tokio 10, Symfony 5
+
+| Project | TP | FP | TP Rate |
+|---------|----|----|---------|
+| tokio | 0 | 10 | 0% |
+| Symfony | 1 | 4 | 20% |
+
+**FP causes**:
+1. **Time-mocked tests**: tokio `start_paused=true` and Symfony Clock Mock eliminate real delays while preserving delay logic in code
+2. **Timing behavior tests**: TTL/expiration testing, delay verification — sleep IS the behavior being tested
+3. **Controlled async tests**: tokio's `time::pause()` makes delays deterministic and instant
+
+**The rule cannot distinguish real blocking sleeps from mocked/controlled time.**
+
 ## Reproduction
 
 ```bash
