@@ -23,10 +23,10 @@ Query-fixable BLOCK FPs with known fix strategies. These are addressed first bec
 
 | Task | Status |
 |------|--------|
-| #62 (P0): Python `^assert_` -> `^assert` (pytest 148 FPs) | TODO |
-| #63 (P1): PHP `addToAssertionCount()` assertion recognition (Symfony 91 FPs) | TODO |
-| #64 (P1): Exclude skip-only tests from T001 (Symfony 91 FPs) | TODO |
-| Re-dogfooding: verify improvements on pytest + symfony | TODO |
+| #62 (P0): Python `^assert_` -> `^assert` (pytest 148 FPs) | DONE |
+| #63 (P1): PHP `addToAssertionCount()` assertion recognition (Symfony 91 FPs) | DONE |
+| #64 (P1): Exclude skip-only tests from T001 (Symfony 91 FPs) | DONE |
+| Re-dogfooding: verify improvements on pytest + symfony | TODO (absorbed into 8a-2 survey) |
 
 #### 8a-2: WARN/INFO dogfooding survey
 
