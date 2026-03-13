@@ -9,37 +9,97 @@
 
 ## Now
 
-Phase 8a (WARN/INFO FP reduction + remaining BLOCK FP)
+### Phase 8a: Lint Reliability
 
-Goal: Establish lint reliability as the foundation for all future directions.
+Goal: Measure and improve FP rates across all severity levels (BLOCK/WARN/INFO), establishing lint reliability as the foundation for all future directions.
+
+#### 8a-1: Known BLOCK FP fixes
+
+Query-fixable BLOCK FPs with known fix strategies.
 
 | Task | Status |
 |------|--------|
 | #62 (P0): Python `^assert_` -> `^assert` (pytest 148 FPs) | TODO |
 | #63 (P1): PHP `addToAssertionCount()` assertion recognition (Symfony 91 FPs) | TODO |
 | #64 (P1): Exclude skip-only tests from T001 (Symfony 91 FPs) | TODO |
-| WARN/INFO FP survey: T101/T102/T109 dogfooding (currently only BLOCK verified) | TODO |
-| Re-dogfooding: pytest, symfony, major projects | TODO |
+| Re-dogfooding: verify improvements on pytest + symfony | TODO |
+
+#### 8a-2: WARN/INFO dogfooding survey
+
+Only BLOCK FPs have been classified so far. WARN/INFO counts exist but content is unverified.
+
+**Method**: Sample 20-30 hits per rule per project, classify as TP/FP.
+
+| Rule | Target projects | Concern |
+|------|----------------|---------|
+| T101 (how-not-what) WARN | Laravel(16%), Symfony(7.5%) | Framework mock-derived FPs? |
+| T102 (fixture-sprawl) WARN | NestJS(14.1%), tokio(4.9%) | Threshold or pattern issue? |
+| T109 (undescriptive-name) INFO | NestJS(13%) | Naming convention differences? |
+| T105 (deterministic) INFO | NestJS(5.3%) | Uninvestigated |
+| T003 (giant-test) WARN | fastapi(9.9%) | Is 50-line threshold appropriate? |
+| T106 (duplicate-literal) WARN | NestJS(0.8%) | Low frequency, low priority |
+| T108 (wait-and-see) WARN | Symfony(0.6%), tokio(2.7%) | Low frequency |
+
+**Deliverable**: FP rates + FP pattern classification per rule -> file issues
+
+#### 8a-3: WARN/INFO FP fixes
+
+Scope determined by 8a-2 results. Expected remediation types:
+
+| Remediation | Example |
+|-------------|---------|
+| Query improvement | Reduce framework-derived T101 FPs |
+| Severity adjustment | Demote high-FP rules: WARN->INFO or INFO->OFF |
+| Threshold tuning | T003 max_lines etc. |
+| Defer to Phase 8c+ | Issues requiring major rework |
+
+#### 8a-4: Helper delegation strategy decision
+
+Remaining BLOCK FPs from helper delegation. Not query-fixable but impacts user experience.
+
+| Project | Remaining FPs | Pattern |
+|---------|--------------|---------|
+| pytest | 415 | fnmatch_lines() |
+| Laravel | 222 | AssertableJson, validation, route helpers |
+| clap | 218 | assert_data_eq!, assert_matches |
+| tokio | 124 | assert_pending!, assert_ready! etc. |
+
+**Options**:
+- A: Enhanced `exspec init` (framework detection -> auto-suggest custom_patterns)
+- B: Built-in framework patterns (recognize major frameworks by default)
+- C: Documentation only (custom_patterns usage guide)
+
+Decision after 8a-2/3 results. Implementation may be deferred to Phase 8c.
+
+#### Phase 8a exit criteria
+
+- #62/#63/#64 closed
+- WARN/INFO FP rates measured for all major projects, recorded in docs/dogfooding-results.md
+- Severity adjustments applied where needed
+- Query-fixable WARN/INFO FPs filed as issues and addressed
+- Helper delegation strategy recorded in ROADMAP
+
+---
 
 ## Next
 
-Phase 8b (`exspec observe` PoC)
+### Phase 8b: `exspec observe` PoC
 
-Goal: Validate feasibility of static AST-only test-to-code mapping in 1-2 weeks.
+Goal: Validate whether static AST-only test-to-code mapping can achieve practical precision. 1-2 week timebox.
 
-- **Why**: Zero competitors in static approach (all use dynamic instrumentation). Asymmetric risk.
+- **Why**: Zero competitors in static approach (all existing tools use dynamic instrumentation). Asymmetric risk.
 - **Scope**: 1 language (TypeScript), 1 project (NestJS), route/method test density report
 - **Success**: 70%+ of major routes correctly mapped
 - **Failure**: <50% precision, or AST limitations make practical mapping impossible
 
-Phase 8c (branch on PoC result)
+### Phase 8c: Branch on PoC result
 
-| If observe PoC succeeds | If observe PoC fails |
-|------------------------|---------------------|
+| observe PoC succeeds | observe PoC fails |
+|---------------------|-------------------|
 | observe MVP (multi-language) | Go language support |
-| `exspec init` enhancement (framework detection + custom_patterns auto-suggest) | `exspec init` enhancement |
+| `exspec init` enhancement (incl. 8a-4 implementation) | `exspec init` enhancement (incl. 8a-4 implementation) |
 | GitHub Action + marketplace | GitHub Action |
-| Note.com article "AI-era test observability tool" | Tier 3 rules (T201 spec-quality etc.) |
+| Note.com article | Tier 3 rules (T201 spec-quality etc.) |
 
 ## Backlog
 
@@ -49,8 +109,8 @@ Phase 8c (branch on PoC result)
 | P2 | T001 FP: return-wrapped Chai property (#52) | Deferred from Phase 6 |
 | P2 | T201 spec-quality (advisory mode) | "I want semantic quality checks" |
 | P3 | T203 AST similarity duplicate detection | "I want duplicate test detection" |
-| Rejected | LSP/VSCode extension | Too early (low user count) |
-| Rejected | Go language (before FP cleanup) | FP残存状態での横展開はリスク |
+| Rejected | LSP/VSCode extension | Too early -- low user count for UI investment |
+| Rejected | Go language (before FP cleanup) | Horizontal expansion with remaining FPs is a reliability risk |
 
 ## Non-goals
 
