@@ -26,7 +26,7 @@ Phase 8a (Lint Reliability) in progress. v0.1.2 published to crates.io. 13 proje
 | 6 - Release Hardening (FP fixes, dogfooding) | DONE |
 | 7 - OSS release (crates.io v0.1.2) | DONE |
 | 8a - Lint Reliability (BLOCK/WARN/INFO FP fixes) | IN PROGRESS |
-| 8b - observe PoC (static test-to-code mapping) | NEXT |
+| 8b - observe PoC (static test-to-code mapping) | IN PROGRESS |
 
 ## Supported Languages
 
@@ -72,7 +72,7 @@ Phase 8a (Lint Reliability) in progress. v0.1.2 published to crates.io. 13 proje
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 716 passing | -- |
+| Tests | 726 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
