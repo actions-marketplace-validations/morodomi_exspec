@@ -1,6 +1,6 @@
 ---
 feature: "Task 7.5 — observe Layer 2 追加フィルタ (enum/interface/exception/test-util)"
-phase: commit
+phase: done
 complexity: S
 test_count: 6
 risk_level: low

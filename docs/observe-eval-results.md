@@ -4,26 +4,26 @@
 
 | Metric | Value |
 |--------|-------|
-| TP (correct predictions) | 134 |
-| FP (incorrect predictions) | 36 |
-| FN (missed ground truth) | 32 |
-| Ignored (secondary targets) | 162 |
-| Precision | 78.8% |
-| Recall | 80.7% |
-| F1 Score | 79.8% |
+| TP (correct predictions) | 130 |
+| FP (incorrect predictions) | 14 |
+| FN (missed ground truth) | 36 |
+| Ignored (secondary targets) | 145 |
+| Precision | 90.3% |
+| Recall | 78.3% |
+| F1 Score | 83.9% |
 
 ## Stratum Breakdown
 
 | Evidence Type | GT Pairs | TP | FN | Recall |
 |---------------|----------|----|----|--------|
 | barrel_import | 32 | 0 | 32 | 0.0% |
-| call_usage | 69 | 53 | 16 | 76.8% |
+| call_usage | 69 | 51 | 18 | 73.9% |
 | constructor_usage | 97 | 85 | 12 | 87.6% |
-| direct_import | 134 | 134 | 0 | 100.0% |
+| direct_import | 134 | 130 | 4 | 97.0% |
 | filename_match | 124 | 102 | 22 | 82.3% |
 | provider_registration | 3 | 3 | 0 | 100.0% |
-| symbol_assertion | 46 | 32 | 14 | 69.6% |
-| test_name_match | 154 | 124 | 30 | 80.5% |
+| symbol_assertion | 46 | 29 | 17 | 63.0% |
+| test_name_match | 154 | 120 | 34 | 77.9% |
 
 ## True Positives
 
@@ -121,8 +121,6 @@
 | packages/core/test/inspector/graph-inspector.spec.ts | packages/core/injector/instance-wrapper.ts |
 | packages/core/test/inspector/graph-inspector.spec.ts | packages/core/injector/module.ts |
 | packages/core/test/inspector/graph-inspector.spec.ts | packages/core/inspector/graph-inspector.ts |
-| packages/core/test/inspector/serialized-graph.spec.ts | packages/core/inspector/interfaces/edge.interface.ts |
-| packages/core/test/inspector/serialized-graph.spec.ts | packages/core/inspector/interfaces/node.interface.ts |
 | packages/core/test/inspector/serialized-graph.spec.ts | packages/core/inspector/serialized-graph.ts |
 | packages/core/test/interceptors/interceptors-consumer.spec.ts | packages/core/interceptors/interceptors-consumer.ts |
 | packages/core/test/interceptors/interceptors-context-creator.spec.ts | packages/core/interceptors/interceptors-context-creator.ts |
@@ -139,14 +137,12 @@
 | packages/core/test/middleware/utils.spec.ts | packages/core/middleware/utils.ts |
 | packages/core/test/nest-application-context.spec.ts | packages/core/nest-application-context.ts |
 | packages/core/test/nest-application.spec.ts | packages/core/nest-application.ts |
-| packages/core/test/pipes/params-token-factory.spec.ts | packages/common/enums/route-paramtypes.enum.ts |
 | packages/core/test/pipes/params-token-factory.spec.ts | packages/core/pipes/params-token-factory.ts |
 | packages/core/test/pipes/pipes-consumer.spec.ts | packages/core/pipes/pipes-consumer.ts |
 | packages/core/test/pipes/pipes-context-creator.spec.ts | packages/core/pipes/pipes-context-creator.ts |
 | packages/core/test/repl/assign-to-object.util.spec.ts | packages/core/repl/assign-to-object.util.ts |
 | packages/core/test/repl/repl-context.spec.ts | packages/core/repl/repl-context.ts |
 | packages/core/test/router/paths-explorer.spec.ts | packages/core/router/paths-explorer.ts |
-| packages/core/test/router/route-params-factory.spec.ts | packages/common/enums/route-paramtypes.enum.ts |
 | packages/core/test/router/route-params-factory.spec.ts | packages/core/router/route-params-factory.ts |
 | packages/core/test/router/route-path-factory.spec.ts | packages/core/router/route-path-factory.ts |
 | packages/core/test/router/router-exception-filters.spec.ts | packages/core/router/router-exception-filters.ts |
@@ -168,42 +164,20 @@
 
 | Test File | Production File |
 |-----------|-----------------|
-| packages/common/test/decorators/route-params.decorator.spec.ts | packages/common/enums/request-method.enum.ts |
 | packages/common/test/utils/validate-each.util.spec.ts | packages/common/utils/shared.utils.ts |
-| packages/core/test/application-config.spec.ts | packages/core/router/interfaces/exclude-route-metadata.interface.ts |
 | packages/core/test/discovery/discovery-service.spec.ts | packages/core/discovery/discoverable-meta-host-collection.ts |
-| packages/core/test/errors/test/messages.spec.ts | packages/core/test/utils/string.cleaner.ts |
-| packages/core/test/exceptions/exceptions-handler.spec.ts | packages/core/errors/exceptions/invalid-exception-filter.exception.ts |
 | packages/core/test/exceptions/external-exceptions-handler.spec.ts | packages/core/exceptions/external-exception-filter.ts |
-| packages/core/test/injector/container.spec.ts | packages/core/errors/exceptions/circular-dependency.exception.ts |
-| packages/core/test/injector/container.spec.ts | packages/core/errors/exceptions/unknown-module.exception.ts |
 | packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/helpers/external-context-creator.ts |
 | packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/helpers/http-adapter-host.ts |
 | packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/injector/internal-core-module/internal-core-module.ts |
 | packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/inspector/serialized-graph.ts |
-| packages/core/test/injector/module.spec.ts | packages/core/errors/exceptions/unknown-element.exception.ts |
-| packages/core/test/injector/module.spec.ts | packages/core/errors/exceptions/unknown-export.exception.ts |
-| packages/core/test/inspector/graph-inspector.spec.ts | packages/core/inspector/interfaces/enhancer-metadata-cache-entry.interface.ts |
 | packages/core/test/inspector/graph-inspector.spec.ts | packages/core/inspector/serialized-graph.ts |
 | packages/core/test/inspector/serialized-graph.spec.ts | packages/core/application-config.ts |
-| packages/core/test/middleware/container.spec.ts | packages/common/enums/request-method.enum.ts |
-| packages/core/test/middleware/container.spec.ts | packages/common/interfaces/middleware/middleware-configuration.interface.ts |
-| packages/core/test/middleware/container.spec.ts | packages/common/interfaces/middleware/nest-middleware.interface.ts |
-| packages/core/test/middleware/middleware-module.spec.ts | packages/common/enums/request-method.enum.ts |
-| packages/core/test/middleware/middleware-module.spec.ts | packages/common/interfaces/middleware/nest-middleware.interface.ts |
-| packages/core/test/middleware/resolver.spec.ts | packages/common/interfaces/middleware/nest-middleware.interface.ts |
-| packages/core/test/middleware/routes-mapper.spec.ts | packages/common/enums/request-method.enum.ts |
 | packages/core/test/nest-application-context.spec.ts | packages/core/helpers/context-id-factory.ts |
-| packages/core/test/pipes/pipes-consumer.spec.ts | packages/common/enums/route-paramtypes.enum.ts |
 | packages/core/test/router/router-execution-context.spec.ts | packages/core/helpers/handler-metadata-storage.ts |
 | packages/core/test/router/router-execution-context.spec.ts | packages/core/router/sse-stream.ts |
-| packages/core/test/router/router-explorer.spec.ts | packages/common/enums/request-method.enum.ts |
-| packages/core/test/router/router-explorer.spec.ts | packages/common/enums/version-type.enum.ts |
-| packages/core/test/router/router-explorer.spec.ts | packages/core/errors/exceptions/unknown-request-mapping.exception.ts |
 | packages/core/test/router/router-explorer.spec.ts | packages/core/helpers/execution-context-host.ts |
-| packages/core/test/router/router-explorer.spec.ts | packages/core/router/interfaces/route-path-metadata.interface.ts |
 | packages/core/test/router/router-response-controller.spec.ts | packages/core/router/sse-stream.ts |
-| packages/core/test/scanner.spec.ts | packages/core/interfaces/module-override.interface.ts |
 
 ## False Negatives
 
@@ -232,12 +206,16 @@
 | packages/core/test/injector/instance-loader.spec.ts | packages/common/decorators/core/injectable.decorator.ts | barrel_import, call_usage, symbol_assertion, test_name_match |
 | packages/core/test/injector/instance-wrapper.spec.ts | packages/common/interfaces/scope-options.interface.ts | barrel_import, call_usage, symbol_assertion, test_name_match |
 | packages/core/test/injector/lazy-module-loader/lazy-module-loader.spec.ts | packages/core/injector/lazy-module-loader/lazy-module-loader.ts | barrel_import, constructor_usage, filename_match, test_name_match |
+| packages/core/test/inspector/serialized-graph.spec.ts | packages/core/inspector/interfaces/edge.interface.ts | call_usage, direct_import, test_name_match |
+| packages/core/test/inspector/serialized-graph.spec.ts | packages/core/inspector/interfaces/node.interface.ts | call_usage, direct_import, symbol_assertion, test_name_match |
+| packages/core/test/pipes/params-token-factory.spec.ts | packages/common/enums/route-paramtypes.enum.ts | direct_import, symbol_assertion, test_name_match |
 | packages/core/test/repl/native-functions/debug-repl-fn.spec.ts | packages/core/repl/native-functions/debug-repl-fn.ts | barrel_import, filename_match, test_name_match |
 | packages/core/test/repl/native-functions/get-repl-fn.spec.ts | packages/core/repl/native-functions/get-repl-fn.ts | barrel_import, filename_match, test_name_match |
 | packages/core/test/repl/native-functions/help-repl-fn.spec.ts | packages/core/repl/native-functions/help-repl-fn.ts | barrel_import, filename_match, test_name_match |
 | packages/core/test/repl/native-functions/methods-repl-fn.spec.ts | packages/core/repl/native-functions/methods-repl-fn.ts | barrel_import, filename_match, test_name_match |
 | packages/core/test/repl/native-functions/resolve-repl-fn.spec.ts | packages/core/repl/native-functions/resolve-repl-fn.ts | barrel_import, filename_match, test_name_match |
 | packages/core/test/repl/native-functions/select-repl-fn.spec.ts | packages/core/repl/native-functions/select-relp-fn.ts | barrel_import, filename_match, test_name_match |
+| packages/core/test/router/route-params-factory.spec.ts | packages/common/enums/route-paramtypes.enum.ts | direct_import, symbol_assertion, test_name_match |
 | packages/core/test/router/router-response-controller.spec.ts | packages/common/enums/request-method.enum.ts | barrel_import, symbol_assertion, test_name_match |
 | packages/core/test/router/utils/flat-routes.spec.ts | packages/core/router/utils/flatten-route-paths.util.ts | barrel_import, call_usage, symbol_assertion, test_name_match |
 | packages/core/test/scanner.spec.ts | packages/common/decorators/core/injectable.decorator.ts | barrel_import, call_usage, symbol_assertion, test_name_match |
