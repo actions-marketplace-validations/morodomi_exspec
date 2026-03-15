@@ -251,6 +251,16 @@ See `docs/observe-gt-guideline.md` for full classification rules.
 | packages/core/test/router/router-explorer.spec.ts | Audit: All/request-mapping is fixture | Human audit |
 | packages/core/test/router/router-module.spec.ts | Audit: Module is fixture | Human audit |
 | packages/core/test/utils/noop-adapter.spec.ts | Audit: NoopHttpAdapter defined inline in spec. No production file. | Human audit |
+| packages/common/test/utils/validate-each.util.spec.ts | Added shared.utils.ts to secondary (utility function for test setup) | FP audit (14 pairs) |
+| packages/core/test/discovery/discovery-service.spec.ts | Added discoverable-meta-host-collection.ts to secondary (spy/stub target) | FP audit (14 pairs) |
+| packages/core/test/exceptions/external-exceptions-handler.spec.ts | Added external-exception-filter.ts to secondary (log suppression setup) | FP audit (14 pairs) |
+| packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | Added 4 files to secondary (expected-value tokens in provider array) | FP audit (14 pairs) |
+| packages/core/test/inspector/graph-inspector.spec.ts | Added serialized-graph.ts to secondary (internal field access) | FP audit (14 pairs) |
+| packages/core/test/inspector/serialized-graph.spec.ts | Added application-config.ts to secondary (test data token) | FP audit (14 pairs) |
+| packages/core/test/nest-application-context.spec.ts | Added context-id-factory.ts to secondary (input value generation) | FP audit (14 pairs) |
+| packages/core/test/router/router-execution-context.spec.ts | Added handler-metadata-storage.ts, sse-stream.ts to secondary (type casts only) | FP audit (14 pairs) |
+| packages/core/test/router/router-explorer.spec.ts | Added execution-context-host.ts to secondary (expected-value token) | FP audit (14 pairs) |
+| packages/core/test/router/router-response-controller.spec.ts | Added sse-stream.ts to secondary (stub target class) | FP audit (14 pairs) |
 
 ### Audit Coverage by Stratum
 
@@ -1133,7 +1143,9 @@ See `docs/observe-gt-guideline.md` for full classification rules.
       "primary_targets": [
         "packages/common/utils/validate-each.util.ts"
       ],
-      "secondary_targets": [],
+      "secondary_targets": [
+        "packages/common/utils/shared.utils.ts"
+      ],
       "confidence": "high",
       "evidence": {
         "packages/common/utils/validate-each.util.ts": [
@@ -1192,7 +1204,8 @@ See `docs/observe-gt-guideline.md` for full classification rules.
       ],
       "secondary_targets": [
         "packages/core/injector/instance-wrapper.ts",
-        "packages/core/injector/modules-container.ts"
+        "packages/core/injector/modules-container.ts",
+        "packages/core/discovery/discoverable-meta-host-collection.ts"
       ],
       "confidence": "high",
       "evidence": {
@@ -1323,7 +1336,9 @@ See `docs/observe-gt-guideline.md` for full classification rules.
       "primary_targets": [
         "packages/core/exceptions/external-exceptions-handler.ts"
       ],
-      "secondary_targets": [],
+      "secondary_targets": [
+        "packages/core/exceptions/external-exception-filter.ts"
+      ],
       "confidence": "high",
       "evidence": {
         "packages/core/exceptions/external-exceptions-handler.ts": [
@@ -1829,7 +1844,11 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/injector/internal-core-module/internal-core-module-factory.ts"
       ],
       "secondary_targets": [
-        "packages/core/injector/container.ts"
+        "packages/core/injector/container.ts",
+        "packages/core/helpers/external-context-creator.ts",
+        "packages/core/helpers/http-adapter-host.ts",
+        "packages/core/injector/internal-core-module/internal-core-module.ts",
+        "packages/core/inspector/serialized-graph.ts"
       ],
       "confidence": "high",
       "evidence": {
@@ -1960,7 +1979,8 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/injector/module.ts"
       ],
       "secondary_targets": [
-        "packages/core/injector/container.ts"
+        "packages/core/injector/container.ts",
+        "packages/core/inspector/serialized-graph.ts"
       ],
       "confidence": "high",
       "evidence": {
@@ -1990,7 +2010,9 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/inspector/serialized-graph.ts",
         "packages/core/inspector/interfaces/edge.interface.ts"
       ],
-      "secondary_targets": [],
+      "secondary_targets": [
+        "packages/core/application-config.ts"
+      ],
       "confidence": "high",
       "evidence": {
         "packages/core/inspector/interfaces/node.interface.ts": [
@@ -2241,7 +2263,8 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/inspector/graph-inspector.ts",
         "packages/common/decorators/core/injectable.decorator.ts",
         "packages/common/interfaces/modules/provider.interface.ts",
-        "packages/common/interfaces/scope-options.interface.ts"
+        "packages/common/interfaces/scope-options.interface.ts",
+        "packages/core/helpers/context-id-factory.ts"
       ],
       "confidence": "high",
       "evidence": {
@@ -2559,7 +2582,9 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/interceptors/interceptors-context-creator.ts",
         "packages/core/pipes/pipes-consumer.ts",
         "packages/core/pipes/pipes-context-creator.ts",
-        "packages/core/router/route-params-factory.ts"
+        "packages/core/router/route-params-factory.ts",
+        "packages/core/helpers/handler-metadata-storage.ts",
+        "packages/core/router/sse-stream.ts"
       ],
       "confidence": "high",
       "evidence": {
@@ -2586,7 +2611,8 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/metadata-scanner.ts",
         "packages/core/router/route-path-factory.ts",
         "packages/core/router/router-exception-filters.ts",
-        "packages/common/decorators/http/request-mapping.decorator.ts"
+        "packages/common/decorators/http/request-mapping.decorator.ts",
+        "packages/core/helpers/execution-context-host.ts"
       ],
       "confidence": "high",
       "evidence": {
@@ -2650,7 +2676,8 @@ See `docs/observe-gt-guideline.md` for full classification rules.
       ],
       "secondary_targets": [
         "packages/common/utils/shared.utils.ts",
-        "packages/common/enums/http-status.enum.ts"
+        "packages/common/enums/http-status.enum.ts",
+        "packages/core/router/sse-stream.ts"
       ],
       "confidence": "high",
       "evidence": {

@@ -5,12 +5,12 @@
 | Metric | Value |
 |--------|-------|
 | TP (correct predictions) | 130 |
-| FP (incorrect predictions) | 14 |
+| FP (incorrect predictions) | 0 |
 | FN (missed ground truth) | 36 |
-| Ignored (secondary targets) | 145 |
-| Precision | 90.3% |
+| Ignored (secondary targets) | 159 |
+| Precision | 100.0% |
 | Recall | 78.3% |
-| F1 Score | 83.9% |
+| F1 Score | 87.8% |
 
 ## Stratum Breakdown
 
@@ -164,20 +164,6 @@
 
 | Test File | Production File |
 |-----------|-----------------|
-| packages/common/test/utils/validate-each.util.spec.ts | packages/common/utils/shared.utils.ts |
-| packages/core/test/discovery/discovery-service.spec.ts | packages/core/discovery/discoverable-meta-host-collection.ts |
-| packages/core/test/exceptions/external-exceptions-handler.spec.ts | packages/core/exceptions/external-exception-filter.ts |
-| packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/helpers/external-context-creator.ts |
-| packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/helpers/http-adapter-host.ts |
-| packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/injector/internal-core-module/internal-core-module.ts |
-| packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/inspector/serialized-graph.ts |
-| packages/core/test/inspector/graph-inspector.spec.ts | packages/core/inspector/serialized-graph.ts |
-| packages/core/test/inspector/serialized-graph.spec.ts | packages/core/application-config.ts |
-| packages/core/test/nest-application-context.spec.ts | packages/core/helpers/context-id-factory.ts |
-| packages/core/test/router/router-execution-context.spec.ts | packages/core/helpers/handler-metadata-storage.ts |
-| packages/core/test/router/router-execution-context.spec.ts | packages/core/router/sse-stream.ts |
-| packages/core/test/router/router-explorer.spec.ts | packages/core/helpers/execution-context-host.ts |
-| packages/core/test/router/router-response-controller.spec.ts | packages/core/router/sse-stream.ts |
 
 ## False Negatives
 
