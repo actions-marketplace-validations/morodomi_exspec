@@ -37,27 +37,20 @@ cargo run -- --lang rust .                      # self-dogfooding (BLOCK 0件を
 ## TDD Workflow
 
 ```
-spec -> sync-plan -> plan-review -> RED -> GREEN -> REFACTOR -> REVIEW -> COMMIT
+spec → sync-plan → plan-review → RED → GREEN → REFACTOR → REVIEW → COMMIT
 ```
 
-| Phase | Action | Skill | 詳細 |
-|-------|--------|-------|------|
-| SPEC | 設計・テスト計画 | dev-crew:spec | plan mode内で実行。要件ヒアリング → リスク評価 → Test List作成 → planファイルに記録 |
-| (plan review) | 設計レビュー | dev-crew:review --plan | plan mode内でspec後に実施。approve → compact → orchestrate起動 |
-| sync-plan | Design Review Gate + Cycle doc作成 | dev-crew:orchestrate (Block 1) | architect が設計レビュー後、Cycle doc を `docs/cycles/` に生成 |
-| RED | テスト作成、失敗確認 | dev-crew:red | Given/When/Then形式。テスト失敗を確認後、self-dogfooding実施 |
-| GREEN | 最小限の実装 | dev-crew:green | テストを通す最小コード。過剰実装禁止 |
-| REFACTOR | コード品質改善 | dev-crew:refactor | チェックリスト駆動。Verification Gateで品質確認 |
-| REVIEW | コードレビュー | dev-crew:review | 正確性・パフォーマンス・セキュリティの並列レビュー |
-| COMMIT | Git commit | dev-crew:commit | テスト通過 + clippy + fmt + self-dogfooding確認後にコミット |
+- spec: plan mode でスコープ定義
+- sync-plan: plan を Cycle doc へ昇格
+- plan-review: 設計検証（Codex 利用可能時は competitive review）
+- RED: テスト作成 → 失敗確認
+- GREEN: 最小限の実装 → テスト通過
+- REFACTOR: テスト維持しつつコード品質改善
+- REVIEW: 多角的コードレビュー
 
 **orchestrate** (`dev-crew:orchestrate`): PdMとしてsync-plan→RED→GREEN→REFACTOR→REVIEW→COMMITを自律管理。PASS/WARN→自動進行、BLOCK→再試行→ユーザー報告。
 
 Cycle docs: `docs/cycles/YYYYMMDD_HHMM_<topic>.md`
-
-### Post-Approve Action
-
-planファイル末尾の `## Post-Approve Action` セクションがcompact後のauto-orchestrateトリガーになる。specで自動付与される。
 
 ## Quality Standards
 
