@@ -102,7 +102,7 @@ Remaining BLOCK FPs from helper delegation. Not query-fixable but impacts user e
 
 ---
 
-## Next
+## Now
 
 ### Phase 8b: `exspec observe` PoC
 
@@ -113,6 +113,33 @@ Goal: Validate whether static AST-only test-to-code mapping can achieve practica
 - **Scope**: 1 language (TypeScript), 1 project (NestJS), route/method test density report
 - **Success**: 70%+ of major routes correctly mapped
 - **Failure**: <50% precision, or AST limitations make practical mapping impossible
+
+#### Precision evaluation results (Task 6, 2026-03-16)
+
+nestjs/nest (packages/common + packages/core, 130 test files, 166 primary mappings, 59% human-audited):
+
+| Metric | Value |
+|--------|-------|
+| Precision | 66.3% (134 TP, 68 FP) |
+| Recall | 80.7% (134 TP, 32 FN) |
+| F1 | 72.8% |
+
+| Stratum | Recall | Notes |
+|---------|--------|-------|
+| direct_import | 100% (134/134) | Layer 2 import tracing is complete |
+| barrel_import | 0% (0/32) | Expected: tree-sitter does not follow index.ts re-exports |
+
+**FP breakdown**: `constants.ts` (26), enum/interface files (35), `index.ts` (7). All are helper/non-SUT imports that observe maps as production files.
+
+**FN breakdown**: All 32 are barrel imports (`import { Foo } from '../index'` or `from '@nestjs/common'`). No direct_import FN exists.
+
+**Decision: Improvement priority order**.
+
+1. **Helper/non-SUT import filtering** (Precision 66%→90%+). Filter `constants.ts`, enum-only files, interface-only files from mappings. Low cost, high impact on F1 (projected 86.4%).
+2. **Strict/lenient dual metrics**. Current evaluation ignores secondary_targets entirely. Adding lenient mode (secondary as partial match) separates "SUT finder" vs "dependency extractor" evaluation.
+3. **Barrel import expansion** (Recall 80%→100%). Requires tree-sitter query for `export { X } from './y'` + recursive file tracking. High cost, lower F1 impact than filtering (projected 79.7% if done alone).
+
+**Why filtering first**: F1 improvement from precision (66→93%, F1 86.4%) exceeds recall improvement (80→100%, F1 79.7%). User experience: noise (FP) is worse than missing entries (FN) for a mapping tool. Implementation cost is 1/5 of barrel expansion.
 
 **Adjacent opportunity: helper traversal**. Phase 8a-4 discussion (4-AI consensus) identified that `custom_patterns` helper verification (checking if a registered helper actually contains assertions) is interprocedural analysis -- the same problem observe solves. If observe's call-graph infrastructure works, helper verification comes as a byproduct. Constraints agreed upon:
 - `custom_patterns` contract stays as text fallback (no semantic change)

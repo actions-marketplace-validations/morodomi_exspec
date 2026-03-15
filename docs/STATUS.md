@@ -32,15 +32,18 @@ Phase 8a (Lint Reliability) + Phase 8b (observe PoC) in progress. v0.1.2 publish
 
 | # | Task | Status |
 |---|------|--------|
-| 0 | Ground truth (nestjs/nest manual mapping) | TODO |
+| 0 | Ground truth (nestjs/nest manual mapping) | DONE |
 | 1 | Production function extractor (TypeScript) | DONE |
 | 2 | NestJS route/decorator extractor | DONE |
 | 3a | Test-to-code mapper: file name convention (Layer 1) | DONE |
 | 3b | Test-to-code mapper: import tracing (Layer 2) | DONE |
 | 4a | Test status code assertion extractor | TODO |
 | 4b | Error-path gap analyzer | TODO |
-| 5 | `exspec --observe` CLI + Markdown output | TODO |
+| 5 | `exspec observe` CLI + Markdown/JSON output | DONE |
 | 6 | NestJS precision verification (ground truth comparison) | DONE |
+| 7 | Helper/non-SUT import filtering (Precision improvement) | TODO |
+| 8 | Strict/lenient dual metrics | TODO |
+| 9 | Barrel import expansion (Recall improvement) | TODO |
 
 ## Supported Languages
 
