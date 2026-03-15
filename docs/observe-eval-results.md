@@ -5,12 +5,12 @@
 | Metric | Value |
 |--------|-------|
 | TP (correct predictions) | 134 |
-| FP (incorrect predictions) | 68 |
+| FP (incorrect predictions) | 36 |
 | FN (missed ground truth) | 32 |
-| Ignored (secondary targets) | 164 |
-| Precision | 66.3% |
+| Ignored (secondary targets) | 162 |
+| Precision | 78.8% |
 | Recall | 80.7% |
-| F1 Score | 72.8% |
+| F1 Score | 79.8% |
 
 ## Stratum Breakdown
 
@@ -168,44 +168,15 @@
 
 | Test File | Production File |
 |-----------|-----------------|
-| packages/common/test/decorators/apply-decorators.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/bind.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/catch.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/controller.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/create-param-decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/create-param-decorator.spec.ts | packages/common/index.ts |
-| packages/common/test/decorators/dependencies.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/exception-filters.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/global.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/global.decorator.spec.ts | packages/common/index.ts |
-| packages/common/test/decorators/header.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/http-code.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/inject.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/inject.decorator.spec.ts | packages/common/index.ts |
-| packages/common/test/decorators/injectable.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/injectable.decorator.spec.ts | packages/common/index.ts |
-| packages/common/test/decorators/redirect.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/redirect.decorator.spec.ts | packages/common/index.ts |
-| packages/common/test/decorators/render.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/route-params.decorator.spec.ts | packages/common/constants.ts |
 | packages/common/test/decorators/route-params.decorator.spec.ts | packages/common/enums/request-method.enum.ts |
-| packages/common/test/decorators/route-params.decorator.spec.ts | packages/common/index.ts |
-| packages/common/test/decorators/sse.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/use-guards.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/use-interceptors.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/use-pipes.decorator.spec.ts | packages/common/constants.ts |
-| packages/common/test/decorators/version.decorator.spec.ts | packages/common/constants.ts |
 | packages/common/test/utils/validate-each.util.spec.ts | packages/common/utils/shared.utils.ts |
 | packages/core/test/application-config.spec.ts | packages/core/router/interfaces/exclude-route-metadata.interface.ts |
 | packages/core/test/discovery/discovery-service.spec.ts | packages/core/discovery/discoverable-meta-host-collection.ts |
 | packages/core/test/errors/test/messages.spec.ts | packages/core/test/utils/string.cleaner.ts |
 | packages/core/test/exceptions/exceptions-handler.spec.ts | packages/core/errors/exceptions/invalid-exception-filter.exception.ts |
 | packages/core/test/exceptions/external-exceptions-handler.spec.ts | packages/core/exceptions/external-exception-filter.ts |
-| packages/core/test/helpers/context-utils.spec.ts | packages/common/constants.ts |
-| packages/core/test/injector/container.spec.ts | packages/common/index.ts |
 | packages/core/test/injector/container.spec.ts | packages/core/errors/exceptions/circular-dependency.exception.ts |
 | packages/core/test/injector/container.spec.ts | packages/core/errors/exceptions/unknown-module.exception.ts |
-| packages/core/test/injector/injector.spec.ts | packages/core/injector/constants.ts |
 | packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/helpers/external-context-creator.ts |
 | packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/helpers/http-adapter-host.ts |
 | packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/injector/internal-core-module/internal-core-module.ts |
@@ -224,8 +195,6 @@
 | packages/core/test/middleware/routes-mapper.spec.ts | packages/common/enums/request-method.enum.ts |
 | packages/core/test/nest-application-context.spec.ts | packages/core/helpers/context-id-factory.ts |
 | packages/core/test/pipes/pipes-consumer.spec.ts | packages/common/enums/route-paramtypes.enum.ts |
-| packages/core/test/router/router-execution-context.spec.ts | packages/common/constants.ts |
-| packages/core/test/router/router-execution-context.spec.ts | packages/core/guards/constants.ts |
 | packages/core/test/router/router-execution-context.spec.ts | packages/core/helpers/handler-metadata-storage.ts |
 | packages/core/test/router/router-execution-context.spec.ts | packages/core/router/sse-stream.ts |
 | packages/core/test/router/router-explorer.spec.ts | packages/common/enums/request-method.enum.ts |
@@ -234,7 +203,6 @@
 | packages/core/test/router/router-explorer.spec.ts | packages/core/helpers/execution-context-host.ts |
 | packages/core/test/router/router-explorer.spec.ts | packages/core/router/interfaces/route-path-metadata.interface.ts |
 | packages/core/test/router/router-response-controller.spec.ts | packages/core/router/sse-stream.ts |
-| packages/core/test/scanner.spec.ts | packages/common/constants.ts |
 | packages/core/test/scanner.spec.ts | packages/core/interfaces/module-override.interface.ts |
 
 ## False Negatives

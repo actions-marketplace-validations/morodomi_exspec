@@ -746,6 +746,9 @@ impl TypeScriptExtractor {
                 if let Some(resolved) =
                     resolve_import_path(&import.module_specifier, from_file, &canonical_root)
                 {
+                    if is_non_sut_helper(&resolved) {
+                        continue;
+                    }
                     if let Some(&idx) = canonical_to_idx.get(&resolved) {
                         matched_indices.insert(idx);
                     }
@@ -820,6 +823,27 @@ pub fn resolve_import_path(
         }
     }
     None
+}
+
+/// Returns true if the resolved file path is a helper/non-SUT file that should be
+/// excluded from Layer 2 import tracing (e.g., `constants.ts`, `index.ts`).
+fn is_non_sut_helper(file_path: &str) -> bool {
+    Path::new(file_path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name,
+                "constants.ts"
+                    | "constants.js"
+                    | "constants.tsx"
+                    | "constants.jsx"
+                    | "index.ts"
+                    | "index.js"
+                    | "index.tsx"
+                    | "index.jsx"
+            )
+        })
 }
 
 fn production_stem(path: &str) -> Option<&str> {
@@ -2067,5 +2091,44 @@ describe('UsersController', () => {});
                 mapping.test_files
             );
         }
+    }
+
+    // HELPER-01: constants.ts is detected as non-SUT helper
+    #[test]
+    fn is_non_sut_helper_constants_ts() {
+        assert!(is_non_sut_helper("src/constants.ts"));
+    }
+
+    // HELPER-02: index.ts is detected as non-SUT helper
+    #[test]
+    fn is_non_sut_helper_index_ts() {
+        assert!(is_non_sut_helper("src/index.ts"));
+    }
+
+    // HELPER-03: extension variants (.js/.tsx/.jsx) are also detected
+    #[test]
+    fn is_non_sut_helper_extension_variants() {
+        assert!(is_non_sut_helper("src/constants.js"));
+        assert!(is_non_sut_helper("src/constants.tsx"));
+        assert!(is_non_sut_helper("src/constants.jsx"));
+        assert!(is_non_sut_helper("src/index.js"));
+        assert!(is_non_sut_helper("src/index.tsx"));
+        assert!(is_non_sut_helper("src/index.jsx"));
+    }
+
+    // HELPER-04: similar but distinct filenames are NOT helpers
+    #[test]
+    fn is_non_sut_helper_rejects_non_helpers() {
+        assert!(!is_non_sut_helper("src/my-constants.ts"));
+        assert!(!is_non_sut_helper("src/service.ts"));
+        assert!(!is_non_sut_helper("src/app.constants.ts"));
+        assert!(!is_non_sut_helper("src/constants-v2.ts"));
+    }
+
+    // HELPER-05: directory named constants/app.ts is NOT a helper
+    #[test]
+    fn is_non_sut_helper_rejects_directory_name() {
+        assert!(!is_non_sut_helper("constants/app.ts"));
+        assert!(!is_non_sut_helper("index/service.ts"));
     }
 }
