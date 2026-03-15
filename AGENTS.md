@@ -40,17 +40,24 @@ cargo run -- --lang rust .                      # self-dogfooding (BLOCK 0件を
 SPEC -> sync-plan -> RED -> GREEN -> REFACTOR -> REVIEW -> COMMIT
 ```
 
-| Phase | Action | Skill |
-|-------|--------|-------|
-| SPEC | 設計・テスト計画 (plan mode) | dev-crew:spec |
-| sync-plan | Design Review Gate + Cycle doc作成 | dev-crew:orchestrate (Block 1) |
-| RED | テスト作成、失敗確認 | dev-crew:red |
-| GREEN | 最小限の実装 | dev-crew:green |
-| REFACTOR | コード品質改善 | dev-crew:refactor |
-| REVIEW | コードレビュー | dev-crew:review |
-| COMMIT | Git commit | dev-crew:commit |
+| Phase | Action | Skill | 詳細 |
+|-------|--------|-------|------|
+| SPEC | 設計・テスト計画 | dev-crew:spec | plan mode内で実行。要件ヒアリング → リスク評価 → Test List作成 → planファイルに記録 |
+| (plan review) | 設計レビュー | dev-crew:review --plan | plan mode内でspec後に実施。approve → compact → orchestrate起動 |
+| sync-plan | Design Review Gate + Cycle doc作成 | dev-crew:orchestrate (Block 1) | architect が設計レビュー後、Cycle doc を `docs/cycles/` に生成 |
+| RED | テスト作成、失敗確認 | dev-crew:red | Given/When/Then形式。テスト失敗を確認後、self-dogfooding実施 |
+| GREEN | 最小限の実装 | dev-crew:green | テストを通す最小コード。過剰実装禁止 |
+| REFACTOR | コード品質改善 | dev-crew:refactor | チェックリスト駆動。Verification Gateで品質確認 |
+| REVIEW | コードレビュー | dev-crew:review | 正確性・パフォーマンス・セキュリティの並列レビュー |
+| COMMIT | Git commit | dev-crew:commit | テスト通過 + clippy + fmt + self-dogfooding確認後にコミット |
+
+**orchestrate** (`dev-crew:orchestrate`): PdMとしてsync-plan→RED→GREEN→REFACTOR→REVIEW→COMMITを自律管理。PASS/WARN→自動進行、BLOCK→再試行→ユーザー報告。
 
 Cycle docs: `docs/cycles/YYYYMMDD_HHMM_<topic>.md`
+
+### Post-Approve Action
+
+planファイル末尾の `## Post-Approve Action` セクションがcompact後のauto-orchestrateトリガーになる。specで自動付与される。
 
 ## Quality Standards
 
@@ -78,12 +85,14 @@ exspec/
 │   │   ├── rules.rs           ルール定義・評価
 │   │   ├── metrics.rs         メトリクス計算
 │   │   ├── output.rs          出力フォーマッタ
+│   │   ├── hints.rs           ランタイムヒント (custom_patterns案内等)
+│   │   ├── query_utils.rs     tree-sitterクエリユーティリティ
 │   │   └── suppress.rs        インラインサプレッション処理
 │   ├── lang-python/           Python固有
 │   │   └── queries/*.scm
 │   ├── lang-typescript/       TypeScript固有
 │   │   ├── queries/*.scm
-│   │   └── observe.rs         observe PoC (test-to-code mapping)
+│   │   └── observe.rs         observe PoC (production function/route抽出, test-to-code mapping)
 │   ├── lang-php/              PHP固有
 │   │   └── queries/*.scm
 │   ├── lang-rust/             Rust固有

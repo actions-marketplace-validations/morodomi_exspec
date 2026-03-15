@@ -35,7 +35,7 @@ Phase 8a (Lint Reliability) + Phase 8b (observe PoC) in progress. v0.1.2 publish
 | 0 | Ground truth (nestjs/nest manual mapping) | TODO |
 | 1 | Production function extractor (TypeScript) | DONE |
 | 2 | NestJS route/decorator extractor | DONE |
-| 3a | Test-to-code mapper: file name convention (Layer 1) | TODO |
+| 3a | Test-to-code mapper: file name convention (Layer 1) | DONE |
 | 3b | Test-to-code mapper: import tracing (Layer 2) | TODO |
 | 4a | Test status code assertion extractor | TODO |
 | 4b | Error-path gap analyzer | TODO |
@@ -86,7 +86,7 @@ Phase 8a (Lint Reliability) + Phase 8b (observe PoC) in progress. v0.1.2 publish
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 741 passing | -- |
+| Tests | 751 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
