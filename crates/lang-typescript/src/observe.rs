@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::OnceLock;
 
 use streaming_iterator::StreamingIterator;
@@ -41,6 +42,18 @@ pub struct DecoratorInfo {
     pub line: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileMapping {
+    pub production_file: String,
+    pub test_files: Vec<String>,
+    pub strategy: MappingStrategy,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MappingStrategy {
+    FileNameConvention,
+}
+
 /// HTTP method decorators recognized as route indicators.
 const HTTP_METHODS: &[&str] = &["Get", "Post", "Put", "Patch", "Delete", "Head", "Options"];
 
@@ -69,6 +82,50 @@ const GAP_RELEVANT_DECORATORS: &[&str] = &[
 ];
 
 impl TypeScriptExtractor {
+    pub fn map_test_files(
+        &self,
+        production_files: &[String],
+        test_files: &[String],
+    ) -> Vec<FileMapping> {
+        let mut tests_by_key: HashMap<(String, String), Vec<String>> = HashMap::new();
+
+        for test_file in test_files {
+            let Some(stem) = test_stem(test_file) else {
+                continue;
+            };
+            let directory = Path::new(test_file)
+                .parent()
+                .map(|parent| parent.to_string_lossy().into_owned())
+                .unwrap_or_default();
+
+            tests_by_key
+                .entry((directory, stem.to_string()))
+                .or_default()
+                .push(test_file.clone());
+        }
+
+        production_files
+            .iter()
+            .map(|production_file| {
+                let test_matches = production_stem(production_file)
+                    .and_then(|stem| {
+                        let directory = Path::new(production_file)
+                            .parent()
+                            .map(|parent| parent.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        tests_by_key.get(&(directory, stem.to_string())).cloned()
+                    })
+                    .unwrap_or_default();
+
+                FileMapping {
+                    production_file: production_file.clone(),
+                    test_files: test_matches,
+                    strategy: MappingStrategy::FileNameConvention,
+                }
+            })
+            .collect()
+    }
+
     /// Extract NestJS routes from a controller source file.
     pub fn extract_routes(&self, source: &str, file_path: &str) -> Vec<Route> {
         let mut parser = Self::parser();
@@ -541,6 +598,16 @@ fn find_class_info(method_node: Node, source: &[u8]) -> (Option<String>, bool) {
         current = node.parent();
     }
     (None, false)
+}
+
+fn production_stem(path: &str) -> Option<&str> {
+    Path::new(path).file_stem()?.to_str()
+}
+
+fn test_stem(path: &str) -> Option<&str> {
+    let stem = Path::new(path).file_stem()?.to_str()?;
+    stem.strip_suffix(".spec")
+        .or_else(|| stem.strip_suffix(".test"))
 }
 
 #[cfg(test)]
@@ -1089,5 +1156,165 @@ mod tests {
         let process = process.unwrap();
         assert_eq!(process.class_name.as_deref(), Some("InternalBase"));
         assert!(!process.is_exported);
+    }
+
+    #[test]
+    fn basic_spec_mapping() {
+        // Given: a production file and its matching .spec test file in the same directory
+        let extractor = TypeScriptExtractor::new();
+        let production_files = vec!["src/users.service.ts".to_string()];
+        let test_files = vec!["src/users.service.spec.ts".to_string()];
+
+        // When: map_test_files is called
+        let mappings = extractor.map_test_files(&production_files, &test_files);
+
+        // Then: the files are matched with FileNameConvention
+        assert_eq!(
+            mappings,
+            vec![FileMapping {
+                production_file: "src/users.service.ts".to_string(),
+                test_files: vec!["src/users.service.spec.ts".to_string()],
+                strategy: MappingStrategy::FileNameConvention,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_suffix_mapping() {
+        // Given: a production file and its matching .test file
+        let extractor = TypeScriptExtractor::new();
+        let production_files = vec!["src/utils.ts".to_string()];
+        let test_files = vec!["src/utils.test.ts".to_string()];
+
+        // When: map_test_files is called
+        let mappings = extractor.map_test_files(&production_files, &test_files);
+
+        // Then: the files are matched
+        assert_eq!(
+            mappings[0].test_files,
+            vec!["src/utils.test.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn multiple_test_files() {
+        // Given: one production file and both .spec and .test files
+        let extractor = TypeScriptExtractor::new();
+        let production_files = vec!["src/app.ts".to_string()];
+        let test_files = vec!["src/app.spec.ts".to_string(), "src/app.test.ts".to_string()];
+
+        // When: map_test_files is called
+        let mappings = extractor.map_test_files(&production_files, &test_files);
+
+        // Then: both test files are matched
+        assert_eq!(
+            mappings[0].test_files,
+            vec!["src/app.spec.ts".to_string(), "src/app.test.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn nestjs_controller() {
+        // Given: a nested controller file and its matching spec file
+        let extractor = TypeScriptExtractor::new();
+        let production_files = vec!["src/users/users.controller.ts".to_string()];
+        let test_files = vec!["src/users/users.controller.spec.ts".to_string()];
+
+        // When: map_test_files is called
+        let mappings = extractor.map_test_files(&production_files, &test_files);
+
+        // Then: the nested files are matched
+        assert_eq!(
+            mappings[0].test_files,
+            vec!["src/users/users.controller.spec.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_matching_test() {
+        // Given: a production file and an unrelated test file
+        let extractor = TypeScriptExtractor::new();
+        let production_files = vec!["src/orphan.ts".to_string()];
+        let test_files = vec!["src/other.spec.ts".to_string()];
+
+        // When: map_test_files is called
+        let mappings = extractor.map_test_files(&production_files, &test_files);
+
+        // Then: the production file is still included with no tests
+        assert_eq!(mappings[0].test_files, Vec::<String>::new());
+    }
+
+    #[test]
+    fn different_directory_no_match() {
+        // Given: matching stems in different directories
+        let extractor = TypeScriptExtractor::new();
+        let production_files = vec!["src/users.ts".to_string()];
+        let test_files = vec!["test/users.spec.ts".to_string()];
+
+        // When: map_test_files is called
+        let mappings = extractor.map_test_files(&production_files, &test_files);
+
+        // Then: no match is created because Layer 1 is same-directory only
+        assert_eq!(mappings[0].test_files, Vec::<String>::new());
+    }
+
+    #[test]
+    fn empty_input() {
+        // Given: no production files and no test files
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files is called
+        let mappings = extractor.map_test_files(&[], &[]);
+
+        // Then: an empty vector is returned
+        assert!(mappings.is_empty());
+    }
+
+    #[test]
+    fn tsx_files() {
+        // Given: a TSX production file and its matching test file
+        let extractor = TypeScriptExtractor::new();
+        let production_files = vec!["src/App.tsx".to_string()];
+        let test_files = vec!["src/App.test.tsx".to_string()];
+
+        // When: map_test_files is called
+        let mappings = extractor.map_test_files(&production_files, &test_files);
+
+        // Then: the TSX files are matched
+        assert_eq!(mappings[0].test_files, vec!["src/App.test.tsx".to_string()]);
+    }
+
+    #[test]
+    fn unmatched_test_ignored() {
+        // Given: one matching test file and one orphan test file
+        let extractor = TypeScriptExtractor::new();
+        let production_files = vec!["src/a.ts".to_string()];
+        let test_files = vec!["src/a.spec.ts".to_string(), "src/b.spec.ts".to_string()];
+
+        // When: map_test_files is called
+        let mappings = extractor.map_test_files(&production_files, &test_files);
+
+        // Then: only the matching test file is included
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].test_files, vec!["src/a.spec.ts".to_string()]);
+    }
+
+    #[test]
+    fn stem_extraction() {
+        // Given: production and test file paths with ts and tsx extensions
+        // When: production_stem and test_stem are called
+        // Then: the normalized stems are extracted correctly
+        assert_eq!(
+            production_stem("src/users.service.ts"),
+            Some("users.service")
+        );
+        assert_eq!(production_stem("src/App.tsx"), Some("App"));
+        assert_eq!(
+            test_stem("src/users.service.spec.ts"),
+            Some("users.service")
+        );
+        assert_eq!(test_stem("src/utils.test.ts"), Some("utils"));
+        assert_eq!(test_stem("src/App.test.tsx"), Some("App"));
+        assert_eq!(test_stem("src/invalid.ts"), None);
     }
 }
