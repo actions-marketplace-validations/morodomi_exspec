@@ -19,7 +19,234 @@ pub struct ProductionFunction {
     pub is_exported: bool,
 }
 
+/// A route extracted from a NestJS controller.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Route {
+    pub http_method: String,
+    pub path: String,
+    pub handler_name: String,
+    pub class_name: String,
+    pub file: String,
+    pub line: usize,
+}
+
+/// A gap-relevant decorator extracted from source code.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecoratorInfo {
+    pub name: String,
+    pub arguments: Vec<String>,
+    pub target_name: String,
+    pub class_name: String,
+    pub file: String,
+    pub line: usize,
+}
+
+/// HTTP method decorators recognized as route indicators.
+const HTTP_METHODS: &[&str] = &["Get", "Post", "Put", "Patch", "Delete", "Head", "Options"];
+
+/// Decorators relevant to gap analysis (guard/pipe/validation).
+const GAP_RELEVANT_DECORATORS: &[&str] = &[
+    "UseGuards",
+    "UsePipes",
+    "IsEmail",
+    "IsNotEmpty",
+    "MinLength",
+    "MaxLength",
+    "IsOptional",
+    "IsString",
+    "IsNumber",
+    "IsInt",
+    "IsBoolean",
+    "IsDate",
+    "IsEnum",
+    "IsArray",
+    "ValidateNested",
+    "Min",
+    "Max",
+    "Matches",
+    "IsUrl",
+    "IsUUID",
+];
+
 impl TypeScriptExtractor {
+    /// Extract NestJS routes from a controller source file.
+    pub fn extract_routes(&self, source: &str, file_path: &str) -> Vec<Route> {
+        let mut parser = Self::parser();
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let source_bytes = source.as_bytes();
+
+        let mut routes = Vec::new();
+
+        // Find all class declarations (including exported ones)
+        for node in iter_children(tree.root_node()) {
+            // Find class_declaration and its parent (for decorator search)
+            let (container, class_node) = match node.kind() {
+                "export_statement" => {
+                    let cls = node
+                        .named_children(&mut node.walk())
+                        .find(|c| c.kind() == "class_declaration");
+                    match cls {
+                        Some(c) => (node, c),
+                        None => continue,
+                    }
+                }
+                "class_declaration" => (node, node),
+                _ => continue,
+            };
+
+            // @Controller decorator may be on container (export_statement) or class_declaration
+            let (base_path, class_name) =
+                match extract_controller_info(container, class_node, source_bytes) {
+                    Some(info) => info,
+                    None => continue,
+                };
+
+            let class_body = match class_node.child_by_field_name("body") {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let mut decorator_acc: Vec<Node> = Vec::new();
+            for child in iter_children(class_body) {
+                match child.kind() {
+                    "decorator" => decorator_acc.push(child),
+                    "method_definition" => {
+                        let handler_name = child
+                            .child_by_field_name("name")
+                            .and_then(|n| n.utf8_text(source_bytes).ok())
+                            .unwrap_or("")
+                            .to_string();
+                        let line = child.start_position().row + 1;
+
+                        for dec in &decorator_acc {
+                            if let Some((dec_name, dec_arg)) =
+                                extract_decorator_call(*dec, source_bytes)
+                            {
+                                if HTTP_METHODS.contains(&dec_name.as_str()) {
+                                    let sub_path = dec_arg.unwrap_or_default();
+                                    routes.push(Route {
+                                        http_method: dec_name.to_uppercase(),
+                                        path: normalize_path(&base_path, &sub_path),
+                                        handler_name: handler_name.clone(),
+                                        class_name: class_name.clone(),
+                                        file: file_path.to_string(),
+                                        line,
+                                    });
+                                }
+                            }
+                        }
+                        decorator_acc.clear();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        routes
+    }
+
+    /// Extract gap-relevant decorators (guards, pipes, validators) from source.
+    pub fn extract_decorators(&self, source: &str, file_path: &str) -> Vec<DecoratorInfo> {
+        let mut parser = Self::parser();
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let source_bytes = source.as_bytes();
+
+        let mut decorators = Vec::new();
+
+        for node in iter_children(tree.root_node()) {
+            let (container, class_node) = match node.kind() {
+                "export_statement" => {
+                    let cls = node
+                        .named_children(&mut node.walk())
+                        .find(|c| c.kind() == "class_declaration");
+                    match cls {
+                        Some(c) => (node, c),
+                        None => continue,
+                    }
+                }
+                "class_declaration" => (node, node),
+                _ => continue,
+            };
+
+            let class_name = class_node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source_bytes).ok())
+                .unwrap_or("")
+                .to_string();
+
+            // BLOCK 1 fix: extract class-level gap-relevant decorators
+            // Decorators on the class/container (e.g., @UseGuards at class level)
+            let class_level_decorators: Vec<Node> = find_decorators_on_node(container, class_node);
+            collect_gap_decorators(
+                &class_level_decorators,
+                &class_name, // target_name = class name for class-level
+                &class_name,
+                file_path,
+                source_bytes,
+                &mut decorators,
+            );
+
+            let class_body = match class_node.child_by_field_name("body") {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let mut decorator_acc: Vec<Node> = Vec::new();
+            for child in iter_children(class_body) {
+                match child.kind() {
+                    "decorator" => decorator_acc.push(child),
+                    "method_definition" => {
+                        let method_name = child
+                            .child_by_field_name("name")
+                            .and_then(|n| n.utf8_text(source_bytes).ok())
+                            .unwrap_or("")
+                            .to_string();
+
+                        collect_gap_decorators(
+                            &decorator_acc,
+                            &method_name,
+                            &class_name,
+                            file_path,
+                            source_bytes,
+                            &mut decorators,
+                        );
+                        decorator_acc.clear();
+                    }
+                    // DTO field definitions: decorators are children of the field node
+                    "public_field_definition" => {
+                        let field_name = child
+                            .child_by_field_name("name")
+                            .and_then(|n| n.utf8_text(source_bytes).ok())
+                            .unwrap_or("")
+                            .to_string();
+
+                        let field_decorators: Vec<Node> = iter_children(child)
+                            .filter(|c| c.kind() == "decorator")
+                            .collect();
+                        collect_gap_decorators(
+                            &field_decorators,
+                            &field_name,
+                            &class_name,
+                            file_path,
+                            source_bytes,
+                            &mut decorators,
+                        );
+                        decorator_acc.clear();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        decorators
+    }
+
     /// Extract all production functions/methods from TypeScript source code.
     pub fn extract_production_functions(
         &self,
@@ -110,6 +337,180 @@ impl TypeScriptExtractor {
         results.sort_by_key(|f| f.line);
         results
     }
+}
+
+/// Iterate over all children of a node (named + anonymous).
+fn iter_children(node: Node) -> impl Iterator<Item = Node> {
+    (0..node.child_count()).filter_map(move |i| node.child(i))
+}
+
+/// Extract @Controller base path and class name.
+/// `container` is the node that holds decorators (export_statement or class_declaration).
+/// `class_node` is the class_declaration itself.
+fn extract_controller_info(
+    container: Node,
+    class_node: Node,
+    source: &[u8],
+) -> Option<(String, String)> {
+    let class_name = class_node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())?
+        .to_string();
+
+    // Look for @Controller decorator in both container and class_node
+    for search_node in [container, class_node] {
+        for i in 0..search_node.child_count() {
+            let child = match search_node.child(i) {
+                Some(c) => c,
+                None => continue,
+            };
+            if child.kind() != "decorator" {
+                continue;
+            }
+            if let Some((name, arg)) = extract_decorator_call(child, source) {
+                if name == "Controller" {
+                    let base_path = arg.unwrap_or_default();
+                    return Some((base_path, class_name));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Collect gap-relevant decorators from an accumulator into the output vec.
+fn collect_gap_decorators(
+    decorator_acc: &[Node],
+    target_name: &str,
+    class_name: &str,
+    file_path: &str,
+    source: &[u8],
+    output: &mut Vec<DecoratorInfo>,
+) {
+    for dec in decorator_acc {
+        if let Some((dec_name, _)) = extract_decorator_call(*dec, source) {
+            if GAP_RELEVANT_DECORATORS.contains(&dec_name.as_str()) {
+                let args = extract_decorator_args(*dec, source);
+                output.push(DecoratorInfo {
+                    name: dec_name,
+                    arguments: args,
+                    target_name: target_name.to_string(),
+                    class_name: class_name.to_string(),
+                    file: file_path.to_string(),
+                    line: dec.start_position().row + 1,
+                });
+            }
+        }
+    }
+}
+
+/// Extract the name and first string argument from a decorator call.
+/// Returns (name, Some(path)) for string literals, (name, Some("<dynamic>")) for
+/// non-literal arguments (variables, objects), and (name, None) for no arguments.
+fn extract_decorator_call(decorator_node: Node, source: &[u8]) -> Option<(String, Option<String>)> {
+    for i in 0..decorator_node.child_count() {
+        let child = match decorator_node.child(i) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        match child.kind() {
+            "call_expression" => {
+                let func_node = child.child_by_field_name("function")?;
+                let name = func_node.utf8_text(source).ok()?.to_string();
+                let args_node = child.child_by_field_name("arguments")?;
+
+                if args_node.named_child_count() == 0 {
+                    // No arguments: @Get()
+                    return Some((name, None));
+                }
+                // Try first string argument
+                let first_string = find_first_string_arg(args_node, source);
+                if first_string.is_some() {
+                    return Some((name, first_string));
+                }
+                // Non-literal argument (variable, object, etc.): mark as dynamic
+                return Some((name, Some("<dynamic>".to_string())));
+            }
+            "identifier" => {
+                let name = child.utf8_text(source).ok()?.to_string();
+                return Some((name, None));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Extract all identifier arguments from a decorator call.
+/// e.g., @UseGuards(AuthGuard, RoleGuard) -> ["AuthGuard", "RoleGuard"]
+fn extract_decorator_args(decorator_node: Node, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    for i in 0..decorator_node.child_count() {
+        let child = match decorator_node.child(i) {
+            Some(c) => c,
+            None => continue,
+        };
+        if child.kind() == "call_expression" {
+            if let Some(args_node) = child.child_by_field_name("arguments") {
+                for j in 0..args_node.named_child_count() {
+                    if let Some(arg) = args_node.named_child(j) {
+                        if let Ok(text) = arg.utf8_text(source) {
+                            args.push(text.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    args
+}
+
+/// Find the first string literal argument in an arguments node.
+fn find_first_string_arg(args_node: Node, source: &[u8]) -> Option<String> {
+    for i in 0..args_node.named_child_count() {
+        let arg = args_node.named_child(i)?;
+        if arg.kind() == "string" {
+            let text = arg.utf8_text(source).ok()?;
+            // Strip quotes
+            let stripped = text.trim_matches(|c| c == '\'' || c == '"');
+            if !stripped.is_empty() {
+                return Some(stripped.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Normalize and combine base path and sub path.
+/// e.g., ("users", ":id") -> "/users/:id"
+/// e.g., ("", "health") -> "/health"
+/// e.g., ("api/v1/users", "") -> "/api/v1/users"
+fn normalize_path(base: &str, sub: &str) -> String {
+    let base = base.trim_matches('/');
+    let sub = sub.trim_matches('/');
+    match (base.is_empty(), sub.is_empty()) {
+        (true, true) => "/".to_string(),
+        (true, false) => format!("/{sub}"),
+        (false, true) => format!("/{base}"),
+        (false, false) => format!("/{base}/{sub}"),
+    }
+}
+
+/// Collect decorator nodes from both container and class_node.
+/// For `export class`, decorators are on the export_statement, not class_declaration.
+fn find_decorators_on_node<'a>(container: Node<'a>, class_node: Node<'a>) -> Vec<Node<'a>> {
+    let mut result = Vec::new();
+    for search_node in [container, class_node] {
+        for i in 0..search_node.child_count() {
+            if let Some(child) = search_node.child(i) {
+                if child.kind() == "decorator" {
+                    result.push(child);
+                }
+            }
+        }
+    }
+    result
 }
 
 /// Walk up from a method_definition node to find the containing class name and export status.
@@ -387,6 +788,283 @@ mod tests {
 
         // Then: returns empty Vec
         assert!(funcs.is_empty());
+    }
+
+    // === Route Extraction Tests ===
+
+    // RT1: basic NestJS controller routes
+    #[test]
+    fn basic_controller_routes() {
+        // Given: nestjs_controller.ts with @Controller('users') + @Get, @Post, @Delete
+        let source = fixture("nestjs_controller.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract routes
+        let routes = extractor.extract_routes(&source, "nestjs_controller.ts");
+
+        // Then: GET /users, POST /users, DELETE /users/:id
+        assert_eq!(routes.len(), 3, "expected 3 routes, got {routes:?}");
+        let methods: Vec<&str> = routes.iter().map(|r| r.http_method.as_str()).collect();
+        assert!(methods.contains(&"GET"), "expected GET in {methods:?}");
+        assert!(methods.contains(&"POST"), "expected POST in {methods:?}");
+        assert!(
+            methods.contains(&"DELETE"),
+            "expected DELETE in {methods:?}"
+        );
+
+        let get_route = routes.iter().find(|r| r.http_method == "GET").unwrap();
+        assert_eq!(get_route.path, "/users");
+
+        let delete_route = routes.iter().find(|r| r.http_method == "DELETE").unwrap();
+        assert_eq!(delete_route.path, "/users/:id");
+    }
+
+    // RT2: route path combination
+    #[test]
+    fn route_path_combination() {
+        // Given: nestjs_routes_advanced.ts with @Controller('api/v1/users') + @Get('active')
+        let source = fixture("nestjs_routes_advanced.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract routes
+        let routes = extractor.extract_routes(&source, "nestjs_routes_advanced.ts");
+
+        // Then: GET /api/v1/users/active
+        let active = routes
+            .iter()
+            .find(|r| r.handler_name == "findActive")
+            .unwrap();
+        assert_eq!(active.http_method, "GET");
+        assert_eq!(active.path, "/api/v1/users/active");
+    }
+
+    // RT3: controller with no path argument
+    #[test]
+    fn controller_no_path() {
+        // Given: nestjs_empty_controller.ts with @Controller() + @Get('health')
+        let source = fixture("nestjs_empty_controller.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract routes
+        let routes = extractor.extract_routes(&source, "nestjs_empty_controller.ts");
+
+        // Then: GET /health
+        assert_eq!(routes.len(), 1, "expected 1 route, got {routes:?}");
+        assert_eq!(routes[0].http_method, "GET");
+        assert_eq!(routes[0].path, "/health");
+    }
+
+    // RT4: method without route decorator is not extracted
+    #[test]
+    fn method_without_route_decorator() {
+        // Given: nestjs_empty_controller.ts with helperMethod() (no decorator)
+        let source = fixture("nestjs_empty_controller.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract routes
+        let routes = extractor.extract_routes(&source, "nestjs_empty_controller.ts");
+
+        // Then: helperMethod is not in routes
+        let helper = routes.iter().find(|r| r.handler_name == "helperMethod");
+        assert!(helper.is_none(), "helperMethod should not be a route");
+    }
+
+    // RT5: all HTTP methods
+    #[test]
+    fn all_http_methods() {
+        // Given: nestjs_routes_advanced.ts with Get, Post, Put, Patch, Delete, Head, Options
+        let source = fixture("nestjs_routes_advanced.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract routes
+        let routes = extractor.extract_routes(&source, "nestjs_routes_advanced.ts");
+
+        // Then: 9 routes (Get appears 3 times)
+        assert_eq!(routes.len(), 9, "expected 9 routes, got {routes:?}");
+        let methods: Vec<&str> = routes.iter().map(|r| r.http_method.as_str()).collect();
+        assert!(methods.contains(&"GET"));
+        assert!(methods.contains(&"POST"));
+        assert!(methods.contains(&"PUT"));
+        assert!(methods.contains(&"PATCH"));
+        assert!(methods.contains(&"DELETE"));
+        assert!(methods.contains(&"HEAD"));
+        assert!(methods.contains(&"OPTIONS"));
+    }
+
+    // RT6: UseGuards decorator extraction
+    #[test]
+    fn use_guards_decorator() {
+        // Given: nestjs_guards_pipes.ts with @UseGuards(AuthGuard)
+        let source = fixture("nestjs_guards_pipes.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract decorators
+        let decorators = extractor.extract_decorators(&source, "nestjs_guards_pipes.ts");
+
+        // Then: UseGuards with AuthGuard
+        let guards: Vec<&DecoratorInfo> = decorators
+            .iter()
+            .filter(|d| d.name == "UseGuards")
+            .collect();
+        assert!(!guards.is_empty(), "expected UseGuards decorators");
+        let auth_guard = guards
+            .iter()
+            .find(|d| d.arguments.contains(&"AuthGuard".to_string()));
+        assert!(auth_guard.is_some(), "expected AuthGuard argument");
+    }
+
+    // RT7: only gap-relevant decorators (UseGuards, not Delete)
+    #[test]
+    fn multiple_decorators_on_method() {
+        // Given: nestjs_controller.ts with @Delete(':id') @UseGuards(AuthGuard) on remove()
+        let source = fixture("nestjs_controller.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract decorators
+        let decorators = extractor.extract_decorators(&source, "nestjs_controller.ts");
+
+        // Then: UseGuards only (Delete is a route decorator, not gap-relevant)
+        let names: Vec<&str> = decorators.iter().map(|d| d.name.as_str()).collect();
+        assert!(
+            names.contains(&"UseGuards"),
+            "expected UseGuards in {names:?}"
+        );
+        assert!(
+            !names.contains(&"Delete"),
+            "Delete should not be in decorators"
+        );
+    }
+
+    // RT8: class-validator decorators on DTO
+    #[test]
+    fn class_validator_on_dto() {
+        // Given: nestjs_dto_validation.ts with @IsEmail, @IsNotEmpty on fields
+        let source = fixture("nestjs_dto_validation.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract decorators
+        let decorators = extractor.extract_decorators(&source, "nestjs_dto_validation.ts");
+
+        // Then: IsEmail and IsNotEmpty extracted
+        let names: Vec<&str> = decorators.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"IsEmail"), "expected IsEmail in {names:?}");
+        assert!(
+            names.contains(&"IsNotEmpty"),
+            "expected IsNotEmpty in {names:?}"
+        );
+    }
+
+    // RT9: UsePipes decorator
+    #[test]
+    fn use_pipes_decorator() {
+        // Given: nestjs_guards_pipes.ts with @UsePipes(ValidationPipe)
+        let source = fixture("nestjs_guards_pipes.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract decorators
+        let decorators = extractor.extract_decorators(&source, "nestjs_guards_pipes.ts");
+
+        // Then: UsePipes with ValidationPipe
+        let pipes: Vec<&DecoratorInfo> =
+            decorators.iter().filter(|d| d.name == "UsePipes").collect();
+        assert!(!pipes.is_empty(), "expected UsePipes decorators");
+        assert!(pipes[0].arguments.contains(&"ValidationPipe".to_string()));
+    }
+
+    // RT10: empty source returns empty for routes and decorators
+    #[test]
+    fn empty_source_returns_empty_routes_and_decorators() {
+        // Given: empty source
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract routes and decorators
+        let routes = extractor.extract_routes("", "empty.ts");
+        let decorators = extractor.extract_decorators("", "empty.ts");
+
+        // Then: both empty
+        assert!(routes.is_empty());
+        assert!(decorators.is_empty());
+    }
+
+    // RT11: non-NestJS class returns no routes
+    #[test]
+    fn non_nestjs_class_ignored() {
+        // Given: class_methods.ts (plain class, no @Controller)
+        let source = fixture("class_methods.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract routes
+        let routes = extractor.extract_routes(&source, "class_methods.ts");
+
+        // Then: empty
+        assert!(routes.is_empty(), "expected no routes from plain class");
+    }
+
+    // RT12: handler_name and class_name correct
+    #[test]
+    fn route_handler_and_class_name() {
+        // Given: nestjs_controller.ts
+        let source = fixture("nestjs_controller.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract routes
+        let routes = extractor.extract_routes(&source, "nestjs_controller.ts");
+
+        // Then: handler names and class name correct
+        let handlers: Vec<&str> = routes.iter().map(|r| r.handler_name.as_str()).collect();
+        assert!(handlers.contains(&"findAll"));
+        assert!(handlers.contains(&"create"));
+        assert!(handlers.contains(&"remove"));
+        for route in &routes {
+            assert_eq!(route.class_name, "UsersController");
+        }
+    }
+
+    // RT13: class-level UseGuards decorator is extracted
+    #[test]
+    fn class_level_use_guards() {
+        // Given: nestjs_guards_pipes.ts with @UseGuards(JwtAuthGuard) at class level
+        let source = fixture("nestjs_guards_pipes.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract decorators
+        let decorators = extractor.extract_decorators(&source, "nestjs_guards_pipes.ts");
+
+        // Then: JwtAuthGuard class-level decorator is extracted
+        let class_guards: Vec<&DecoratorInfo> = decorators
+            .iter()
+            .filter(|d| {
+                d.name == "UseGuards"
+                    && d.target_name == "ProtectedController"
+                    && d.class_name == "ProtectedController"
+            })
+            .collect();
+        assert!(
+            !class_guards.is_empty(),
+            "expected class-level UseGuards, got {decorators:?}"
+        );
+        assert!(class_guards[0]
+            .arguments
+            .contains(&"JwtAuthGuard".to_string()));
+    }
+
+    // RT14: non-literal controller path produces <dynamic>
+    #[test]
+    fn dynamic_controller_path() {
+        // Given: nestjs_dynamic_routes.ts with @Controller(BASE_PATH)
+        let source = fixture("nestjs_dynamic_routes.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract routes
+        let routes = extractor.extract_routes(&source, "nestjs_dynamic_routes.ts");
+
+        // Then: path contains <dynamic>
+        assert_eq!(routes.len(), 1);
+        assert!(
+            routes[0].path.contains("<dynamic>"),
+            "expected <dynamic> in path, got {:?}",
+            routes[0].path
+        );
     }
 
     // TC11: abstract class methods are extracted with class_name and export status

@@ -72,7 +72,7 @@ Phase 8a (Lint Reliability) in progress. v0.1.2 published to crates.io. 13 proje
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 726 passing | -- |
+| Tests | 741 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
