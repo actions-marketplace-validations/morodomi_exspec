@@ -37,18 +37,23 @@ cargo run -- --lang rust .                      # self-dogfooding (BLOCK 0件を
 ## TDD Workflow
 
 ```
-spec → sync-plan → plan-review → RED → GREEN → REFACTOR → REVIEW → COMMIT
+spec → sync-plan → plan-review → orchestrate(RED → GREEN → REFACTOR → REVIEW → COMMIT)
 ```
 
 - spec: plan mode でスコープ定義
 - sync-plan: plan を Cycle doc へ昇格
 - plan-review: 設計検証（Codex 利用可能時は competitive review）
-- RED: テスト作成 → 失敗確認
-- GREEN: 最小限の実装 → テスト通過
-- REFACTOR: テスト維持しつつコード品質改善
-- REVIEW: 多角的コードレビュー
+- orchestrate: RED→GREEN→REFACTOR→REVIEW→COMMITを自律管理
 
-**orchestrate** (`dev-crew:orchestrate`): PdMとしてsync-plan→RED→GREEN→REFACTOR→REVIEW→COMMITを自律管理。PASS/WARN→自動進行、BLOCK→再試行→ユーザー報告。
+**orchestrate** (`dev-crew:orchestrate`): PdMとしてRED→GREEN→REFACTOR→REVIEW→COMMITを自律管理。PASS/WARN→自動進行、BLOCK→再試行→ユーザー報告。
+
+### Post-Approve Action
+
+plan approve 後の実行順序:
+
+1. **sync-plan**: Cycle doc 作成
+2. **plan-review**: 設計レビュー (design-reviewer)
+3. **orchestrate**: RED → GREEN → REFACTOR → REVIEW → COMMIT
 
 Cycle docs: `docs/cycles/YYYYMMDD_HHMM_<topic>.md`
 

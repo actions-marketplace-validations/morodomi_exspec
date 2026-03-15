@@ -826,24 +826,55 @@ pub fn resolve_import_path(
 }
 
 /// Returns true if the resolved file path is a helper/non-SUT file that should be
-/// excluded from Layer 2 import tracing (e.g., `constants.ts`, `index.ts`).
+/// excluded from Layer 2 import tracing.
+///
+/// Filtered patterns:
+/// - Exact filenames: `constants.*`, `index.*`
+/// - Suffix patterns: `*.enum.*`, `*.interface.*`, `*.exception.*`
+/// - Test utility paths: files under `/test/` or `/__tests__/`
 fn is_non_sut_helper(file_path: &str) -> bool {
-    Path::new(file_path)
-        .file_name()
-        .and_then(|f| f.to_str())
-        .is_some_and(|name| {
-            matches!(
-                name,
-                "constants.ts"
-                    | "constants.js"
-                    | "constants.tsx"
-                    | "constants.jsx"
-                    | "index.ts"
-                    | "index.js"
-                    | "index.tsx"
-                    | "index.jsx"
-            )
-        })
+    // Test-utility paths: files under /test/ or /__tests__/ directories.
+    // Uses segment-based matching to avoid false positives (e.g., "contest/src/foo.ts").
+    // Note: Windows path separators are intentionally not handled; this tool targets Unix-style paths.
+    if file_path
+        .split('/')
+        .any(|seg| seg == "test" || seg == "__tests__")
+    {
+        return true;
+    }
+
+    let Some(file_name) = Path::new(file_path).file_name().and_then(|f| f.to_str()) else {
+        return false;
+    };
+
+    // Exact-match barrel/constant files
+    if matches!(
+        file_name,
+        "constants.ts"
+            | "constants.js"
+            | "constants.tsx"
+            | "constants.jsx"
+            | "index.ts"
+            | "index.js"
+            | "index.tsx"
+            | "index.jsx"
+    ) {
+        return true;
+    }
+
+    // Suffix-match: *.enum.*, *.interface.*, *.exception.*
+    // Strip the outermost extension (e.g. "request-method.enum.ts" → "request-method.enum")
+    // then check that the stem ends with ".enum", ".interface", or ".exception",
+    // but is NOT exactly "enum", "interface", or "exception" (plain filename guard).
+    if let Some(stem) = Path::new(file_name).file_stem().and_then(|s| s.to_str()) {
+        for suffix in &[".enum", ".interface", ".exception"] {
+            if stem.ends_with(suffix) && stem != &suffix[1..] {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 fn production_stem(path: &str) -> Option<&str> {
@@ -2130,5 +2161,74 @@ describe('UsersController', () => {});
     fn is_non_sut_helper_rejects_directory_name() {
         assert!(!is_non_sut_helper("constants/app.ts"));
         assert!(!is_non_sut_helper("index/service.ts"));
+    }
+
+    // HELPER-06: *.enum.ts is detected as non-SUT helper
+    #[test]
+    fn is_non_sut_helper_enum_ts() {
+        // Given: a file with .enum.ts suffix
+        let path = "src/enums/request-method.enum.ts";
+        // When: is_non_sut_helper() is called
+        // Then: returns true
+        assert!(is_non_sut_helper(path));
+    }
+
+    // HELPER-07: *.interface.ts is detected as non-SUT helper
+    #[test]
+    fn is_non_sut_helper_interface_ts() {
+        // Given: a file with .interface.ts suffix
+        let path = "src/interfaces/middleware-configuration.interface.ts";
+        // When: is_non_sut_helper() is called
+        // Then: returns true
+        assert!(is_non_sut_helper(path));
+    }
+
+    // HELPER-08: *.exception.ts is detected as non-SUT helper
+    #[test]
+    fn is_non_sut_helper_exception_ts() {
+        // Given: a file with .exception.ts suffix
+        let path = "src/errors/unknown-module.exception.ts";
+        // When: is_non_sut_helper() is called
+        // Then: returns true
+        assert!(is_non_sut_helper(path));
+    }
+
+    // HELPER-09: file inside a test path is detected as non-SUT helper
+    #[test]
+    fn is_non_sut_helper_test_path() {
+        // Given: a file located under a /test/ directory
+        let path = "packages/core/test/utils/string.cleaner.ts";
+        // When: is_non_sut_helper() is called
+        // Then: returns true
+        assert!(is_non_sut_helper(path));
+        // __tests__ variant
+        assert!(is_non_sut_helper("packages/core/__tests__/utils/helper.ts"));
+        // segment-based: "contest" should NOT match
+        assert!(!is_non_sut_helper(
+            "/home/user/projects/contest/src/service.ts"
+        ));
+        assert!(!is_non_sut_helper("src/latest/foo.ts"));
+    }
+
+    // HELPER-10: suffix-like but plain filename (not a suffix) is rejected
+    #[test]
+    fn is_non_sut_helper_rejects_plain_filename() {
+        // Given: files whose name is exactly enum.ts / interface.ts / exception.ts
+        // (the type keyword is the entire filename, not a suffix)
+        // When: is_non_sut_helper() is called
+        // Then: returns false (these may be real SUT files)
+        assert!(!is_non_sut_helper("src/enum.ts"));
+        assert!(!is_non_sut_helper("src/interface.ts"));
+        assert!(!is_non_sut_helper("src/exception.ts"));
+    }
+
+    // HELPER-11: extension variants (.js/.tsx/.jsx) with enum/interface suffix are detected
+    #[test]
+    fn is_non_sut_helper_enum_interface_extension_variants() {
+        // Given: files with .enum or .interface suffix and non-.ts extension
+        // When: is_non_sut_helper() is called
+        // Then: returns true
+        assert!(is_non_sut_helper("src/foo.enum.js"));
+        assert!(is_non_sut_helper("src/bar.interface.tsx"));
     }
 }
