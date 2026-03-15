@@ -40,7 +40,7 @@ Phase 8a (Lint Reliability) + Phase 8b (observe PoC) in progress. v0.1.2 publish
 | 4a | Test status code assertion extractor | TODO |
 | 4b | Error-path gap analyzer | TODO |
 | 5 | `exspec --observe` CLI + Markdown output | TODO |
-| 6 | NestJS precision verification (ground truth comparison) | TODO |
+| 6 | NestJS precision verification (ground truth comparison) | DONE |
 
 ## Supported Languages
 

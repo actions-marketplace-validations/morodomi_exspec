@@ -30,4 +30,5 @@ dogfooding/
 
 # Codex
 .agents/
-scripts/
+scripts/*
+!scripts/*.py
