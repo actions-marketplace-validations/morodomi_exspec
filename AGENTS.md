@@ -4,6 +4,7 @@
 
 | 何を知りたいか | どこを見るか |
 |---------------|-------------|
+| 存在意義・原則・判断基準 | [CONSTITUTION.md](CONSTITUTION.md) |
 | プロジェクトの方向性と判断理由 | [ROADMAP.md](ROADMAP.md) |
 | 設計思想 | [docs/philosophy.md](docs/philosophy.md) |
 | 既知の制約 | [docs/known-constraints.md](docs/known-constraints.md) |
@@ -90,8 +91,8 @@ exspec/
 │   ├── lang-python/           Python固有 (pytest)
 │   │   └── queries/*.scm      (14 queries)
 │   ├── lang-typescript/       TypeScript固有 (Jest/Vitest)
-│   │   ├── queries/*.scm      (15 queries, incl. production_function, decorator, import_mapping)
-│   │   └── observe.rs         observe PoC (production function/route抽出, test-to-code mapping)
+│   │   ├── queries/*.scm      (18 queries, incl. observe: production_function, decorator, import_mapping, re_export, exported_symbol)
+│   │   └── observe.rs         observe (production function/route抽出, test-to-code mapping, barrel resolution)
 │   ├── lang-php/              PHP固有 (PHPUnit/Pest)
 │   │   └── queries/*.scm      (13 queries)
 │   ├── lang-rust/             Rust固有 (cargo test)
@@ -127,7 +128,7 @@ queries/
   └── import_pbt.scm           PBTライブラリimport検出
 ```
 
-TypeScript追加: `production_function.scm`, `decorator.scm`, `import_mapping.scm` (observe PoC用)
+TypeScript observe用: `production_function.scm`, `decorator.scm`, `import_mapping.scm`, `re_export.scm`, `exported_symbol.scm`
 
 ## Development Approach: SPEC-Driven
 

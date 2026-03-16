@@ -1,3 +1,4 @@
+@CONSTITUTION.md
 @AGENTS.md
 
 # exspec (Claude Code Extensions)
@@ -13,7 +14,8 @@ Claudeは日本語。開発者は日本語しか理解できない。
 
 ## Source of Truth
 
-- **振る舞い**: コード + テスト + fixtures
+- **原則・存在意義**: [CONSTITUTION.md](CONSTITUTION.md) (Layer 0)
+- **振る舞い**: コード + テスト + fixtures (Layer 4)
 - **判断理由 (なぜそうしたか)**: [ROADMAP.md](ROADMAP.md) Key Design Decisions + 各セクションの **Why** / **Decision**
 - **設定**: [docs/configuration.md](docs/configuration.md)
 - **ユーザー向け**: [README.md](README.md)
