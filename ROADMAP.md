@@ -203,6 +203,23 @@ Phase 8c priorities (ordered):
 
 **Deferred**: Go language support, Tier 3 rules, GitHub Action marketplace. Reconsidered after 8c delivers.
 
+#### 8c-1: Failure boundary definition (DONE)
+
+6 failure boundaries identified, tested, and documented. See [docs/observe-boundaries.md](docs/observe-boundaries.md) for full analysis.
+
+| Boundary | Root Cause | Fixability | Priority for 8c-2 |
+|----------|-----------|------------|-------------------|
+| B1: Namespace re-export | `re_export.scm` missing pattern | Medium | Low (uncommon) |
+| B2: Cross-package barrel | Non-relative path exclusion | Hard | High (7/11 FN) |
+| B3: tsconfig path alias | Same as B2 | Hard | High (NestJS monorepo) |
+| B4: Interface/enum filter | Intentional but over-broad | Medium | Medium (4/11 FN) |
+| B5: Dynamic import | Static-only extraction | Low | Low (rare in tests) |
+| B6: scan_root boundary | By design | N/A | N/A |
+
+**Decision**: Generated code detection and decorator factory/chaining were excluded from 8c-1 scope because they did not appear in PoC evaluation results. If future evaluations reveal these as FN sources, they will be added as B7/B8.
+
+**8c-2 scope decision**: B2+B3 (tsconfig path resolution) is the highest-impact fix target. B4 (context-aware filtering) is a secondary target. B1/B5 are low priority.
+
 ## Backlog
 
 | Priority | Task | Trigger |

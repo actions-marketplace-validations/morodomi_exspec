@@ -2932,4 +2932,362 @@ describe('UsersController', () => {});
         // Then: both files returned
         assert_eq!(result.len(), 2, "expected 2 resolved files, got {result:?}");
     }
+
+    // === Boundary Specification Tests (B1-B6) ===
+    // These tests document CURRENT behavior at failure boundaries.
+    // All assertions reflect known limitations, not desired future behavior.
+
+    // TC-01: Boundary B1 — namespace re-export is NOT captured by extract_barrel_re_exports
+    #[test]
+    fn boundary_b1_ns_reexport_not_captured() {
+        // Given: barrel index.ts with `export * as Ns from './validators'`
+        let source = "export * as Validators from './validators';";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_barrel_re_exports
+        let re_exports = extractor.extract_barrel_re_exports(source, "index.ts");
+
+        // Then: namespace re-export is NOT captured (empty vec)
+        // Note: re_export.scm only handles `export { X } from` and `export * from`,
+        //       not `export * as Ns from` (namespace export is a different AST node)
+        assert!(
+            re_exports.is_empty(),
+            "expected empty re_exports for namespace export, got {:?}",
+            re_exports
+        );
+    }
+
+    // TC-02: Boundary B1 — namespace re-export causes test-to-code mapping miss (FN)
+    #[test]
+    fn boundary_b1_ns_reexport_mapping_miss() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   validators/foo.service.ts (production)
+        //   index.ts: `export * as Validators from './validators'`
+        //   validators/index.ts: `export { FooService } from './foo.service'`
+        //   test/foo.spec.ts: `import { Validators } from '../index'`
+        let dir = TempDir::new().unwrap();
+        let validators_dir = dir.path().join("validators");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&validators_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        // Production file
+        let prod_path = validators_dir.join("foo.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        // Root barrel: namespace re-export (B1 boundary)
+        std::fs::write(
+            dir.path().join("index.ts"),
+            "export * as Validators from './validators';",
+        )
+        .unwrap();
+
+        // validators/index.ts: named re-export
+        std::fs::write(
+            validators_dir.join("index.ts"),
+            "export { FooService } from './foo.service';",
+        )
+        .unwrap();
+
+        // Test imports via namespace re-export
+        let test_path = test_dir.join("foo.spec.ts");
+        std::fs::write(
+            &test_path,
+            "import { Validators } from '../index';\ndescribe('FooService', () => {});",
+        )
+        .unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: foo.service.ts has NO test_files (FN — namespace re-export not resolved)
+        // Layer 1 (filename convention) produces no match either, so the mapping has no test_files.
+        let all_test_files: Vec<&String> =
+            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        assert!(
+            all_test_files.is_empty(),
+            "expected no test_files mapped (FN: namespace re-export not resolved), got {:?}",
+            all_test_files
+        );
+    }
+
+    // TC-03: Boundary B2 — non-relative import is skipped by extract_imports
+    #[test]
+    fn boundary_b2_non_relative_import_skipped() {
+        // Given: source with `import { Injectable } from '@nestjs/common'`
+        let source = "import { Injectable } from '@nestjs/common';";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_imports
+        let imports = extractor.extract_imports(source, "app.service.ts");
+
+        // Then: imports is empty (non-relative paths are excluded)
+        assert!(
+            imports.is_empty(),
+            "expected empty imports for non-relative path, got {:?}",
+            imports
+        );
+    }
+
+    // TC-04: Boundary B2 — cross-package barrel import is unresolvable (FN)
+    #[test]
+    fn boundary_b2_cross_pkg_barrel_unresolvable() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   packages/core/ (scan_root)
+        //   packages/core/src/foo.service.ts (production)
+        //   packages/common/src/foo.ts (production, in different package)
+        //   packages/core/test/foo.spec.ts: `import { Foo } from '@org/common'` (non-relative)
+        let dir = TempDir::new().unwrap();
+        let core_src = dir.path().join("packages").join("core").join("src");
+        let core_test = dir.path().join("packages").join("core").join("test");
+        let common_src = dir.path().join("packages").join("common").join("src");
+        std::fs::create_dir_all(&core_src).unwrap();
+        std::fs::create_dir_all(&core_test).unwrap();
+        std::fs::create_dir_all(&common_src).unwrap();
+
+        let prod_path = core_src.join("foo.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        let common_path = common_src.join("foo.ts");
+        std::fs::File::create(&common_path).unwrap();
+
+        let test_path = core_test.join("foo.spec.ts");
+        std::fs::write(
+            &test_path,
+            "import { Foo } from '@org/common';\ndescribe('Foo', () => {});",
+        )
+        .unwrap();
+
+        let scan_root = dir.path().join("packages").join("core");
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports(scan_root=packages/core/)
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+
+        // Then: packages/common/src/foo.ts has NO test_files (cross-package import not resolved)
+        // Since `@org/common` is non-relative, extract_imports will skip it entirely.
+        let all_test_files: Vec<&String> =
+            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        assert!(
+            all_test_files.is_empty(),
+            "expected no test_files mapped (FN: cross-package import not resolved), got {:?}",
+            all_test_files
+        );
+    }
+
+    // TC-05: Boundary B3 — tsconfig path alias is treated same as non-relative import
+    #[test]
+    fn boundary_b3_tsconfig_alias_not_resolved() {
+        // Given: source with `import { FooService } from '@app/services/foo.service'`
+        let source = "import { FooService } from '@app/services/foo.service';";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_imports
+        let imports = extractor.extract_imports(source, "app.module.ts");
+
+        // Then: imports is empty (@app/ is non-relative, same code path as TC-03)
+        // Note: tsconfig path aliases are treated identically to package imports.
+        // Same root cause as B2 but different user expectation.
+        assert!(
+            imports.is_empty(),
+            "expected empty imports for tsconfig alias, got {:?}",
+            imports
+        );
+    }
+
+    // TC-06: Boundary B4 — .enum.ts is filtered out by is_non_sut_helper
+    #[test]
+    fn boundary_b4_enum_primary_target_filtered() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   src/route-paramtypes.enum.ts (production)
+        //   test/route.spec.ts: `import { RouteParamtypes } from '../src/route-paramtypes.enum'`
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        let prod_path = src_dir.join("route-paramtypes.enum.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        let test_path = test_dir.join("route.spec.ts");
+        std::fs::write(
+            &test_path,
+            "import { RouteParamtypes } from '../src/route-paramtypes.enum';\ndescribe('Route', () => {});",
+        )
+        .unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: route-paramtypes.enum.ts has NO test_files (filtered by is_non_sut_helper)
+        // Layer 1 produces no filename match; Layer 2 import is resolved but is_non_sut_helper
+        // filters it out. The FileMapping entry exists but test_files is empty.
+        let all_test_files: Vec<&String> =
+            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        assert!(
+            all_test_files.is_empty(),
+            "expected no test_files (.enum.ts filtered as non-SUT helper), got {:?}",
+            all_test_files
+        );
+    }
+
+    // TC-07: Boundary B4 — .interface.ts is filtered out by is_non_sut_helper
+    #[test]
+    fn boundary_b4_interface_primary_target_filtered() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   src/user.interface.ts (production)
+        //   test/user.spec.ts: `import { User } from '../src/user.interface'`
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        let prod_path = src_dir.join("user.interface.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        let test_path = test_dir.join("user.spec.ts");
+        std::fs::write(
+            &test_path,
+            "import { User } from '../src/user.interface';\ndescribe('User', () => {});",
+        )
+        .unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: user.interface.ts has NO test_files (filtered by is_non_sut_helper)
+        // Same filter path as TC-06: is_non_sut_helper returns true for .interface.ts files.
+        let all_test_files: Vec<&String> =
+            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        assert!(
+            all_test_files.is_empty(),
+            "expected no test_files (.interface.ts filtered as non-SUT helper), got {:?}",
+            all_test_files
+        );
+    }
+
+    // TC-08: Boundary B5 — dynamic import() is not captured by extract_imports
+    #[test]
+    fn boundary_b5_dynamic_import_not_extracted() {
+        // Given: fixture("import_dynamic.ts") containing `const m = await import('./user.service')`
+        let source = fixture("import_dynamic.ts");
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_imports
+        let imports = extractor.extract_imports(&source, "import_dynamic.ts");
+
+        // Then: imports is empty (dynamic import() not captured by import_mapping.scm)
+        assert!(
+            imports.is_empty(),
+            "expected empty imports for dynamic import(), got {:?}",
+            imports
+        );
+    }
+
+    // TC-09: Boundary B6 — import target outside scan_root is not mapped
+    #[test]
+    fn boundary_b6_import_outside_scan_root() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   packages/core/ (scan_root)
+        //   packages/core/src/foo.service.ts (production)
+        //   packages/common/src/shared.ts (outside scan_root)
+        //   packages/core/test/foo.spec.ts: `import { Shared } from '../../common/src/shared'`
+        let dir = TempDir::new().unwrap();
+        let core_src = dir.path().join("packages").join("core").join("src");
+        let core_test = dir.path().join("packages").join("core").join("test");
+        let common_src = dir.path().join("packages").join("common").join("src");
+        std::fs::create_dir_all(&core_src).unwrap();
+        std::fs::create_dir_all(&core_test).unwrap();
+        std::fs::create_dir_all(&common_src).unwrap();
+
+        let prod_path = core_src.join("foo.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        // shared.ts is outside scan_root (packages/core/)
+        let shared_path = common_src.join("shared.ts");
+        std::fs::File::create(&shared_path).unwrap();
+
+        let test_path = core_test.join("foo.spec.ts");
+        std::fs::write(
+            &test_path,
+            "import { Shared } from '../../common/src/shared';\ndescribe('Foo', () => {});",
+        )
+        .unwrap();
+
+        let scan_root = dir.path().join("packages").join("core");
+        // Only production files within scan_root are registered
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports(scan_root=packages/core/)
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+
+        // Then: shared.ts outside scan_root is not in production_files, so no mapping occurs.
+        // `../../common/src/shared` resolves outside scan_root; it won't be in production_files
+        // and won't match foo.service.ts by filename either.
+        let all_test_files: Vec<&String> =
+            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        assert!(
+            all_test_files.is_empty(),
+            "expected no test_files (import target outside scan_root), got {:?}",
+            all_test_files
+        );
+    }
 }
