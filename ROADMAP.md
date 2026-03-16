@@ -203,6 +203,66 @@ Phase 8c priorities (ordered):
 
 **Deferred**: Go language support, Tier 3 rules, GitHub Action marketplace. Reconsidered after 8c delivers.
 
+#### 8c-1: Failure boundary definition (DONE)
+
+6 failure boundaries identified, tested, and documented. See [docs/observe-boundaries.md](docs/observe-boundaries.md) for full analysis.
+
+| Boundary | Root Cause | Fixability | Priority for 8c-2 |
+|----------|-----------|------------|-------------------|
+| B1: Namespace re-export | `re_export.scm` missing pattern | Medium | Low (uncommon) |
+| B2: Cross-package barrel | Non-relative path exclusion | Hard | High (7/11 FN) |
+| B3: tsconfig path alias | Same as B2 | Hard | High (NestJS monorepo) |
+| B4: Interface/enum filter | Intentional but over-broad | Medium | Medium (4/11 FN) |
+| B5: Dynamic import | Static-only extraction | Low | Low (rare in tests) |
+| B6: scan_root boundary | By design | N/A | N/A |
+
+**Decision**: Generated code detection and decorator factory/chaining were excluded from 8c-1 scope because they did not appear in PoC evaluation results. If future evaluations reveal these as FN sources, they will be added as B7/B8.
+
+**8c-2 scope decision**: B2+B3 (tsconfig path resolution) is the highest-impact fix target. B4 (context-aware filtering) is a secondary target. B1/B5 are low priority.
+
+#### 8c-2: observe MVP ship (DONE)
+
+Ship criteria confirmed:
+- Precision 99.4% >= 98% threshold: PASS
+- Recall 93.4% >= 90% threshold: PASS
+
+README に observe セクション追加。applicability scope を明示して公開。
+
+**Decision**: 現在の精度で ship する。monorepo 対応 (B2+B3) は 8c-3 で対応。
+**Why**: "Ship then iterate" (Design Principle #3)。既に ship criteria 達成済み。monorepo 対応を待つことで全ユーザーへの公開が遅れるリスクの方が大きい。
+
+#### 8c-3: tsconfig path resolution (DONE)
+
+B3 (tsconfig path alias) を解消。`@app/*` 等のパスエイリアスが import tracing で解決可能に。
+
+**Implementation**:
+- `crates/lang-typescript/src/tsconfig.rs`: TsconfigPaths, PathAlias, discover_tsconfig, resolve_alias
+- tsconfig.json `compilerOptions.paths` + `baseUrl` パース
+- `extends` チェーン (相対パスのみ、max 3 levels)
+- tsconfig 自動発見 (scan_root から上方探索、max 10 levels)
+- `map_test_files_with_imports` に Layer 2b (alias resolution) を追加
+
+**Limitations (documented in observe-boundaries.md)**:
+- JSON5 tsconfig 非対応 (標準 JSON のみ、パース失敗時は graceful fallback)
+- extends の npm パッケージ参照は無視
+- baseUrl 単体解決 (paths なし) は非対応
+- B2 (node_modules/workspace) は未解決
+
+**Why B3 only (not B2)**: B3 はプロジェクト内の tsconfig.json を読むだけで完結する。B2 は node_modules 解決が必要で、Yarn/pnpm/npm のバージョン差異・workspace 構成・hoisting 戦略の組み合わせが爆発する。B3 単独でも NestJS monorepo の path alias パターンをカバーできる。
+
+#### 8c-4: context-aware enum/interface filter (DONE)
+
+B4 (interface/enum filter side-effect) を部分解消。`is_non_sut_helper` に `is_known_production` パラメータを追加し、`production_files` に含まれる enum/interface ファイルへのマッピングを許可。
+
+**Implementation**:
+- `is_type_definition_file`: suffix check (`.enum`, `.interface`, `.exception`) を独立関数に抽出
+- `is_non_sut_helper(file_path, is_known_production)`: `is_known_production=true` のとき suffix filter を bypass
+- `collect_matches` の 2 call sites で `canonical_to_idx.contains_key()` により production 判定
+
+**Remaining limitation**: barrel 解決パス (`resolve_barrel_exports_inner`) は `is_known_production=false` を渡す。barrel 経由で enum ファイルに到達するケースでは filter が残存。direct import のみ解消。
+
+**Why partial resolution**: barrel 内部解決は `canonical_to_idx` にアクセスできない。barrel 経由の enum は `collect_matches` で再チェックされるが、barrel が事前にフィルタすると到達しない edge case がある。完全解消は barrel infrastructure のリファクタリングが必要で、cost-benefit が合わない。
+
 ## Backlog
 
 | Priority | Task | Trigger |

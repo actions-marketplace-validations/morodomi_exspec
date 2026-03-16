@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 8b (observe PoC) completed successfully. Phase 8c (observe MVP) next. v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages, 767 tests.
+Phase 8c-4 (context-aware enum/interface filter) completed. `is_non_sut_helper` now accepts `is_known_production` parameter; enum/interface/exception files listed in `production_files` bypass suffix filter. B4 failure boundary partially resolved (direct import only, barrel path deferred). v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages.
 
 ## Progress
 
@@ -27,7 +27,10 @@ Phase 8b (observe PoC) completed successfully. Phase 8c (observe MVP) next. v0.1
 | 7 - OSS release (crates.io v0.1.2) | DONE |
 | 8a - Lint Reliability (BLOCK/WARN/INFO FP fixes) | IN PROGRESS |
 | 8b - observe PoC (static test-to-code mapping) | **DONE** |
-| 8c - observe MVP (failure boundaries, product metrics) | NEXT |
+| 8c-1 - observe failure boundaries | **DONE** |
+| 8c-2 - observe MVP ship (README, ship criteria) | **DONE** |
+| 8c-3 - tsconfig path resolution | **DONE** |
+| 8c-4 - context-aware enum/interface filter | **DONE** |
 
 ### Phase 8b Final Results
 
@@ -38,7 +41,7 @@ observe PoC validated on 2 repositories. Static AST-only test-to-code mapping is
 | nestjs/nest (GT complete) | 99.4% | 93.4% | 96.3% | 1 | 11 |
 | typeorm (50-pair spot-check) | 100% | -- | -- | 0 | -- |
 
-Remaining FN (NestJS): cross-package barrel (7), interface/enum filter (4).
+Remaining FN (NestJS): cross-package barrel (7), interface/enum filter via barrel (partial, see B4).
 
 ## Supported Languages
 
@@ -84,7 +87,7 @@ Remaining FN (NestJS): cross-package barrel (7), interface/enum filter (4).
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 767 passing | -- |
+| Tests | 835 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
