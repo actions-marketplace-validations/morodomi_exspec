@@ -1,7 +1,7 @@
 ---
 feature: "Task 8b — Barrel Import Resolution (同一パッケージ内)"
 cycle: "20260316_0851"
-phase: REVIEW
+phase: DONE
 complexity: standard
 test_count: 10
 risk_level: low
@@ -90,7 +90,7 @@ Layer 2 import tracing で解決し、observe の Recall を改善する。
 
 ### TODO
 
-- [ ] EVAL: nestjs/nest で Recall 改善を検証
+- [x] EVAL: nestjs/nest で Recall 改善を検証 → Recall 93.4% (目標達成), Precision 15.5% (wildcard FP爆増)
 
 ### WIP
 
@@ -113,6 +113,25 @@ Layer 2 import tracing で解決し、observe の Recall を改善する。
 - [x] BARREL-09: extract_imports が symbol 名を保持する
 
 ## Progress Log (追記)
+
+### EVAL (2026-03-16)
+
+nestjs/nest で observe 精度評価を実施。
+
+| Metric | Before (7.5) | After (8b) | Target |
+|--------|-------------|------------|--------|
+| Recall | 78.3% | 93.4% | 90%+ |
+| Precision | 90.3% | 15.5% | 90%+ |
+| FN | 36 | 11 | 14以下 |
+| FP | 14 | 847 | -- |
+
+**Recall 目標達成**。FN 36→11 (25件解消)。barrel_import 32件中25件を TP に転換。
+
+**Precision 急落の原因**: wildcard re-export (`export * from '...'`) が barrel 内の全ファイルを
+解決対象に含め、1テストファイルが数十のプロダクションファイルにマッチ。
+例: `apply-decorators.spec.ts` → `../../decorators` barrel → 全 decorator.ts に展開 (20+ FP)。
+
+**次タスク**: wildcard re-export の FP 対策。symbol フィルタ強化または barrel ファンアウト上限の導入。
 
 ### REVIEW Phase (2026-03-16)
 
