@@ -147,6 +147,30 @@ nestjs/nest (packages/common + packages/core, 130 test files, 166 primary mappin
 - Initial scope: same-file, 1-hop, no recursion, known-assertion-only
 - Cross-file/cross-module traversal deferred until observe proves feasibility
 
+#### Task 7.5: Helper filter extension (2026-03-16)
+
+Precision 66.3% → 90.3% by filtering non-SUT helper files (constants, enum, interface, exception, test-util, index.ts).
+
+#### Task 8b: Barrel import resolution (2026-03-16)
+
+Same-package barrel import resolution via index.ts re-exports. Named + wildcard re-export support with symbol-aware filtering.
+
+| Metric | Task 6 | Task 7.5 | Task 8b |
+|--------|--------|----------|---------|
+| Precision | 66.3% | 90.3% | **96.3%** |
+| Recall | 80.7% | 78.3% | **93.4%** |
+| F1 | 72.8% | 83.8% | **94.8%** |
+| FP | 68 | 14 | **6** |
+| FN | 32 | 36 | **11** |
+
+**Key learnings**:
+1. Named + wildcard symbol-aware barrel resolution is effective. Wildcard file-level expansion without symbol filter is catastrophic (FP 847)
+2. Both Precision and Recall improved from baseline -- barrel was the Recall bottleneck, helper filtering was the Precision bottleneck
+3. Remaining FN: cross-package barrel (Pattern A, 7/11) and interface/enum filter side-effect (4/11)
+4. Remaining FP: 2+ are GT misses (actual TP), rest are Layer 1 filename false matches
+
+**Decision**: observe PoC succeeds. F1 94.8% on NestJS validates static AST-only test-to-code mapping. Scope: single project (NestJS), TypeScript only.
+
 ### Phase 8c: Branch on PoC result
 
 | observe PoC succeeds | observe PoC fails |
