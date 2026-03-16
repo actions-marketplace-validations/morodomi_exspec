@@ -8,7 +8,7 @@ This document catalogs the known failure boundaries of `exspec observe` -- cases
 |---|----------|-----------|--------|------------|
 | B1 | Namespace re-export | `re_export.scm` lacks `namespace_export` pattern | FN | Medium (query addition) |
 | B2 | Cross-package barrel import | Non-relative paths excluded from import tracing | FN | Hard (requires tsconfig/node_modules resolution) |
-| B3 | tsconfig path alias | Same as B2 (non-relative path) | FN | Hard (requires tsconfig.json parsing) |
+| B3 | tsconfig path alias | ~~Same as B2~~ **Resolved in 8c-3** | ~~FN~~ Resolved | tsconfig.json paths parsing |
 | B4 | Interface/enum filter side-effect | `is_non_sut_helper` filters primary test targets | FN | Medium (context-aware filtering) |
 | B5 | Dynamic import | `import_mapping.scm` only captures static `import` statements | FN | Low (rare in test code) |
 | B6 | Monorepo scan_root boundary | Resolved paths outside scan_root have no production file match | FN | By design |
@@ -41,17 +41,21 @@ Namespace re-export (`export * as Ns from`) produces a `namespace_export` AST no
 
 **Fix path**: Parse `tsconfig.json` paths or resolve `node_modules` symlinks (common in Yarn/pnpm workspaces). High complexity, high reward.
 
-## B3: tsconfig path alias (`@app/*`)
+## B3: tsconfig path alias (`@app/*`) -- Resolved in 8c-3
 
 **Syntax**: `import { FooService } from '@app/services/foo.service'`
 
-**Why it fails**: Same code path as B2. `@app/` does not start with `./` or `../`, so `extract_imports` skips it. The path alias is defined in `tsconfig.json` (e.g., `"@app/*": ["src/*"]`), which observe does not read.
+**Root cause**: `@app/` does not start with `./` or `../`, so `extract_imports` skips it. The path alias is defined in `tsconfig.json` (e.g., `"@app/*": ["src/*"]`).
 
-**Impact**: Common in NestJS monorepo setups. Every import using a path alias becomes invisible.
+**Resolution (Phase 8c-3)**: `tsconfig.rs` module parses `tsconfig.json` `compilerOptions.paths` + `baseUrl`, resolves aliases to absolute paths, and feeds them into the existing file resolution pipeline. Supports `extends` chains (relative paths only, max 3 levels) and auto-discovers `tsconfig.json` by walking up from scan_root.
 
-**Tests**: `boundary_b3_tsconfig_alias_not_resolved`
+**Remaining limitations**:
+- JSON5 tsconfig (comments, trailing commas) not supported -- standard JSON only
+- `extends` referencing npm packages (`@tsconfig/node18`) ignored
+- `baseUrl`-only resolution (without `paths`) not supported
+- B2 (cross-package barrel via `node_modules`) remains unresolved
 
-**Fix path**: Parse `tsconfig.json` `compilerOptions.paths` to resolve aliases to relative paths before import tracing. Moderate complexity.
+**Tests**: `boundary_b3_tsconfig_alias_not_resolved` (without tsconfig -- FN by design), `boundary_b3_tsconfig_alias_resolved` (with tsconfig -- resolved)
 
 ## B4: Interface/enum filter side-effect
 
@@ -94,10 +98,10 @@ Namespace re-export (`export * as Ns from`) produces a `namespace_export` AST no
 Based on these boundaries, observe is most reliable for:
 
 - **Single-package TypeScript projects** (no B2/B3/B6 impact)
-- **Projects using relative imports** (no B2/B3 impact)
+- **Projects using relative imports or tsconfig path aliases** (no B2 impact, B3 resolved)
 - **Projects with standard barrel patterns** (`export { X } from` or `export * from`, no B1 impact)
 
 Observe is **less reliable** for:
-- **Monorepo workspaces** with cross-package imports (B2, B3, B6)
+- **Monorepo workspaces** with cross-package imports via node_modules (B2, B6)
 - **Projects heavy on namespace re-exports** (B1)
 - **Projects where enums/interfaces are primary test targets** (B4)

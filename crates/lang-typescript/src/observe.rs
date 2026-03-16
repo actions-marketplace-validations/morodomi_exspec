@@ -746,6 +746,59 @@ impl TypeScriptExtractor {
         result
     }
 
+    /// Extract all import specifiers from TypeScript source (including non-relative).
+    /// Used for tsconfig alias resolution. Does NOT filter by relative-only.
+    /// Returns deduplicated (specifier, symbols) pairs.
+    pub fn extract_all_import_specifiers(&self, source: &str) -> Vec<(String, Vec<String>)> {
+        let mut parser = Self::parser();
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let source_bytes = source.as_bytes();
+        let query = cached_query(&IMPORT_MAPPING_QUERY_CACHE, IMPORT_MAPPING_QUERY);
+        let symbol_idx = query.capture_index_for_name("symbol_name").unwrap();
+        let specifier_idx = query.capture_index_for_name("module_specifier").unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
+        // Map specifier -> symbols
+        let mut specifier_symbols: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+
+        while let Some(m) = matches.next() {
+            let mut symbol_node = None;
+            let mut symbol = None;
+            let mut specifier = None;
+            for cap in m.captures {
+                if cap.index == symbol_idx {
+                    symbol_node = Some(cap.node);
+                    symbol = Some(cap.node.utf8_text(source_bytes).unwrap_or(""));
+                } else if cap.index == specifier_idx {
+                    specifier = Some(cap.node.utf8_text(source_bytes).unwrap_or(""));
+                }
+            }
+            if let (Some(sym), Some(spec)) = (symbol, specifier) {
+                // Skip relative imports (already handled by extract_imports)
+                if spec.starts_with("./") || spec.starts_with("../") {
+                    continue;
+                }
+                // Skip type-only imports
+                if let Some(snode) = symbol_node {
+                    if is_type_only_import(snode) {
+                        continue;
+                    }
+                }
+                specifier_symbols
+                    .entry(spec.to_string())
+                    .or_default()
+                    .push(sym.to_string());
+            }
+        }
+
+        specifier_symbols.into_iter().collect()
+    }
+
     /// Extract barrel re-export statements (`export { X } from '...'` / `export * from '...'`).
     pub fn extract_barrel_re_exports(&self, source: &str, _file_path: &str) -> Vec<BarrelReExport> {
         let mut parser = Self::parser();
@@ -844,40 +897,75 @@ impl TypeScriptExtractor {
             .flat_map(|m| m.test_files.iter().cloned())
             .collect();
 
+        // Discover and parse tsconfig.json for alias resolution (Layer 2b)
+        let tsconfig_paths =
+            crate::tsconfig::discover_tsconfig(&canonical_root).and_then(|tsconfig_path| {
+                let content = std::fs::read_to_string(&tsconfig_path)
+                    .map_err(|e| {
+                        eprintln!("[exspec] warning: failed to read tsconfig: {e}");
+                    })
+                    .ok()?;
+                let tsconfig_dir = tsconfig_path.parent().unwrap_or(&canonical_root);
+                crate::tsconfig::TsconfigPaths::from_str(&content, tsconfig_dir)
+                    .or_else(|| {
+                        eprintln!("[exspec] warning: failed to parse tsconfig paths, alias resolution disabled");
+                        None
+                    })
+            });
+
         // Layer 2: import tracing for all test files (Layer 1 matched tests may
         // also import other production files not matched by filename convention)
         for (test_file, source) in test_sources {
             let imports = self.extract_imports(source, test_file);
             let from_file = Path::new(test_file);
             let mut matched_indices = std::collections::HashSet::new();
+
+            // Helper: given a resolved file path, follow barrel re-exports if needed and
+            // collect matching production-file indices.
+            let collect_matches =
+                |resolved: &str, symbols: &[String], indices: &mut HashSet<usize>| {
+                    if is_barrel_file(resolved) {
+                        let barrel_path = PathBuf::from(resolved);
+                        let resolved_files =
+                            resolve_barrel_exports(&barrel_path, symbols, &canonical_root);
+                        for prod in resolved_files {
+                            let prod_str = prod.to_string_lossy().into_owned();
+                            if !is_non_sut_helper(&prod_str) {
+                                if let Some(&idx) = canonical_to_idx.get(&prod_str) {
+                                    indices.insert(idx);
+                                }
+                            }
+                        }
+                    } else if !is_non_sut_helper(resolved) {
+                        if let Some(&idx) = canonical_to_idx.get(resolved) {
+                            indices.insert(idx);
+                        }
+                    }
+                };
+
             for import in &imports {
                 if let Some(resolved) =
                     resolve_import_path(&import.module_specifier, from_file, &canonical_root)
                 {
-                    if is_barrel_file(&resolved) {
-                        // Barrel resolution: follow re-exports to find actual production files
-                        let barrel_path = PathBuf::from(&resolved);
-                        let resolved_files =
-                            resolve_barrel_exports(&barrel_path, &import.symbols, &canonical_root);
-                        for resolved_prod in resolved_files {
-                            let resolved_str = resolved_prod.to_string_lossy().into_owned();
-                            if is_non_sut_helper(&resolved_str) {
-                                continue;
-                            }
-                            if let Some(&idx) = canonical_to_idx.get(&resolved_str) {
-                                matched_indices.insert(idx);
-                            }
-                        }
-                    } else {
-                        if is_non_sut_helper(&resolved) {
-                            continue;
-                        }
-                        if let Some(&idx) = canonical_to_idx.get(&resolved) {
-                            matched_indices.insert(idx);
-                        }
+                    collect_matches(&resolved, &import.symbols, &mut matched_indices);
+                }
+            }
+
+            // Layer 2b: tsconfig alias resolution
+            if let Some(ref tc_paths) = tsconfig_paths {
+                let alias_imports = self.extract_all_import_specifiers(source);
+                for (specifier, symbols) in &alias_imports {
+                    let Some(alias_base) = tc_paths.resolve_alias(specifier) else {
+                        continue;
+                    };
+                    if let Some(resolved) =
+                        resolve_absolute_base_to_file(&alias_base, &canonical_root)
+                    {
+                        collect_matches(&resolved, symbols, &mut matched_indices);
                     }
                 }
             }
+
             for idx in matched_indices {
                 // Avoid duplicates: skip if already added by Layer 1
                 if !mappings[idx].test_files.contains(test_file) {
@@ -916,51 +1004,58 @@ pub fn resolve_import_path(
     let base_dir = base_dir_raw
         .canonicalize()
         .unwrap_or_else(|_| base_dir_raw.to_path_buf());
+    // We must JOIN (not resolve) so that dotted module names like "user.service" are preserved:
+    // appending ".ts" yields "user.service.ts", not "user.ts".
     let raw_path = base_dir.join(module_specifier);
-    // If the specifier already has a known TS/JS extension, try it directly.
-    // Otherwise, probe by appending each known extension. We must APPEND (not replace) because
-    // dotted module names like "user.service" have "service" as their apparent extension but
-    // are not actually extension-bearing: the real file is "user.service.ts".
+    let canonical_root = scan_root.canonicalize().ok()?;
+    resolve_absolute_base_to_file(&raw_path, &canonical_root)
+}
+
+/// Resolve an already-computed absolute base path to an actual TypeScript/JavaScript file.
+///
+/// Probes in order:
+/// 1. Direct hit (when `base` already has a known TS/JS extension).
+/// 2. Append each known extension (preserves dotted names, e.g. `user.service` → `user.service.ts`).
+/// 3. Directory index fallback (`<base>/index.ts`, `<base>/index.tsx`).
+///
+/// Returns `None` if no existing file is found inside `canonical_root`.
+fn resolve_absolute_base_to_file(base: &Path, canonical_root: &Path) -> Option<String> {
     const TS_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx"];
-    let has_known_ext = raw_path
+    let has_known_ext = base
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| TS_EXTENSIONS.contains(&e));
-    let candidates = if has_known_ext {
-        vec![raw_path.clone()]
+
+    let candidates: Vec<PathBuf> = if has_known_ext {
+        vec![base.to_path_buf()]
     } else {
-        // Append extension to preserve dotted names (e.g. user.service → user.service.ts)
-        let base = raw_path.as_os_str().to_string_lossy();
+        let base_str = base.as_os_str().to_string_lossy();
         TS_EXTENSIONS
             .iter()
-            .map(|ext| std::path::PathBuf::from(format!("{base}.{ext}")))
-            .collect::<Vec<_>>()
+            .map(|ext| PathBuf::from(format!("{base_str}.{ext}")))
+            .collect()
     };
-
-    let canonical_root = scan_root.canonicalize().ok()?;
 
     for candidate in &candidates {
         if let Ok(canonical) = candidate.canonicalize() {
-            if canonical.starts_with(&canonical_root) {
+            if canonical.starts_with(canonical_root) {
                 return Some(canonical.to_string_lossy().into_owned());
             }
         }
     }
 
-    // Fallback: if the specifier refers to a directory, try <dir>/index.ts and <dir>/index.tsx
-    let dir_candidates: Vec<std::path::PathBuf> = if has_known_ext {
-        vec![]
-    } else {
-        let base = raw_path.as_os_str().to_string_lossy();
-        vec![
-            std::path::PathBuf::from(format!("{base}/index.ts")),
-            std::path::PathBuf::from(format!("{base}/index.tsx")),
-        ]
-    };
-    for candidate in &dir_candidates {
-        if let Ok(canonical) = candidate.canonicalize() {
-            if canonical.starts_with(&canonical_root) {
-                return Some(canonical.to_string_lossy().into_owned());
+    // Fallback: directory index
+    if !has_known_ext {
+        let base_str = base.as_os_str().to_string_lossy();
+        let index_candidates = [
+            PathBuf::from(format!("{base_str}/index.ts")),
+            PathBuf::from(format!("{base_str}/index.tsx")),
+        ];
+        for candidate in &index_candidates {
+            if let Ok(canonical) = candidate.canonicalize() {
+                if canonical.starts_with(canonical_root) {
+                    return Some(canonical.to_string_lossy().into_owned());
+                }
             }
         }
     }
@@ -3229,6 +3324,413 @@ describe('UsersController', () => {});
             imports.is_empty(),
             "expected empty imports for dynamic import(), got {:?}",
             imports
+        );
+    }
+
+    // === tsconfig alias integration tests (OB-01 to OB-06) ===
+
+    // OB-01: tsconfig alias basic — @app/foo.service -> src/foo.service.ts
+    #[test]
+    fn test_observe_tsconfig_alias_basic() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   tsconfig.json: @app/* -> src/*
+        //   src/foo.service.ts (production)
+        //   test/foo.service.spec.ts: `import { FooService } from '@app/foo.service'`
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        let tsconfig = dir.path().join("tsconfig.json");
+        std::fs::write(
+            &tsconfig,
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@app/*":["src/*"]}}}"#,
+        )
+        .unwrap();
+
+        let prod_path = src_dir.join("foo.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        let test_path = test_dir.join("foo.service.spec.ts");
+        let test_source =
+            "import { FooService } from '@app/foo.service';\ndescribe('FooService', () => {});\n";
+        std::fs::write(&test_path, test_source).unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            test_source.to_string(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: foo.service.ts is mapped to foo.service.spec.ts via alias resolution
+        let mapping = mappings
+            .iter()
+            .find(|m| m.production_file.contains("foo.service.ts"))
+            .expect("expected mapping for foo.service.ts");
+        assert!(
+            mapping
+                .test_files
+                .contains(&test_path.to_string_lossy().into_owned()),
+            "expected foo.service.spec.ts in mapping via alias, got {:?}",
+            mapping.test_files
+        );
+    }
+
+    // OB-02: no tsconfig -> alias import produces no mapping
+    #[test]
+    fn test_observe_no_tsconfig_alias_ignored() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   NO tsconfig.json
+        //   src/foo.service.ts (production)
+        //   test/foo.service.spec.ts: `import { FooService } from '@app/foo.service'`
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        let prod_path = src_dir.join("foo.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        let test_path = test_dir.join("foo.service.spec.ts");
+        let test_source =
+            "import { FooService } from '@app/foo.service';\ndescribe('FooService', () => {});\n";
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            test_source.to_string(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports (no tsconfig.json present)
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: no test_files mapped (alias import skipped without tsconfig)
+        let all_test_files: Vec<&String> =
+            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        assert!(
+            all_test_files.is_empty(),
+            "expected no test_files when tsconfig absent, got {:?}",
+            all_test_files
+        );
+    }
+
+    // OB-03: tsconfig alias + barrel -> resolves via barrel
+    #[test]
+    fn test_observe_tsconfig_alias_barrel() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   tsconfig: @app/* -> src/*
+        //   src/bar.service.ts (production)
+        //   src/services/index.ts (barrel): `export { BarService } from '../bar.service'`
+        //   test/bar.service.spec.ts: `import { BarService } from '@app/services'`
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let services_dir = src_dir.join("services");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&services_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@app/*":["src/*"]}}}"#,
+        )
+        .unwrap();
+
+        let prod_path = src_dir.join("bar.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        std::fs::write(
+            services_dir.join("index.ts"),
+            "export { BarService } from '../bar.service';\n",
+        )
+        .unwrap();
+
+        let test_path = test_dir.join("bar.service.spec.ts");
+        let test_source =
+            "import { BarService } from '@app/services';\ndescribe('BarService', () => {});\n";
+        std::fs::write(&test_path, test_source).unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            test_source.to_string(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: bar.service.ts is mapped via alias + barrel resolution
+        let mapping = mappings
+            .iter()
+            .find(|m| m.production_file.contains("bar.service.ts"))
+            .expect("expected mapping for bar.service.ts");
+        assert!(
+            mapping
+                .test_files
+                .contains(&test_path.to_string_lossy().into_owned()),
+            "expected bar.service.spec.ts mapped via alias+barrel, got {:?}",
+            mapping.test_files
+        );
+    }
+
+    // OB-04: mixed relative + alias imports -> both resolved
+    #[test]
+    fn test_observe_tsconfig_alias_mixed() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   tsconfig: @app/* -> src/*
+        //   src/foo.service.ts, src/bar.service.ts (productions)
+        //   test/mixed.spec.ts:
+        //     `import { FooService } from '@app/foo.service'`   (alias)
+        //     `import { BarService } from '../src/bar.service'` (relative)
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@app/*":["src/*"]}}}"#,
+        )
+        .unwrap();
+
+        let foo_path = src_dir.join("foo.service.ts");
+        let bar_path = src_dir.join("bar.service.ts");
+        std::fs::File::create(&foo_path).unwrap();
+        std::fs::File::create(&bar_path).unwrap();
+
+        let test_path = test_dir.join("mixed.spec.ts");
+        let test_source = "\
+import { FooService } from '@app/foo.service';
+import { BarService } from '../src/bar.service';
+describe('Mixed', () => {});
+";
+        std::fs::write(&test_path, test_source).unwrap();
+
+        let production_files = vec![
+            foo_path.to_string_lossy().into_owned(),
+            bar_path.to_string_lossy().into_owned(),
+        ];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            test_source.to_string(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: both foo.service.ts and bar.service.ts are mapped
+        let foo_mapping = mappings
+            .iter()
+            .find(|m| m.production_file.contains("foo.service.ts"))
+            .expect("expected mapping for foo.service.ts");
+        assert!(
+            foo_mapping
+                .test_files
+                .contains(&test_path.to_string_lossy().into_owned()),
+            "expected mixed.spec.ts in foo mapping, got {:?}",
+            foo_mapping.test_files
+        );
+        let bar_mapping = mappings
+            .iter()
+            .find(|m| m.production_file.contains("bar.service.ts"))
+            .expect("expected mapping for bar.service.ts");
+        assert!(
+            bar_mapping
+                .test_files
+                .contains(&test_path.to_string_lossy().into_owned()),
+            "expected mixed.spec.ts in bar mapping, got {:?}",
+            bar_mapping.test_files
+        );
+    }
+
+    // OB-05: tsconfig alias + is_non_sut_helper filter -> constants.ts is excluded
+    #[test]
+    fn test_observe_tsconfig_alias_helper_filtered() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   tsconfig: @app/* -> src/*
+        //   src/constants.ts (production, but filtered by is_non_sut_helper)
+        //   test/constants.spec.ts: `import { APP_NAME } from '@app/constants'`
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@app/*":["src/*"]}}}"#,
+        )
+        .unwrap();
+
+        let prod_path = src_dir.join("constants.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        let test_path = test_dir.join("constants.spec.ts");
+        let test_source =
+            "import { APP_NAME } from '@app/constants';\ndescribe('Constants', () => {});\n";
+        std::fs::write(&test_path, test_source).unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            test_source.to_string(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: constants.ts is filtered by is_non_sut_helper → no test_files
+        let all_test_files: Vec<&String> =
+            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        assert!(
+            all_test_files.is_empty(),
+            "expected constants.ts filtered by is_non_sut_helper, got {:?}",
+            all_test_files
+        );
+    }
+
+    // OB-06: alias to nonexistent file -> no mapping, no error
+    #[test]
+    fn test_observe_tsconfig_alias_nonexistent() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   tsconfig: @app/* -> src/*
+        //   src/foo.service.ts (production)
+        //   test/nonexistent.spec.ts: `import { Missing } from '@app/nonexistent'`
+        //   (src/nonexistent.ts does NOT exist)
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@app/*":["src/*"]}}}"#,
+        )
+        .unwrap();
+
+        let prod_path = src_dir.join("foo.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        let test_path = test_dir.join("nonexistent.spec.ts");
+        let test_source =
+            "import { Missing } from '@app/nonexistent';\ndescribe('Nonexistent', () => {});\n";
+        std::fs::write(&test_path, test_source).unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            test_source.to_string(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports (should not panic)
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: no mapping (nonexistent.ts not in production_files), no panic
+        let all_test_files: Vec<&String> =
+            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        assert!(
+            all_test_files.is_empty(),
+            "expected no mapping for alias to nonexistent file, got {:?}",
+            all_test_files
+        );
+    }
+
+    // B3-update: boundary_b3_tsconfig_alias_resolved
+    // With tsconfig.json present, @app/* alias SHOULD be resolved (FN → TP)
+    #[test]
+    fn boundary_b3_tsconfig_alias_resolved() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   tsconfig.json: @app/* -> src/*
+        //   src/foo.service.ts (production)
+        //   test/foo.service.spec.ts: `import { FooService } from '@app/services/foo.service'`
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let services_dir = src_dir.join("services");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&services_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@app/*":["src/*"]}}}"#,
+        )
+        .unwrap();
+
+        let prod_path = services_dir.join("foo.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        let test_path = test_dir.join("foo.service.spec.ts");
+        let test_source = "import { FooService } from '@app/services/foo.service';\ndescribe('FooService', () => {});\n";
+        std::fs::write(&test_path, test_source).unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            test_source.to_string(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports WITH tsconfig present
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: foo.service.ts IS mapped (B3 resolved — FN → TP)
+        let mapping = mappings
+            .iter()
+            .find(|m| m.production_file.contains("foo.service.ts"))
+            .expect("expected FileMapping for foo.service.ts");
+        assert!(
+            mapping
+                .test_files
+                .contains(&test_path.to_string_lossy().into_owned()),
+            "expected tsconfig alias to be resolved (B3 fix), got {:?}",
+            mapping.test_files
         );
     }
 

@@ -1,4 +1,5 @@
 pub mod observe;
+pub mod tsconfig;
 
 use std::sync::OnceLock;
 

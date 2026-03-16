@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 8c-2 (observe MVP ship) completed. observe is now documented in README. Phase 8c-3 (tsconfig path resolution) next. v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages, 767 tests.
+Phase 8c-3 (tsconfig path resolution) completed. tsconfig.json `compilerOptions.paths` + `baseUrl` parsing, `extends` chain support, tsconfig auto-discovery implemented. B3 failure boundary resolved. v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages.
 
 ## Progress
 
@@ -29,7 +29,7 @@ Phase 8c-2 (observe MVP ship) completed. observe is now documented in README. Ph
 | 8b - observe PoC (static test-to-code mapping) | **DONE** |
 | 8c-1 - observe failure boundaries | **DONE** |
 | 8c-2 - observe MVP ship (README, ship criteria) | **DONE** |
-| 8c-3 - tsconfig path resolution | NEXT |
+| 8c-3 - tsconfig path resolution | **DONE** |
 
 ### Phase 8b Final Results
 
