@@ -187,20 +187,21 @@ typeorm uses a different structure than NestJS: flat `src/` with single barrel (
 
 **Decision**: observe PoC succeeds. Validated on 2 repositories (NestJS: F1 96.3%, typeorm: Precision 100% spot-check). Static AST-only test-to-code mapping is viable for TypeScript projects with barrel imports.
 
-### Phase 8c: Branch on PoC result
+### Phase 8c: observe MVP (PoC succeeded)
 
-| observe PoC succeeds | observe PoC fails |
-|---------------------|-------------------|
-| observe MVP (multi-language) | Go language support |
-| `exspec init` enhancement (incl. 8a-4 implementation) | `exspec init` enhancement (incl. 8a-4 implementation) |
-| GitHub Action + marketplace | GitHub Action |
-| Note.com article | Tier 3 rules (T201 spec-quality etc.) |
+**Decision (2026-03-16)**: observe PoC succeeded (NestJS F1 96.3%, typeorm Precision 100% spot-check). Taking the "observe MVP" branch.
 
-**Why this branching**: If observe succeeds, the product story shifts from "lint tool" to "test intelligence platform" -- Go support becomes less urgent because the differentiator is observe, not language breadth. If observe fails, exspec's moat is lint depth and language coverage, making Go support and Tier 3 rules the natural next investment.
+**Why**: The product story shifts from "lint tool" to "test intelligence platform". The differentiator is observe, not language breadth. Go support becomes lower priority.
 
-**Decision: Go language support** is rejected before Phase 8a reliability work is complete. Adding a 5th language while existing 4 languages have unresolved FP patterns dilutes quality. It becomes reconsiderable only in the fallback branch where observe fails and lint reliability is already established.
+Phase 8c priorities (ordered):
 
-**Definition: "GitHub Action"** here means an opinionated distribution/integration path (marketplace action, reusable workflow) beyond the current CI documentation examples in `docs/ci.md`.
+1. **Failure boundary definition**. Identify where observe breaks: namespace imports, tsconfig path aliases, monorepo cross-package, generated code, decorator-heavy patterns. This defines the applicability scope before shipping.
+2. **Product decision metrics**. Define ship criteria: Precision >= 98% required, Recall >= 90% shippable, confidence scoring for uncertain mappings.
+3. **Remaining FN resolution** (if cost-effective). Cross-package barrel (7/11 FN) requires tsconfig/node_modules scope. Interface/enum filter refinement (4/11 FN).
+4. **observe MVP output**. Markdown/JSON test density report for CI integration. "What is tested, where are the gaps?"
+5. **Note.com article**. Write-up of the PoC journey and results.
+
+**Deferred**: Go language support, Tier 3 rules, GitHub Action marketplace. Reconsidered after 8c delivers.
 
 ## Backlog
 

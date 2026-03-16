@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 8a (Lint Reliability) + Phase 8b (observe PoC) in progress. v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages, 767 tests.
+Phase 8b (observe PoC) completed successfully. Phase 8c (observe MVP) next. v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages, 767 tests.
 
 ## Progress
 
@@ -26,24 +26,19 @@ Phase 8a (Lint Reliability) + Phase 8b (observe PoC) in progress. v0.1.2 publish
 | 6 - Release Hardening (FP fixes, dogfooding) | DONE |
 | 7 - OSS release (crates.io v0.1.2) | DONE |
 | 8a - Lint Reliability (BLOCK/WARN/INFO FP fixes) | IN PROGRESS |
-| 8b - observe PoC (static test-to-code mapping) | IN PROGRESS |
+| 8b - observe PoC (static test-to-code mapping) | **DONE** |
+| 8c - observe MVP (failure boundaries, product metrics) | NEXT |
 
-### Phase 8b Task Progress
+### Phase 8b Final Results
 
-| # | Task | Status |
-|---|------|--------|
-| 0 | Ground truth (nestjs/nest manual mapping) | DONE |
-| 1 | Production function extractor (TypeScript) | DONE |
-| 2 | NestJS route/decorator extractor | DONE |
-| 3a | Test-to-code mapper: file name convention (Layer 1) | DONE |
-| 3b | Test-to-code mapper: import tracing (Layer 2) | DONE |
-| 4a | Test status code assertion extractor | TODO |
-| 4b | Error-path gap analyzer | TODO |
-| 5 | `exspec observe` CLI + Markdown/JSON output | DONE |
-| 6 | NestJS precision verification (ground truth comparison) | DONE |
-| 7 | Helper/non-SUT import filtering (Precision improvement) | TODO |
-| 8 | Strict/lenient dual metrics | TODO |
-| 9 | Barrel import expansion (Recall improvement) | TODO |
+observe PoC validated on 2 repositories. Static AST-only test-to-code mapping is viable for TypeScript projects with barrel imports.
+
+| Repository | Precision | Recall | F1 | FP | FN |
+|------------|-----------|--------|----|----|-----|
+| nestjs/nest (GT complete) | 99.4% | 93.4% | 96.3% | 1 | 11 |
+| typeorm (50-pair spot-check) | 100% | -- | -- | 0 | -- |
+
+Remaining FN (NestJS): cross-package barrel (7), interface/enum filter (4).
 
 ## Supported Languages
 
