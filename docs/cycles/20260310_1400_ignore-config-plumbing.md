@@ -1,7 +1,7 @@
 ---
 issue: "#54"
 topic: "[paths] ignore config not applied to file discovery"
-phase: REVIEW
+phase: DONE
 created: 2026-03-10
 updated: 2026-03-10
 ---

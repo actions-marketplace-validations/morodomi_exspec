@@ -1,6 +1,6 @@
 ---
 feature: Namespace import + type-only import filtering
-phase: COMMIT
+phase: DONE
 complexity: low
 test_count: 2
 risk_level: low

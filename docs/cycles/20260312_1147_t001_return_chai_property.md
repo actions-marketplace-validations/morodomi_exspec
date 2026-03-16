@@ -1,7 +1,7 @@
 ---
 feature: T001-chai-property-return
 cycle: 20260312_1147_t001_return_chai_property
-phase: REVIEW
+phase: DONE
 complexity: trivial
 test_count: 6
 risk_level: low
