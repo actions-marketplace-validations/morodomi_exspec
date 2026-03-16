@@ -163,13 +163,29 @@ Same-package barrel import resolution via index.ts re-exports. Named + wildcard 
 | FP | 68 | 14 | **6** |
 | FN | 32 | 36 | **11** |
 
+After GT audit (4 FP were GT misses), final NestJS scores: **Precision 99.4%, Recall 93.4%, F1 96.3%, FP 1, FN 11**.
+
 **Key learnings**:
 1. Named + wildcard symbol-aware barrel resolution is effective. Wildcard file-level expansion without symbol filter is catastrophic (FP 847)
 2. Both Precision and Recall improved from baseline -- barrel was the Recall bottleneck, helper filtering was the Precision bottleneck
 3. Remaining FN: cross-package barrel (Pattern A, 7/11) and interface/enum filter side-effect (4/11)
-4. Remaining FP: 2+ are GT misses (actual TP), rest are Layer 1 filename false matches
+4. Remaining FP after GT audit: 1 genuine FP (barrel over-resolution)
 
-**Decision**: observe PoC succeeds. F1 94.8% on NestJS validates static AST-only test-to-code mapping. Scope: single project (NestJS), TypeScript only.
+#### External validity: typeorm (2026-03-16)
+
+Second repository validation to test generalization beyond NestJS.
+
+| Key | Value |
+|-----|-------|
+| Repository | typeorm/typeorm |
+| Production files | 124 (scanned by observe) |
+| Total test mappings | 374 |
+| Spot-check sample | 50 random pairs |
+| Precision (spot-check) | **100%** (50/50 TP) |
+
+typeorm uses a different structure than NestJS: flat `src/` with single barrel (`src/index.ts`), `test/functional/` and `test/github-issues/` directories, entity schemas in `sample/`. observe correctly maps across these patterns.
+
+**Decision**: observe PoC succeeds. Validated on 2 repositories (NestJS: F1 96.3%, typeorm: Precision 100% spot-check). Static AST-only test-to-code mapping is viable for TypeScript projects with barrel imports.
 
 ### Phase 8c: Branch on PoC result
 
