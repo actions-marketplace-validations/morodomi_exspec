@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 8c-4 (context-aware enum/interface filter) completed. `is_non_sut_helper` now accepts `is_known_production` parameter; enum/interface/exception files listed in `production_files` bypass suffix filter. B4 failure boundary partially resolved (direct import only, barrel path deferred). v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages.
+Phase 8a (Lint Reliability) completed. All sub-phases done: BLOCK FP fixes (#62/#63/#64), WARN/INFO survey, severity adjustments (T101/T102/T108->INFO, T106->OFF), helper delegation strategy. Phase 8c-4 (context-aware enum/interface filter) also completed. v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages.
 
 ## Progress
 
@@ -25,7 +25,10 @@ Phase 8c-4 (context-aware enum/interface filter) completed. `is_non_sut_helper` 
 | 5.5 - Gap rules (T106-T109) + T104 removal | DONE |
 | 6 - Release Hardening (FP fixes, dogfooding) | DONE |
 | 7 - OSS release (crates.io v0.1.2) | DONE |
-| 8a - Lint Reliability (BLOCK/WARN/INFO FP fixes) | IN PROGRESS |
+| 8a-1 - BLOCK FP fixes (#62/#63/#64) | **DONE** |
+| 8a-2 - WARN/INFO dogfooding survey | **DONE** |
+| 8a-3 - Severity adjustments (T101/T102/T108->INFO, T106->OFF) | **DONE** |
+| 8a-4 - Helper delegation strategy | **DONE** |
 | 8b - observe PoC (static test-to-code mapping) | **DONE** |
 | 8c-1 - observe failure boundaries | **DONE** |
 | 8c-2 - observe MVP ship (README, ship criteria) | **DONE** |

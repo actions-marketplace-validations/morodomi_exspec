@@ -7,9 +7,9 @@
 3. **Ship then iterate.** Don't over-polish before release -- but don't ship broken lint
 4. **AI separation.** exspec outputs data; humans/AI decide. exspec itself never calls LLMs
 
-## Now
+## Completed Phases (Detail)
 
-### Phase 8a: Lint Reliability
+### Phase 8a: Lint Reliability (DONE)
 
 Goal: Measure and improve FP rates across all severity levels (BLOCK/WARN/INFO), establishing lint reliability as the foundation for all future directions.
 
@@ -65,6 +65,18 @@ Scope determined by 8a-2 results. Expected remediation types:
 | Threshold tuning | T003 max_lines etc. |
 | Defer to Phase 8c+ | Issues requiring major rework |
 
+**Results (commit 3670a10)**:
+
+| Rule | Action | Rationale |
+|------|--------|-----------|
+| T101 | WARN->INFO | High FP rate in framework projects (Laravel 16%, Symfony 7.5%). Framework mock-derived patterns indistinguishable from real how-not-what violations |
+| T102 | WARN->INFO | NestJS 14.1% hit rate largely driven by DI setup. Fixture count threshold is structural, not a defect signal |
+| T108 | WARN->INFO | 93% FP rate. Most `sleep`/`wait` calls are legitimate async coordination, not test anti-patterns |
+| T106 | WARN->OFF | 93% FP rate. Duplicate literal detection too noisy -- DAMP-style repetition is intentional in well-written tests |
+| T105 | Keep INFO | No change needed. Hit rate low (0.7-3.7%), signal quality acceptable at INFO |
+| T109 | Keep INFO | 50% FP rate at INFO is tolerable. Unlike T106 (93%)->OFF or T108 (93%)->INFO, 50% TP provides useful signal. INFO level delegates judgment to user |
+| T003 | Keep WARN/50 lines | fastapi-specific issue (snapshot pattern, 9.9% hit rate). Threshold change affects all projects. fastapi users can override via `.exspec.toml`. Other projects show low hit rates (0.7-3.7%), not worth global adjustment |
+
 #### 8a-4: Helper delegation strategy decision
 
 Remaining BLOCK FPs from helper delegation. Not query-fixable but impacts user experience.
@@ -94,11 +106,11 @@ Remaining BLOCK FPs from helper delegation. Not query-fixable but impacts user e
 
 #### Phase 8a exit criteria
 
-- #62/#63/#64 closed
-- WARN/INFO FP rates measured for all major projects, recorded in docs/dogfooding-results.md
-- Severity adjustments applied where needed
-- Query-fixable WARN/INFO FPs filed as issues and addressed
-- Helper delegation strategy recorded in ROADMAP
+- [x] #62/#63/#64 closed
+- [x] WARN/INFO FP rates measured for all major projects, recorded in docs/dogfooding-results.md
+- [x] Severity adjustments applied where needed
+- [x] Query-fixable WARN/INFO FPs filed as issues and addressed
+- [x] Helper delegation strategy recorded in ROADMAP
 
 ---
 
@@ -302,6 +314,7 @@ B4 (interface/enum filter side-effect) を部分解消。`is_non_sut_helper` に
 | 5.5 | Gap rules T106-T109 |
 | 6 | Release Hardening: dogfooding 13 projects / 4 langs / ~45k tests, FP fixes (#25-#66), severity review, T110 |
 | 7 | OSS Release: LICENSE, README (#26, #27), CHANGELOG, crates.io v0.1.2 publish, GitHub Release |
+| 8a | Lint Reliability: BLOCK FP fixes (#62/#63/#64), WARN/INFO survey + severity adjustments, helper delegation strategy |
 
 ## Explore: Test Observability (`exspec observe`)
 
