@@ -250,6 +250,19 @@ B3 (tsconfig path alias) を解消。`@app/*` 等のパスエイリアスが imp
 
 **Why B3 only (not B2)**: B3 はプロジェクト内の tsconfig.json を読むだけで完結する。B2 は node_modules 解決が必要で、Yarn/pnpm/npm のバージョン差異・workspace 構成・hoisting 戦略の組み合わせが爆発する。B3 単独でも NestJS monorepo の path alias パターンをカバーできる。
 
+#### 8c-4: context-aware enum/interface filter (DONE)
+
+B4 (interface/enum filter side-effect) を部分解消。`is_non_sut_helper` に `is_known_production` パラメータを追加し、`production_files` に含まれる enum/interface ファイルへのマッピングを許可。
+
+**Implementation**:
+- `is_type_definition_file`: suffix check (`.enum`, `.interface`, `.exception`) を独立関数に抽出
+- `is_non_sut_helper(file_path, is_known_production)`: `is_known_production=true` のとき suffix filter を bypass
+- `collect_matches` の 2 call sites で `canonical_to_idx.contains_key()` により production 判定
+
+**Remaining limitation**: barrel 解決パス (`resolve_barrel_exports_inner`) は `is_known_production=false` を渡す。barrel 経由で enum ファイルに到達するケースでは filter が残存。direct import のみ解消。
+
+**Why partial resolution**: barrel 内部解決は `canonical_to_idx` にアクセスできない。barrel 経由の enum は `collect_matches` で再チェックされるが、barrel が事前にフィルタすると到達しない edge case がある。完全解消は barrel infrastructure のリファクタリングが必要で、cost-benefit が合わない。
+
 ## Backlog
 
 | Priority | Task | Trigger |

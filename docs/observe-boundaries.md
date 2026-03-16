@@ -9,7 +9,7 @@ This document catalogs the known failure boundaries of `exspec observe` -- cases
 | B1 | Namespace re-export | `re_export.scm` lacks `namespace_export` pattern | FN | Medium (query addition) |
 | B2 | Cross-package barrel import | Non-relative paths excluded from import tracing | FN | Hard (requires tsconfig/node_modules resolution) |
 | B3 | tsconfig path alias | ~~Same as B2~~ **Resolved in 8c-3** | ~~FN~~ Resolved | tsconfig.json paths parsing |
-| B4 | Interface/enum filter side-effect | `is_non_sut_helper` filters primary test targets | FN | Medium (context-aware filtering) |
+| B4 | Interface/enum filter side-effect | ~~`is_non_sut_helper` filters primary test targets~~ **Resolved in 8c-4** (direct import only) | ~~FN~~ Partially resolved | Context-aware filtering with `is_known_production` |
 | B5 | Dynamic import | `import_mapping.scm` only captures static `import` statements | FN | Low (rare in test code) |
 | B6 | Monorepo scan_root boundary | Resolved paths outside scan_root have no production file match | FN | By design |
 
@@ -57,17 +57,19 @@ Namespace re-export (`export * as Ns from`) produces a `namespace_export` AST no
 
 **Tests**: `boundary_b3_tsconfig_alias_not_resolved` (without tsconfig -- FN by design), `boundary_b3_tsconfig_alias_resolved` (with tsconfig -- resolved)
 
-## B4: Interface/enum filter side-effect
+## B4: Interface/enum filter side-effect -- Partially resolved in 8c-4
 
 **Syntax**: `import { RouteParamtypes } from './route-paramtypes.enum'`
 
-**Why it fails**: `is_non_sut_helper` filters files matching `*.enum.*`, `*.interface.*`, and `*.exception.*`. This is an intentional design choice -- these files are typically type definitions, not testable units. However, when a test directly imports an enum or interface as its **primary test target**, the filter creates a false negative.
+**Original problem**: `is_non_sut_helper` filters files matching `*.enum.*`, `*.interface.*`, and `*.exception.*`. When a test directly imports an enum or interface listed in `production_files`, the filter created a false negative.
 
-**Impact**: 4/11 FN in NestJS eval. The trade-off is deliberate: filtering these reduces noise (many tests import enums as incidental dependencies), but the minority case of "testing the enum itself" is lost.
+**Resolution (Phase 8c-4)**: `is_non_sut_helper` now accepts `is_known_production: bool`. When the resolved file is a known production file (`canonical_to_idx.contains_key()`), the suffix filter is bypassed. The `is_type_definition_file` function was extracted to encapsulate the suffix check.
 
-**Tests**: `boundary_b4_enum_primary_target_filtered`, `boundary_b4_interface_primary_target_filtered`
+**Remaining limitation**: Barrel resolution path (`resolve_barrel_exports_inner`) passes `is_known_production=false` because it lacks access to the production file index. Enum/interface files re-exported through barrels may still be filtered before reaching `collect_matches`. This is a known edge case, deferred to future work.
 
-**Fix path**: Context-aware filtering that distinguishes "incidental import" from "primary test target" (e.g., if the test name or describe block references the enum/interface name). Medium complexity.
+**Tests**: `boundary_b4_enum_primary_target_filtered` (TP), `boundary_b4_interface_primary_target_filtered` (TP)
+
+**Fix path adopted**: Production file membership check (`canonical_to_idx.contains_key`). Test name context analysis was not adopted (outside static analysis scope).
 
 ## B5: Dynamic import (`import()`)
 
@@ -104,4 +106,4 @@ Based on these boundaries, observe is most reliable for:
 Observe is **less reliable** for:
 - **Monorepo workspaces** with cross-package imports via node_modules (B2, B6)
 - **Projects heavy on namespace re-exports** (B1)
-- **Projects where enums/interfaces are primary test targets** (B4)
+- **Projects where enums/interfaces are re-exported through barrels** (B4 partial)

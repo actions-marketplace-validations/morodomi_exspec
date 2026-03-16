@@ -922,26 +922,27 @@ impl TypeScriptExtractor {
 
             // Helper: given a resolved file path, follow barrel re-exports if needed and
             // collect matching production-file indices.
-            let collect_matches =
-                |resolved: &str, symbols: &[String], indices: &mut HashSet<usize>| {
-                    if is_barrel_file(resolved) {
-                        let barrel_path = PathBuf::from(resolved);
-                        let resolved_files =
-                            resolve_barrel_exports(&barrel_path, symbols, &canonical_root);
-                        for prod in resolved_files {
-                            let prod_str = prod.to_string_lossy().into_owned();
-                            if !is_non_sut_helper(&prod_str) {
-                                if let Some(&idx) = canonical_to_idx.get(&prod_str) {
-                                    indices.insert(idx);
-                                }
+            let collect_matches = |resolved: &str,
+                                   symbols: &[String],
+                                   indices: &mut HashSet<usize>| {
+                if is_barrel_file(resolved) {
+                    let barrel_path = PathBuf::from(resolved);
+                    let resolved_files =
+                        resolve_barrel_exports(&barrel_path, symbols, &canonical_root);
+                    for prod in resolved_files {
+                        let prod_str = prod.to_string_lossy().into_owned();
+                        if !is_non_sut_helper(&prod_str, canonical_to_idx.contains_key(&prod_str)) {
+                            if let Some(&idx) = canonical_to_idx.get(&prod_str) {
+                                indices.insert(idx);
                             }
                         }
-                    } else if !is_non_sut_helper(resolved) {
-                        if let Some(&idx) = canonical_to_idx.get(resolved) {
-                            indices.insert(idx);
-                        }
                     }
-                };
+                } else if !is_non_sut_helper(resolved, canonical_to_idx.contains_key(resolved)) {
+                    if let Some(&idx) = canonical_to_idx.get(resolved) {
+                        indices.insert(idx);
+                    }
+                }
+            };
 
             for import in &imports {
                 if let Some(resolved) =
@@ -1063,14 +1064,30 @@ fn resolve_absolute_base_to_file(base: &Path, canonical_root: &Path) -> Option<S
     None
 }
 
+/// Type definition file: *.enum.*, *.interface.*, *.exception.*
+/// Returns true if the file has a suffix pattern indicating a type definition.
+fn is_type_definition_file(file_path: &str) -> bool {
+    let Some(file_name) = Path::new(file_path).file_name().and_then(|f| f.to_str()) else {
+        return false;
+    };
+    if let Some(stem) = Path::new(file_name).file_stem().and_then(|s| s.to_str()) {
+        for suffix in &[".enum", ".interface", ".exception"] {
+            if stem.ends_with(suffix) && stem != &suffix[1..] {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Returns true if the resolved file path is a helper/non-SUT file that should be
 /// excluded from Layer 2 import tracing.
 ///
 /// Filtered patterns:
 /// - Exact filenames: `constants.*`, `index.*`
-/// - Suffix patterns: `*.enum.*`, `*.interface.*`, `*.exception.*`
+/// - Suffix patterns: `*.enum.*`, `*.interface.*`, `*.exception.*` (skipped when `is_known_production`)
 /// - Test utility paths: files under `/test/` or `/__tests__/`
-fn is_non_sut_helper(file_path: &str) -> bool {
+fn is_non_sut_helper(file_path: &str, is_known_production: bool) -> bool {
     // Test-utility paths: files under /test/ or /__tests__/ directories.
     // Uses segment-based matching to avoid false positives (e.g., "contest/src/foo.ts").
     // Note: Windows path separators are intentionally not handled; this tool targets Unix-style paths.
@@ -1101,15 +1118,10 @@ fn is_non_sut_helper(file_path: &str) -> bool {
     }
 
     // Suffix-match: *.enum.*, *.interface.*, *.exception.*
-    // Strip the outermost extension (e.g. "request-method.enum.ts" → "request-method.enum")
-    // then check that the stem ends with ".enum", ".interface", or ".exception",
-    // but is NOT exactly "enum", "interface", or "exception" (plain filename guard).
-    if let Some(stem) = Path::new(file_name).file_stem().and_then(|s| s.to_str()) {
-        for suffix in &[".enum", ".interface", ".exception"] {
-            if stem.ends_with(suffix) && stem != &suffix[1..] {
-                return true;
-            }
-        }
+    // When is_known_production=true, type definition files are bypassed
+    // (they are valid SUT targets when listed in production_files).
+    if !is_known_production && is_type_definition_file(file_path) {
+        return true;
     }
 
     false
@@ -1244,7 +1256,7 @@ fn resolve_barrel_exports_inner(
                     depth + 1,
                     results,
                 );
-            } else if !is_non_sut_helper(&resolved_str) {
+            } else if !is_non_sut_helper(&resolved_str, false) {
                 // For wildcard re-exports with known symbols, verify the target file
                 // actually exports at least one of the requested symbols before including it.
                 if !symbols.is_empty()
@@ -2513,40 +2525,40 @@ describe('UsersController', () => {});
     // HELPER-01: constants.ts is detected as non-SUT helper
     #[test]
     fn is_non_sut_helper_constants_ts() {
-        assert!(is_non_sut_helper("src/constants.ts"));
+        assert!(is_non_sut_helper("src/constants.ts", false));
     }
 
     // HELPER-02: index.ts is detected as non-SUT helper
     #[test]
     fn is_non_sut_helper_index_ts() {
-        assert!(is_non_sut_helper("src/index.ts"));
+        assert!(is_non_sut_helper("src/index.ts", false));
     }
 
     // HELPER-03: extension variants (.js/.tsx/.jsx) are also detected
     #[test]
     fn is_non_sut_helper_extension_variants() {
-        assert!(is_non_sut_helper("src/constants.js"));
-        assert!(is_non_sut_helper("src/constants.tsx"));
-        assert!(is_non_sut_helper("src/constants.jsx"));
-        assert!(is_non_sut_helper("src/index.js"));
-        assert!(is_non_sut_helper("src/index.tsx"));
-        assert!(is_non_sut_helper("src/index.jsx"));
+        assert!(is_non_sut_helper("src/constants.js", false));
+        assert!(is_non_sut_helper("src/constants.tsx", false));
+        assert!(is_non_sut_helper("src/constants.jsx", false));
+        assert!(is_non_sut_helper("src/index.js", false));
+        assert!(is_non_sut_helper("src/index.tsx", false));
+        assert!(is_non_sut_helper("src/index.jsx", false));
     }
 
     // HELPER-04: similar but distinct filenames are NOT helpers
     #[test]
     fn is_non_sut_helper_rejects_non_helpers() {
-        assert!(!is_non_sut_helper("src/my-constants.ts"));
-        assert!(!is_non_sut_helper("src/service.ts"));
-        assert!(!is_non_sut_helper("src/app.constants.ts"));
-        assert!(!is_non_sut_helper("src/constants-v2.ts"));
+        assert!(!is_non_sut_helper("src/my-constants.ts", false));
+        assert!(!is_non_sut_helper("src/service.ts", false));
+        assert!(!is_non_sut_helper("src/app.constants.ts", false));
+        assert!(!is_non_sut_helper("src/constants-v2.ts", false));
     }
 
     // HELPER-05: directory named constants/app.ts is NOT a helper
     #[test]
     fn is_non_sut_helper_rejects_directory_name() {
-        assert!(!is_non_sut_helper("constants/app.ts"));
-        assert!(!is_non_sut_helper("index/service.ts"));
+        assert!(!is_non_sut_helper("constants/app.ts", false));
+        assert!(!is_non_sut_helper("index/service.ts", false));
     }
 
     // HELPER-06: *.enum.ts is detected as non-SUT helper
@@ -2556,7 +2568,7 @@ describe('UsersController', () => {});
         let path = "src/enums/request-method.enum.ts";
         // When: is_non_sut_helper() is called
         // Then: returns true
-        assert!(is_non_sut_helper(path));
+        assert!(is_non_sut_helper(path, false));
     }
 
     // HELPER-07: *.interface.ts is detected as non-SUT helper
@@ -2566,7 +2578,7 @@ describe('UsersController', () => {});
         let path = "src/interfaces/middleware-configuration.interface.ts";
         // When: is_non_sut_helper() is called
         // Then: returns true
-        assert!(is_non_sut_helper(path));
+        assert!(is_non_sut_helper(path, false));
     }
 
     // HELPER-08: *.exception.ts is detected as non-SUT helper
@@ -2576,7 +2588,7 @@ describe('UsersController', () => {});
         let path = "src/errors/unknown-module.exception.ts";
         // When: is_non_sut_helper() is called
         // Then: returns true
-        assert!(is_non_sut_helper(path));
+        assert!(is_non_sut_helper(path, false));
     }
 
     // HELPER-09: file inside a test path is detected as non-SUT helper
@@ -2586,14 +2598,18 @@ describe('UsersController', () => {});
         let path = "packages/core/test/utils/string.cleaner.ts";
         // When: is_non_sut_helper() is called
         // Then: returns true
-        assert!(is_non_sut_helper(path));
+        assert!(is_non_sut_helper(path, false));
         // __tests__ variant
-        assert!(is_non_sut_helper("packages/core/__tests__/utils/helper.ts"));
+        assert!(is_non_sut_helper(
+            "packages/core/__tests__/utils/helper.ts",
+            false
+        ));
         // segment-based: "contest" should NOT match
         assert!(!is_non_sut_helper(
-            "/home/user/projects/contest/src/service.ts"
+            "/home/user/projects/contest/src/service.ts",
+            false
         ));
-        assert!(!is_non_sut_helper("src/latest/foo.ts"));
+        assert!(!is_non_sut_helper("src/latest/foo.ts", false));
     }
 
     // HELPER-10: suffix-like but plain filename (not a suffix) is rejected
@@ -2603,9 +2619,9 @@ describe('UsersController', () => {});
         // (the type keyword is the entire filename, not a suffix)
         // When: is_non_sut_helper() is called
         // Then: returns false (these may be real SUT files)
-        assert!(!is_non_sut_helper("src/enum.ts"));
-        assert!(!is_non_sut_helper("src/interface.ts"));
-        assert!(!is_non_sut_helper("src/exception.ts"));
+        assert!(!is_non_sut_helper("src/enum.ts", false));
+        assert!(!is_non_sut_helper("src/interface.ts", false));
+        assert!(!is_non_sut_helper("src/exception.ts", false));
     }
 
     // HELPER-11: extension variants (.js/.tsx/.jsx) with enum/interface suffix are detected
@@ -2614,8 +2630,70 @@ describe('UsersController', () => {});
         // Given: files with .enum or .interface suffix and non-.ts extension
         // When: is_non_sut_helper() is called
         // Then: returns true
-        assert!(is_non_sut_helper("src/foo.enum.js"));
-        assert!(is_non_sut_helper("src/bar.interface.tsx"));
+        assert!(is_non_sut_helper("src/foo.enum.js", false));
+        assert!(is_non_sut_helper("src/bar.interface.tsx", false));
+    }
+
+    // === is_type_definition_file unit tests (TD-01 ~ TD-05) ===
+
+    // TD-01: *.enum.ts is a type definition file
+    #[test]
+    fn is_type_definition_file_enum() {
+        assert!(is_type_definition_file("src/foo.enum.ts"));
+    }
+
+    // TD-02: *.interface.ts is a type definition file
+    #[test]
+    fn is_type_definition_file_interface() {
+        assert!(is_type_definition_file("src/bar.interface.ts"));
+    }
+
+    // TD-03: *.exception.ts is a type definition file
+    #[test]
+    fn is_type_definition_file_exception() {
+        assert!(is_type_definition_file("src/baz.exception.ts"));
+    }
+
+    // TD-04: regular service file is NOT a type definition file
+    #[test]
+    fn is_type_definition_file_service() {
+        assert!(!is_type_definition_file("src/service.ts"));
+    }
+
+    // TD-05: constants.ts is NOT a type definition file (suffix check only, not exact-match)
+    #[test]
+    fn is_type_definition_file_constants() {
+        // constants.ts has no .enum/.interface/.exception suffix
+        assert!(!is_type_definition_file("src/constants.ts"));
+    }
+
+    // === is_non_sut_helper (production-aware) unit tests (PA-01 ~ PA-03) ===
+
+    // PA-01: enum file with known_production=true bypasses suffix filter
+    #[test]
+    fn is_non_sut_helper_production_enum_bypassed() {
+        // Given: an enum file known to be in production_files
+        // When: is_non_sut_helper with is_known_production=true
+        // Then: returns false (not filtered)
+        assert!(!is_non_sut_helper("src/foo.enum.ts", true));
+    }
+
+    // PA-02: enum file with known_production=false is still filtered
+    #[test]
+    fn is_non_sut_helper_unknown_enum_filtered() {
+        // Given: an enum file NOT in production_files
+        // When: is_non_sut_helper with is_known_production=false
+        // Then: returns true (filtered as before)
+        assert!(is_non_sut_helper("src/foo.enum.ts", false));
+    }
+
+    // PA-03: constants.ts is filtered regardless of known_production
+    #[test]
+    fn is_non_sut_helper_constants_always_filtered() {
+        // Given: constants.ts (exact-match filter, not suffix)
+        // When: is_non_sut_helper with is_known_production=true
+        // Then: returns true (exact-match is independent of production status)
+        assert!(is_non_sut_helper("src/constants.ts", true));
     }
 
     // === Barrel Import Resolution Tests (BARREL-01 ~ BARREL-09) ===
@@ -3212,7 +3290,7 @@ describe('UsersController', () => {});
         );
     }
 
-    // TC-06: Boundary B4 — .enum.ts is filtered out by is_non_sut_helper
+    // TC-06: B4 — .enum.ts in production_files is NOT filtered (production-aware bypass)
     #[test]
     fn boundary_b4_enum_primary_target_filtered() {
         use tempfile::TempDir;
@@ -3249,19 +3327,22 @@ describe('UsersController', () => {});
         let mappings =
             extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
 
-        // Then: route-paramtypes.enum.ts has NO test_files (filtered by is_non_sut_helper)
-        // Layer 1 produces no filename match; Layer 2 import is resolved but is_non_sut_helper
-        // filters it out. The FileMapping entry exists but test_files is empty.
-        let all_test_files: Vec<&String> =
-            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        // Then: route-paramtypes.enum.ts IS mapped to route.spec.ts (production-aware bypass)
+        let enum_mapping = mappings
+            .iter()
+            .find(|m| m.production_file.ends_with("route-paramtypes.enum.ts"));
         assert!(
-            all_test_files.is_empty(),
-            "expected no test_files (.enum.ts filtered as non-SUT helper), got {:?}",
-            all_test_files
+            enum_mapping.is_some(),
+            "expected mapping for route-paramtypes.enum.ts"
+        );
+        let enum_mapping = enum_mapping.unwrap();
+        assert!(
+            !enum_mapping.test_files.is_empty(),
+            "expected test_files for route-paramtypes.enum.ts (production file), got empty"
         );
     }
 
-    // TC-07: Boundary B4 — .interface.ts is filtered out by is_non_sut_helper
+    // TC-07: B4 — .interface.ts in production_files is NOT filtered (production-aware bypass)
     #[test]
     fn boundary_b4_interface_primary_target_filtered() {
         use tempfile::TempDir;
@@ -3298,14 +3379,18 @@ describe('UsersController', () => {});
         let mappings =
             extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
 
-        // Then: user.interface.ts has NO test_files (filtered by is_non_sut_helper)
-        // Same filter path as TC-06: is_non_sut_helper returns true for .interface.ts files.
-        let all_test_files: Vec<&String> =
-            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        // Then: user.interface.ts IS mapped to user.spec.ts (production-aware bypass)
+        let iface_mapping = mappings
+            .iter()
+            .find(|m| m.production_file.ends_with("user.interface.ts"));
         assert!(
-            all_test_files.is_empty(),
-            "expected no test_files (.interface.ts filtered as non-SUT helper), got {:?}",
-            all_test_files
+            iface_mapping.is_some(),
+            "expected mapping for user.interface.ts"
+        );
+        let iface_mapping = iface_mapping.unwrap();
+        assert!(
+            !iface_mapping.test_files.is_empty(),
+            "expected test_files for user.interface.ts (production file), got empty"
         );
     }
 
