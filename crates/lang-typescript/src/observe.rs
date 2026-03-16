@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use streaming_iterator::StreamingIterator;
@@ -12,6 +12,12 @@ static PRODUCTION_FUNCTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 const IMPORT_MAPPING_QUERY: &str = include_str!("../queries/import_mapping.scm");
 static IMPORT_MAPPING_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
+const RE_EXPORT_QUERY: &str = include_str!("../queries/re_export.scm");
+static RE_EXPORT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
+/// Maximum depth for barrel re-export resolution (NestJS measured max 2 hops).
+const MAX_BARREL_DEPTH: usize = 3;
 
 /// A production (non-test) function or method extracted from source code.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +71,20 @@ pub struct ImportMapping {
     pub module_specifier: String,
     pub file: String,
     pub line: usize,
+    /// All symbol names imported from this module specifier (same-statement grouping).
+    /// For `import { Foo, Bar } from './module'`, both Foo and Bar appear here.
+    pub symbols: Vec<String>,
+}
+
+/// A re-export statement extracted from a barrel (index.ts) file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BarrelReExport {
+    /// Named symbols re-exported (empty for wildcard).
+    pub symbols: Vec<String>,
+    /// The module specifier of the re-export source.
+    pub from_specifier: String,
+    /// True if this is a wildcard re-export (`export * from '...'`).
+    pub wildcard: bool,
 }
 
 /// HTTP method decorators recognized as route indicators.
@@ -701,10 +721,95 @@ impl TypeScriptExtractor {
                     module_specifier: spec.to_string(),
                     file: file_path.to_string(),
                     line: symbol_line,
+                    symbols: Vec::new(),
                 });
             }
         }
+        // Populate `symbols`: for each entry, collect all symbol_names that share the same
+        // module_specifier in this file.
+        let specifier_to_symbols: HashMap<String, Vec<String>> =
+            result.iter().fold(HashMap::new(), |mut acc, im| {
+                acc.entry(im.module_specifier.clone())
+                    .or_default()
+                    .push(im.symbol_name.clone());
+                acc
+            });
+        for im in &mut result {
+            im.symbols = specifier_to_symbols
+                .get(&im.module_specifier)
+                .cloned()
+                .unwrap_or_default();
+        }
         result
+    }
+
+    /// Extract barrel re-export statements (`export { X } from '...'` / `export * from '...'`).
+    pub fn extract_barrel_re_exports(&self, source: &str, _file_path: &str) -> Vec<BarrelReExport> {
+        let mut parser = Self::parser();
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let source_bytes = source.as_bytes();
+        let query = cached_query(&RE_EXPORT_QUERY_CACHE, RE_EXPORT_QUERY);
+
+        let symbol_idx = query.capture_index_for_name("symbol_name");
+        let wildcard_idx = query.capture_index_for_name("wildcard");
+        let specifier_idx = query
+            .capture_index_for_name("from_specifier")
+            .expect("@from_specifier capture not found in re_export.scm");
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
+
+        // Group by match: each match corresponds to one export statement pattern.
+        // Named re-export produces one match per symbol; wildcard produces one match.
+        // We use a HashMap keyed by (from_specifier, is_wildcard) to group named symbols.
+        struct ReExportEntry {
+            symbols: Vec<String>,
+            wildcard: bool,
+        }
+        let mut grouped: HashMap<String, ReExportEntry> = HashMap::new();
+
+        while let Some(m) = matches.next() {
+            let mut from_spec = None;
+            let mut sym_name = None;
+            let mut is_wildcard = false;
+
+            for cap in m.captures {
+                if wildcard_idx == Some(cap.index) {
+                    is_wildcard = true;
+                } else if cap.index == specifier_idx {
+                    from_spec = Some(cap.node.utf8_text(source_bytes).unwrap_or("").to_string());
+                } else if symbol_idx == Some(cap.index) {
+                    sym_name = Some(cap.node.utf8_text(source_bytes).unwrap_or("").to_string());
+                }
+            }
+
+            let Some(spec) = from_spec else { continue };
+
+            let entry = grouped.entry(spec).or_insert(ReExportEntry {
+                symbols: Vec::new(),
+                wildcard: false,
+            });
+            if is_wildcard {
+                entry.wildcard = true;
+            }
+            if let Some(sym) = sym_name {
+                if !sym.is_empty() && !entry.symbols.contains(&sym) {
+                    entry.symbols.push(sym);
+                }
+            }
+        }
+
+        grouped
+            .into_iter()
+            .map(|(from_spec, entry)| BarrelReExport {
+                symbols: entry.symbols,
+                from_specifier: from_spec,
+                wildcard: entry.wildcard,
+            })
+            .collect()
     }
 
     pub fn map_test_files_with_imports(
@@ -746,11 +851,27 @@ impl TypeScriptExtractor {
                 if let Some(resolved) =
                     resolve_import_path(&import.module_specifier, from_file, &canonical_root)
                 {
-                    if is_non_sut_helper(&resolved) {
-                        continue;
-                    }
-                    if let Some(&idx) = canonical_to_idx.get(&resolved) {
-                        matched_indices.insert(idx);
+                    if is_barrel_file(&resolved) {
+                        // Barrel resolution: follow re-exports to find actual production files
+                        let barrel_path = PathBuf::from(&resolved);
+                        let resolved_files =
+                            resolve_barrel_exports(&barrel_path, &import.symbols, &canonical_root);
+                        for resolved_prod in resolved_files {
+                            let resolved_str = resolved_prod.to_string_lossy().into_owned();
+                            if is_non_sut_helper(&resolved_str) {
+                                continue;
+                            }
+                            if let Some(&idx) = canonical_to_idx.get(&resolved_str) {
+                                matched_indices.insert(idx);
+                            }
+                        }
+                    } else {
+                        if is_non_sut_helper(&resolved) {
+                            continue;
+                        }
+                        if let Some(&idx) = canonical_to_idx.get(&resolved) {
+                            matched_indices.insert(idx);
+                        }
                     }
                 }
             }
@@ -815,13 +936,32 @@ pub fn resolve_import_path(
 
     let canonical_root = scan_root.canonicalize().ok()?;
 
-    for candidate in candidates {
+    for candidate in &candidates {
         if let Ok(canonical) = candidate.canonicalize() {
             if canonical.starts_with(&canonical_root) {
                 return Some(canonical.to_string_lossy().into_owned());
             }
         }
     }
+
+    // Fallback: if the specifier refers to a directory, try <dir>/index.ts and <dir>/index.tsx
+    let dir_candidates: Vec<std::path::PathBuf> = if has_known_ext {
+        vec![]
+    } else {
+        let base = raw_path.as_os_str().to_string_lossy();
+        vec![
+            std::path::PathBuf::from(format!("{base}/index.ts")),
+            std::path::PathBuf::from(format!("{base}/index.tsx")),
+        ]
+    };
+    for candidate in &dir_candidates {
+        if let Ok(canonical) = candidate.canonicalize() {
+            if canonical.starts_with(&canonical_root) {
+                return Some(canonical.to_string_lossy().into_owned());
+            }
+        }
+    }
+
     None
 }
 
@@ -875,6 +1015,110 @@ fn is_non_sut_helper(file_path: &str) -> bool {
     }
 
     false
+}
+
+/// Returns true if the file path ends with `index.ts` or `index.tsx`.
+fn is_barrel_file(path: &str) -> bool {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+    file_name == "index.ts" || file_name == "index.tsx"
+}
+
+/// Resolve barrel re-exports starting from `barrel_path` for the given `symbols`.
+/// Follows up to 3 hops, prevents cycles via `visited` set.
+/// Returns the list of resolved non-barrel production file paths.
+pub fn resolve_barrel_exports(
+    barrel_path: &Path,
+    symbols: &[String],
+    scan_root: &Path,
+) -> Vec<PathBuf> {
+    let canonical_root = match scan_root.canonicalize() {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let extractor = crate::TypeScriptExtractor::new();
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut results: Vec<PathBuf> = Vec::new();
+    resolve_barrel_exports_inner(
+        barrel_path,
+        symbols,
+        scan_root,
+        &canonical_root,
+        &extractor,
+        &mut visited,
+        0,
+        &mut results,
+    );
+    results
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_barrel_exports_inner(
+    barrel_path: &Path,
+    symbols: &[String],
+    scan_root: &Path,
+    canonical_root: &Path,
+    extractor: &crate::TypeScriptExtractor,
+    visited: &mut HashSet<PathBuf>,
+    depth: usize,
+    results: &mut Vec<PathBuf>,
+) {
+    if depth >= MAX_BARREL_DEPTH {
+        return;
+    }
+
+    let canonical_barrel = match barrel_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    if !visited.insert(canonical_barrel) {
+        return;
+    }
+
+    let source = match std::fs::read_to_string(barrel_path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let re_exports = extractor.extract_barrel_re_exports(&source, &barrel_path.to_string_lossy());
+
+    for re_export in &re_exports {
+        // For named re-exports, skip if none of the requested symbols match.
+        // When symbols is empty (e.g. wildcard import or no symbol info available),
+        // treat as "match all" to be conservative — may over-resolve but avoids FN.
+        if !re_export.wildcard {
+            let has_match =
+                symbols.is_empty() || symbols.iter().any(|s| re_export.symbols.contains(s));
+            if !has_match {
+                continue;
+            }
+        }
+
+        if let Some(resolved_str) =
+            resolve_import_path(&re_export.from_specifier, barrel_path, scan_root)
+        {
+            if is_barrel_file(&resolved_str) {
+                resolve_barrel_exports_inner(
+                    &PathBuf::from(&resolved_str),
+                    symbols,
+                    scan_root,
+                    canonical_root,
+                    extractor,
+                    visited,
+                    depth + 1,
+                    results,
+                );
+            } else if !is_non_sut_helper(&resolved_str) {
+                if let Ok(canonical) = PathBuf::from(&resolved_str).canonicalize() {
+                    if canonical.starts_with(canonical_root) && !results.contains(&canonical) {
+                        results.push(canonical);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn production_stem(path: &str) -> Option<&str> {
@@ -2230,5 +2474,349 @@ describe('UsersController', () => {});
         // Then: returns true
         assert!(is_non_sut_helper("src/foo.enum.js"));
         assert!(is_non_sut_helper("src/bar.interface.tsx"));
+    }
+
+    // === Barrel Import Resolution Tests (BARREL-01 ~ BARREL-09) ===
+
+    // BARREL-01: resolve_import_path がディレクトリの index.ts にフォールバックする
+    #[test]
+    fn barrel_01_resolve_directory_to_index_ts() {
+        use tempfile::TempDir;
+
+        // Given: scan_root/decorators/index.ts が存在
+        let dir = TempDir::new().unwrap();
+        let decorators_dir = dir.path().join("decorators");
+        std::fs::create_dir_all(&decorators_dir).unwrap();
+        std::fs::File::create(decorators_dir.join("index.ts")).unwrap();
+
+        // from_file は scan_root/src/some.spec.ts (../../decorators → decorators/)
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let from_file = src_dir.join("some.spec.ts");
+
+        // When: resolve_import_path("../decorators", from_file, scan_root)
+        let result = resolve_import_path("../decorators", &from_file, dir.path());
+
+        // Then: decorators/index.ts のパスを返す
+        assert!(
+            result.is_some(),
+            "expected Some for directory with index.ts, got None"
+        );
+        let resolved = result.unwrap();
+        assert!(
+            resolved.ends_with("decorators/index.ts"),
+            "expected path ending with decorators/index.ts, got {resolved}"
+        );
+    }
+
+    // BARREL-02: extract_barrel_re_exports が named re-export をキャプチャする
+    #[test]
+    fn barrel_02_re_export_named_capture() {
+        // Given: `export { Foo } from './foo'`
+        let source = "export { Foo } from './foo';";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_barrel_re_exports
+        let re_exports = extractor.extract_barrel_re_exports(source, "index.ts");
+
+        // Then: symbols=["Foo"], from="./foo", wildcard=false
+        assert_eq!(
+            re_exports.len(),
+            1,
+            "expected 1 re-export, got {re_exports:?}"
+        );
+        let re = &re_exports[0];
+        assert_eq!(re.symbols, vec!["Foo".to_string()]);
+        assert_eq!(re.from_specifier, "./foo");
+        assert!(!re.wildcard);
+    }
+
+    // BARREL-03: extract_barrel_re_exports が wildcard re-export をキャプチャする
+    #[test]
+    fn barrel_03_re_export_wildcard_capture() {
+        // Given: `export * from './foo'`
+        let source = "export * from './foo';";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_barrel_re_exports
+        let re_exports = extractor.extract_barrel_re_exports(source, "index.ts");
+
+        // Then: wildcard=true, from="./foo"
+        assert_eq!(
+            re_exports.len(),
+            1,
+            "expected 1 re-export, got {re_exports:?}"
+        );
+        let re = &re_exports[0];
+        assert!(re.wildcard, "expected wildcard=true");
+        assert_eq!(re.from_specifier, "./foo");
+    }
+
+    // BARREL-04: resolve_barrel_exports が 1ホップのバレルを解決する
+    #[test]
+    fn barrel_04_resolve_barrel_exports_one_hop() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   index.ts: export { Foo } from './foo'
+        //   foo.ts: (実在)
+        let dir = TempDir::new().unwrap();
+        let index_path = dir.path().join("index.ts");
+        std::fs::write(&index_path, "export { Foo } from './foo';").unwrap();
+        let foo_path = dir.path().join("foo.ts");
+        std::fs::File::create(&foo_path).unwrap();
+
+        // When: resolve_barrel_exports(index_path, ["Foo"], scan_root)
+        let result = resolve_barrel_exports(&index_path, &["Foo".to_string()], dir.path());
+
+        // Then: [foo.ts] を返す
+        assert_eq!(result.len(), 1, "expected 1 resolved file, got {result:?}");
+        assert!(
+            result[0].ends_with("foo.ts"),
+            "expected foo.ts, got {:?}",
+            result[0]
+        );
+    }
+
+    // BARREL-05: resolve_barrel_exports が 2ホップのバレルを解決する
+    #[test]
+    fn barrel_05_resolve_barrel_exports_two_hops() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   index.ts: export * from './core'
+        //   core/index.ts: export { Foo } from './foo'
+        //   core/foo.ts: (実在)
+        let dir = TempDir::new().unwrap();
+        let index_path = dir.path().join("index.ts");
+        std::fs::write(&index_path, "export * from './core';").unwrap();
+
+        let core_dir = dir.path().join("core");
+        std::fs::create_dir_all(&core_dir).unwrap();
+        std::fs::write(core_dir.join("index.ts"), "export { Foo } from './foo';").unwrap();
+        let foo_path = core_dir.join("foo.ts");
+        std::fs::File::create(&foo_path).unwrap();
+
+        // When: resolve_barrel_exports(index_path, ["Foo"], scan_root)
+        let result = resolve_barrel_exports(&index_path, &["Foo".to_string()], dir.path());
+
+        // Then: core/foo.ts を返す
+        assert_eq!(result.len(), 1, "expected 1 resolved file, got {result:?}");
+        assert!(
+            result[0].ends_with("foo.ts"),
+            "expected foo.ts, got {:?}",
+            result[0]
+        );
+    }
+
+    // BARREL-06: 循環バレルで無限ループしない
+    #[test]
+    fn barrel_06_circular_barrel_no_infinite_loop() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   a/index.ts: export * from '../b'
+        //   b/index.ts: export * from '../a'
+        let dir = TempDir::new().unwrap();
+        let a_dir = dir.path().join("a");
+        let b_dir = dir.path().join("b");
+        std::fs::create_dir_all(&a_dir).unwrap();
+        std::fs::create_dir_all(&b_dir).unwrap();
+        std::fs::write(a_dir.join("index.ts"), "export * from '../b';").unwrap();
+        std::fs::write(b_dir.join("index.ts"), "export * from '../a';").unwrap();
+
+        let a_index = a_dir.join("index.ts");
+
+        // When: resolve_barrel_exports — must NOT panic or hang
+        let result = resolve_barrel_exports(&a_index, &["Foo".to_string()], dir.path());
+
+        // Then: 空結果を返し、パニックしない
+        assert!(
+            result.is_empty(),
+            "expected empty result for circular barrel, got {result:?}"
+        );
+    }
+
+    // BARREL-07: Layer 2 で barrel 経由の import が production file にマッチする
+    #[test]
+    fn barrel_07_layer2_barrel_import_matches_production() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   production: src/foo.service.ts
+        //   barrel: src/decorators/index.ts — export { Foo } from './foo.service'
+        //           ただし src/decorators/foo.service.ts として re-export 先を指す
+        //   test: test/foo.spec.ts — import { Foo } from '../src/decorators'
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let decorators_dir = src_dir.join("decorators");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&decorators_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        // Production file
+        let prod_path = src_dir.join("foo.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        // Barrel: decorators/index.ts re-exports from ../foo.service
+        std::fs::write(
+            decorators_dir.join("index.ts"),
+            "export { Foo } from '../foo.service';",
+        )
+        .unwrap();
+
+        // Test imports from barrel directory
+        let test_path = test_dir.join("foo.spec.ts");
+        std::fs::write(
+            &test_path,
+            "import { Foo } from '../src/decorators';\ndescribe('foo', () => {});",
+        )
+        .unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports (barrel resolution enabled)
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: foo.service.ts に foo.spec.ts がマッピングされる
+        assert_eq!(mappings.len(), 1, "expected 1 FileMapping");
+        assert!(
+            mappings[0]
+                .test_files
+                .contains(&test_path.to_string_lossy().into_owned()),
+            "expected foo.spec.ts mapped via barrel, got {:?}",
+            mappings[0].test_files
+        );
+    }
+
+    // BARREL-08: is_non_sut_helper フィルタが barrel 解決後のファイルに適用される
+    #[test]
+    fn barrel_08_non_sut_filter_applied_after_barrel_resolution() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   barrel: index.ts → export { SOME_CONST } from './constants'
+        //   resolved: constants.ts (is_non_sut_helper → true)
+        //   test imports from barrel
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        // Production file (real SUT)
+        let prod_path = src_dir.join("user.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        // Barrel index: re-exports from constants
+        std::fs::write(
+            src_dir.join("index.ts"),
+            "export { SOME_CONST } from './constants';",
+        )
+        .unwrap();
+        // constants.ts (non-SUT helper)
+        std::fs::File::create(src_dir.join("constants.ts")).unwrap();
+
+        // Test imports from barrel (which resolves to constants.ts)
+        let test_path = test_dir.join("barrel_const.spec.ts");
+        std::fs::write(
+            &test_path,
+            "import { SOME_CONST } from '../src';\ndescribe('const', () => {});",
+        )
+        .unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: user.service.ts にはマッピングされない (constants.ts はフィルタ済み)
+        assert_eq!(
+            mappings.len(),
+            1,
+            "expected 1 FileMapping for user.service.ts"
+        );
+        assert!(
+            mappings[0].test_files.is_empty(),
+            "constants.ts should be filtered out, but got {:?}",
+            mappings[0].test_files
+        );
+    }
+
+    // BARREL-09: extract_imports が symbol 名を保持する (ImportMapping::symbols フィールド)
+    #[test]
+    fn barrel_09_extract_imports_retains_symbols() {
+        // Given: `import { Foo, Bar } from './module'`
+        let source = "import { Foo, Bar } from './module';";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_imports
+        let imports = extractor.extract_imports(source, "test.ts");
+
+        // Then: Foo と Bar の両方が symbols として存在する
+        // ImportMapping は symbol_name を 1件ずつ返すが、
+        // 同一 module_specifier からの import は symbols Vec に集約される
+        let from_module: Vec<&ImportMapping> = imports
+            .iter()
+            .filter(|i| i.module_specifier == "./module")
+            .collect();
+        let names: Vec<&str> = from_module.iter().map(|i| i.symbol_name.as_str()).collect();
+        assert!(names.contains(&"Foo"), "expected Foo in symbols: {names:?}");
+        assert!(names.contains(&"Bar"), "expected Bar in symbols: {names:?}");
+
+        // BARREL-09 の本質: ImportMapping に symbols フィールドが存在し、
+        // 同じ specifier からの import が集約されること
+        // (現在の ImportMapping は symbol_name: String のみ → symbols: Vec<String> への移行が必要)
+        let grouped = imports
+            .iter()
+            .filter(|i| i.module_specifier == "./module")
+            .fold(Vec::<String>::new(), |mut acc, i| {
+                acc.push(i.symbol_name.clone());
+                acc
+            });
+        // symbols フィールドが実装されたら、1つの ImportMapping に ["Foo", "Bar"] が入る想定
+        // 現時点では 2件の ImportMapping として返されることを確認
+        assert_eq!(
+            grouped.len(),
+            2,
+            "expected 2 symbols from ./module, got {grouped:?}"
+        );
+
+        // Verify symbols field aggregation: each ImportMapping from ./module
+        // should have both Foo and Bar in its symbols Vec
+        let first_import = imports
+            .iter()
+            .find(|i| i.module_specifier == "./module")
+            .expect("expected at least one import from ./module");
+        let symbols = &first_import.symbols;
+        assert!(
+            symbols.contains(&"Foo".to_string()),
+            "symbols should contain Foo, got {symbols:?}"
+        );
+        assert!(
+            symbols.contains(&"Bar".to_string()),
+            "symbols should contain Bar, got {symbols:?}"
+        );
+        assert_eq!(
+            symbols.len(),
+            2,
+            "expected exactly 2 symbols, got {symbols:?}"
+        );
     }
 }
