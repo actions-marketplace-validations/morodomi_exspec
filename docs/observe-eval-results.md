@@ -5,12 +5,12 @@
 | Metric | Value |
 |--------|-------|
 | TP (correct predictions) | 155 |
-| FP (incorrect predictions) | 6 |
+| FP (incorrect predictions) | 1 |
 | FN (missed ground truth) | 11 |
-| Ignored (secondary targets) | 178 |
-| Precision | 96.3% |
+| Ignored (secondary targets) | 183 |
+| Precision | 99.4% |
 | Recall | 93.4% |
-| F1 Score | 94.8% |
+| F1 Score | 96.3% |
 
 ## Stratum Breakdown
 
@@ -190,11 +190,6 @@
 | Test File | Production File |
 |-----------|-----------------|
 | packages/common/test/decorators/route-params.decorator.spec.ts | packages/common/pipes/parse-int.pipe.ts |
-| packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/injector/lazy-module-loader/lazy-module-loader.ts |
-| packages/core/test/injector/internal-core-module/internal-core-module-factory.spec.ts | packages/core/injector/modules-container.ts |
-| packages/core/test/injector/lazy-module-loader/lazy-module-loader.spec.ts | packages/core/injector/modules-container.ts |
-| packages/core/test/router/router-execution-context.spec.ts | packages/common/decorators/http/route-params.decorator.ts |
-| packages/core/test/router/routes-resolver.spec.ts | packages/core/injector/container.ts |
 
 ## False Negatives
 

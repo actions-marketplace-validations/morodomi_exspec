@@ -1848,7 +1848,9 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/helpers/external-context-creator.ts",
         "packages/core/helpers/http-adapter-host.ts",
         "packages/core/injector/internal-core-module/internal-core-module.ts",
-        "packages/core/inspector/serialized-graph.ts"
+        "packages/core/inspector/serialized-graph.ts",
+        "packages/core/injector/lazy-module-loader/lazy-module-loader.ts",
+        "packages/core/injector/modules-container.ts"
       ],
       "confidence": "high",
       "evidence": {
@@ -1872,7 +1874,8 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/metadata-scanner.ts",
         "packages/core/scanner.ts",
         "packages/core/injector/container.ts",
-        "packages/common/decorators/modules/module.decorator.ts"
+        "packages/common/decorators/modules/module.decorator.ts",
+        "packages/core/injector/modules-container.ts"
       ],
       "confidence": "high",
       "evidence": {
@@ -2584,7 +2587,8 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/pipes/pipes-context-creator.ts",
         "packages/core/router/route-params-factory.ts",
         "packages/core/helpers/handler-metadata-storage.ts",
-        "packages/core/router/sse-stream.ts"
+        "packages/core/router/sse-stream.ts",
+        "packages/common/decorators/http/route-params.decorator.ts"
       ],
       "confidence": "high",
       "evidence": {
@@ -2708,7 +2712,8 @@ See `docs/observe-gt-guideline.md` for full classification rules.
         "packages/core/injector/instance-wrapper.ts",
         "packages/core/inspector/graph-inspector.ts",
         "packages/core/inspector/serialized-graph.ts",
-        "packages/common/decorators/modules/module.decorator.ts"
+        "packages/common/decorators/modules/module.decorator.ts",
+        "packages/core/injector/container.ts"
       ],
       "confidence": "high",
       "evidence": {
