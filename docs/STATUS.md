@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 8b (observe PoC) completed successfully. Phase 8c (observe MVP) next. v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages, 767 tests.
+Phase 8c-2 (observe MVP ship) completed. observe is now documented in README. Phase 8c-3 (tsconfig path resolution) next. v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages, 767 tests.
 
 ## Progress
 
@@ -27,7 +27,9 @@ Phase 8b (observe PoC) completed successfully. Phase 8c (observe MVP) next. v0.1
 | 7 - OSS release (crates.io v0.1.2) | DONE |
 | 8a - Lint Reliability (BLOCK/WARN/INFO FP fixes) | IN PROGRESS |
 | 8b - observe PoC (static test-to-code mapping) | **DONE** |
-| 8c - observe MVP (failure boundaries, product metrics) | NEXT |
+| 8c-1 - observe failure boundaries | **DONE** |
+| 8c-2 - observe MVP ship (README, ship criteria) | **DONE** |
+| 8c-3 - tsconfig path resolution | NEXT |
 
 ### Phase 8b Final Results
 

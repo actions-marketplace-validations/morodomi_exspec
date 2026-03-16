@@ -68,6 +68,38 @@ Each language has specific detection patterns and known gaps. See [docs/language
 
 See [docs/SPEC.md](docs/SPEC.md) for the full rule reference.
 
+## Observe (TypeScript)
+
+> **Experimental**. Validated on NestJS and typeorm (Precision 99.4%, Recall 93.4%).
+
+Static test-to-code mapping. Answers "what is tested, where are the gaps?" without running tests.
+
+```bash
+exspec observe --lang typescript .              # Terminal output
+exspec observe --lang typescript --format json . # JSON for CI
+```
+
+### What it does
+
+1. **File mapping**: Maps test files to production files via filename convention (`users.service.spec.ts` -> `users.service.ts`) and import tracing
+2. **Route coverage**: Detects NestJS controller routes and shows which have test coverage
+3. **Gap detection**: Lists unmapped production files (potential test gaps)
+
+### Best for
+
+- Single-package TypeScript projects
+- Projects using relative imports
+- NestJS applications with standard barrel patterns
+
+### Known limitations
+
+- **Monorepo cross-package imports** (`@org/common`): Not resolved (requires tsconfig/node_modules)
+- **tsconfig path aliases** (`@app/*`): Not resolved
+- **Namespace re-exports** (`export * as Ns from`): Not captured
+- **Dynamic imports** (`import()`): Not captured
+
+See [docs/observe-boundaries.md](docs/observe-boundaries.md) for full details.
+
 ## Gradual Adoption
 
 Start with Tier 1 only. Disable Tier 2 until your codebase is clean:

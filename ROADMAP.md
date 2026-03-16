@@ -220,6 +220,26 @@ Phase 8c priorities (ordered):
 
 **8c-2 scope decision**: B2+B3 (tsconfig path resolution) is the highest-impact fix target. B4 (context-aware filtering) is a secondary target. B1/B5 are low priority.
 
+#### 8c-2: observe MVP ship (DONE)
+
+Ship criteria confirmed:
+- Precision 99.4% >= 98% threshold: PASS
+- Recall 93.4% >= 90% threshold: PASS
+
+README に observe セクション追加。applicability scope を明示して公開。
+
+**Decision**: 現在の精度で ship する。monorepo 対応 (B2+B3) は 8c-3 で対応。
+**Why**: "Ship then iterate" (Design Principle #3)。既に ship criteria 達成済み。monorepo 対応を待つことで全ユーザーへの公開が遅れるリスクの方が大きい。
+
+#### 8c-3: tsconfig path resolution
+
+B2+B3 の根本原因を解消し、monorepo 対応を実現する。
+
+Scope (TBD - 8c-3 plan で詳細化):
+- `tsconfig.json` の `compilerOptions.paths` パース
+- path alias を相対パスに変換して import tracing に接続
+- 再評価: NestJS monorepo での Recall 改善を測定
+
 ## Backlog
 
 | Priority | Task | Trigger |
