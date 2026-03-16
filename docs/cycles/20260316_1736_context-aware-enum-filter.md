@@ -156,6 +156,23 @@ Phase 8c-4 plan から Cycle doc を生成。10件のテスト (TD-01〜TD-05, P
 - `cargo fmt --check`: 差分なし
 - `cargo run -- --lang rust .`: BLOCK 0 | WARN 0 | INFO 7
 
+### 2026-03-16 — REFACTOR phase
+
+コード品質レビュー実施。重大なリファクタリング不要と判断。`is_type_definition_file` / `is_non_sut_helper` は既存パターン (`is_barrel_file` 等) と一貫しており、単一責務を維持。
+
+### 2026-03-16 — REVIEW phase 完了
+
+Design Review: PASS (blocking_score: 12)。
+
+- スコープ妥当性: B4 解消のみに限定。YAGNI 違反なし
+- アーキテクチャ整合性: 既存の純粋関数 + bool フラグパターンと一貫
+- barrel path `false` 判断: canonical_to_idx アクセス不可のため妥当。edge case は文書化済み
+- 指摘事項: barrel branch のキー形式整合性コメント追加は optional (defer)
+
+### 2026-03-16 — COMMIT phase 完了
+
+コミット `3985520` で実装済み。全 835 テスト PASS、clippy/fmt/self-dogfooding 全クリア。
+
 ---
 
 ## Next Steps
@@ -164,6 +181,6 @@ Phase 8c-4 plan から Cycle doc を生成。10件のテスト (TD-01〜TD-05, P
 2. [Done] PLAN
 3. [Done] RED
 4. [Done] GREEN
-5. [ ] REFACTOR
-6. [ ] REVIEW
-7. [ ] COMMIT
+5. [Done] REFACTOR
+6. [Done] REVIEW
+7. [Done] COMMIT
