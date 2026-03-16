@@ -16,6 +16,9 @@ static IMPORT_MAPPING_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 const RE_EXPORT_QUERY: &str = include_str!("../queries/re_export.scm");
 static RE_EXPORT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
+const EXPORTED_SYMBOL_QUERY: &str = include_str!("../queries/exported_symbol.scm");
+static EXPORTED_SYMBOL_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
 /// Maximum depth for barrel re-export resolution (NestJS measured max 2 hops).
 const MAX_BARREL_DEPTH: usize = 3;
 
@@ -1026,6 +1029,42 @@ fn is_barrel_file(path: &str) -> bool {
     file_name == "index.ts" || file_name == "index.tsx"
 }
 
+/// Check if a TypeScript file exports any of the given symbol names.
+/// Used to filter wildcard re-export targets by requested symbols.
+fn file_exports_any_symbol(file_path: &Path, symbols: &[String]) -> bool {
+    if symbols.is_empty() {
+        return true;
+    }
+    let source = match std::fs::read_to_string(file_path) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let mut parser = TypeScriptExtractor::parser();
+    let tree = match parser.parse(&source, None) {
+        Some(t) => t,
+        None => return false,
+    };
+    let query = cached_query(&EXPORTED_SYMBOL_QUERY_CACHE, EXPORTED_SYMBOL_QUERY);
+    let symbol_idx = query
+        .capture_index_for_name("symbol_name")
+        .expect("@symbol_name capture not found in exported_symbol.scm");
+
+    let mut cursor = QueryCursor::new();
+    let source_bytes = source.as_bytes();
+    let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
+    while let Some(m) = matches.next() {
+        for cap in m.captures {
+            if cap.index == symbol_idx {
+                let name = cap.node.utf8_text(source_bytes).unwrap_or("");
+                if symbols.iter().any(|s| s == name) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Resolve barrel re-exports starting from `barrel_path` for the given `symbols`.
 /// Follows up to 3 hops, prevents cycles via `visited` set.
 /// Returns the list of resolved non-barrel production file paths.
@@ -1111,6 +1150,14 @@ fn resolve_barrel_exports_inner(
                     results,
                 );
             } else if !is_non_sut_helper(&resolved_str) {
+                // For wildcard re-exports with known symbols, verify the target file
+                // actually exports at least one of the requested symbols before including it.
+                if !symbols.is_empty()
+                    && re_export.wildcard
+                    && !file_exports_any_symbol(Path::new(&resolved_str), symbols)
+                {
+                    continue;
+                }
                 if let Ok(canonical) = PathBuf::from(&resolved_str).canonicalize() {
                     if canonical.starts_with(canonical_root) && !results.contains(&canonical) {
                         results.push(canonical);
@@ -2818,5 +2865,71 @@ describe('UsersController', () => {});
             2,
             "expected exactly 2 symbols, got {symbols:?}"
         );
+    }
+
+    // BARREL-10: wildcard-only barrel で symbol フィルタが効く
+    // NestJS パターン: index.ts → export * from './core' → core/index.ts → export * from './foo'
+    // テストが { Foo } のみ import → foo.ts のみマッチ、bar.ts はマッチしない
+    #[test]
+    fn barrel_10_wildcard_barrel_symbol_filter() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   index.ts: export * from './core'
+        //   core/index.ts: export * from './foo' + export * from './bar'
+        //   core/foo.ts: export function Foo() {}
+        //   core/bar.ts: export function Bar() {}
+        let dir = TempDir::new().unwrap();
+        let core_dir = dir.path().join("core");
+        std::fs::create_dir_all(&core_dir).unwrap();
+
+        std::fs::write(dir.path().join("index.ts"), "export * from './core';").unwrap();
+        std::fs::write(
+            core_dir.join("index.ts"),
+            "export * from './foo';\nexport * from './bar';",
+        )
+        .unwrap();
+        std::fs::write(core_dir.join("foo.ts"), "export function Foo() {}").unwrap();
+        std::fs::write(core_dir.join("bar.ts"), "export function Bar() {}").unwrap();
+
+        // When: resolve with symbols=["Foo"]
+        let result = resolve_barrel_exports(
+            &dir.path().join("index.ts"),
+            &["Foo".to_string()],
+            dir.path(),
+        );
+
+        // Then: foo.ts のみ返す (bar.ts は Foo を export していないのでマッチしない)
+        assert_eq!(result.len(), 1, "expected 1 resolved file, got {result:?}");
+        assert!(
+            result[0].ends_with("foo.ts"),
+            "expected foo.ts, got {:?}",
+            result[0]
+        );
+    }
+
+    // BARREL-11: wildcard barrel + symbols empty → 全ファイルを返す (保守的)
+    #[test]
+    fn barrel_11_wildcard_barrel_empty_symbols_match_all() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let core_dir = dir.path().join("core");
+        std::fs::create_dir_all(&core_dir).unwrap();
+
+        std::fs::write(dir.path().join("index.ts"), "export * from './core';").unwrap();
+        std::fs::write(
+            core_dir.join("index.ts"),
+            "export * from './foo';\nexport * from './bar';",
+        )
+        .unwrap();
+        std::fs::write(core_dir.join("foo.ts"), "export function Foo() {}").unwrap();
+        std::fs::write(core_dir.join("bar.ts"), "export function Bar() {}").unwrap();
+
+        // When: resolve with empty symbols (match all)
+        let result = resolve_barrel_exports(&dir.path().join("index.ts"), &[], dir.path());
+
+        // Then: both files returned
+        assert_eq!(result.len(), 2, "expected 2 resolved files, got {result:?}");
     }
 }
