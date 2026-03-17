@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 8a (Lint Reliability) completed. All sub-phases done: BLOCK FP fixes (#62/#63/#64), WARN/INFO survey, severity adjustments (T101/T102/T108->INFO, T106->OFF), helper delegation strategy. Phase 8c-4 (context-aware enum/interface filter) also completed. v0.1.2 published to crates.io. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages.
+v0.2.0 released to crates.io. observe subcommand (TypeScript PoC) shipped. Lint reliability improvements (Phase 8a) and workspace consolidation complete. 13 projects / 4 languages / ~45k tests dogfooded. 17 active rules, 4 languages.
 
 ## Progress
 

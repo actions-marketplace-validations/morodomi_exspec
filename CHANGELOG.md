@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.2.0 (2026-03-17)
+
+New `exspec observe` subcommand for static test-to-code mapping, lint reliability improvements, and workspace consolidation.
+
+### Features
+
+- **`exspec observe` subcommand**: Static test-to-code mapping via AST analysis. TypeScript only (PoC). Filename convention (L1) + import tracing (L2) with barrel import resolution, tsconfig path alias support, and context-aware enum/interface filtering. Precision 99.4%, Recall 93.4% on nestjs/nest ground truth.
+- **T001 runtime hint** (#68): When `custom_patterns` is unconfigured, T001 now suggests adding project-specific assertion helpers.
+- **Severity rebalance** (#69, #70, #72, #73): T101/T102/T108 demoted from WARN to INFO. T106 disabled by default. Reduces noise for gradual adoption.
+
+### Bug Fixes
+
+- **Empty `custom_patterns`** (#36): Empty string patterns in config no longer cause false matches.
+- **Python nested `test_*` functions** (#41): Inner functions named `test_*` inside test functions are no longer extracted as separate tests.
+- **Barrel re-export symbol filter**: Wildcard re-exports (`export * from`) now filter by actually exported symbols, preventing false observe mappings.
+- **Abstract class handling**: Abstract classes no longer produce duplicate entries in observe extraction.
+- **Layer 2 import tracing scope**: Import tracing now runs on all test files, not just those unmatched by Layer 1.
+
+### Internal
+
+- Workspace consolidated: `workspace.package` + `workspace.dependencies` reduce version update points from 11 to 6.
+
 ## v0.1.2 (2026-03-12)
 
 Continued false-positive reduction from extended dogfooding (13 projects / 4 languages / ~45,000 tests) and a new rule.
