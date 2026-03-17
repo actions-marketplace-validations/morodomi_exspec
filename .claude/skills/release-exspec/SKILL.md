@@ -1,9 +1,9 @@
 ---
-name: release-exec
+name: release-exspec
 description: exspec (Cargo workspace) のリリース実行スキル。workspace.package のバージョン更新、CHANGELOG自動生成、docs/STATUS.md更新、crates.io publish、GitHub Releaseを一括実行。「リリース」「release」「publish」「バージョン上げて」で起動。Do NOT use for コード変更を伴う開発作業（dev-crewを使う）。
 ---
 
-# release-exec
+# release-exspec
 
 exspec Cargo workspace のバージョンリリースを実行する。
 

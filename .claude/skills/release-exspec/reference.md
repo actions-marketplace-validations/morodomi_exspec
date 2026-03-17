@@ -1,4 +1,4 @@
-# release-exec Reference
+# release-exspec Reference
 
 ## Version Management
 
