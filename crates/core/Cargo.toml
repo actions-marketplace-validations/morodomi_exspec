@@ -1,11 +1,11 @@
 [package]
 name = "exspec-core"
-version = "0.1.2"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Core analysis engine for exspec"
-license = "MIT"
-repository = "https://github.com/morodomi/exspec"
-authors = ["morodomi"]
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
