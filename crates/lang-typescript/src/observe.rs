@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -899,37 +899,6 @@ impl TypeScriptExtractor {
             let from_file = Path::new(test_file);
             let mut matched_indices = std::collections::HashSet::new();
 
-            // Helper: given a resolved file path, follow barrel re-exports if needed and
-            // collect matching production-file indices.
-            let collect_matches = |resolved: &str,
-                                   symbols: &[String],
-                                   indices: &mut HashSet<usize>| {
-                if self.is_barrel_file(resolved) {
-                    let barrel_path = PathBuf::from(resolved);
-                    let resolved_files = exspec_core::observe::resolve_barrel_exports(
-                        self,
-                        &barrel_path,
-                        symbols,
-                        &canonical_root,
-                    );
-                    for prod in resolved_files {
-                        let prod_str = prod.to_string_lossy().into_owned();
-                        if !self
-                            .is_non_sut_helper(&prod_str, canonical_to_idx.contains_key(&prod_str))
-                        {
-                            if let Some(&idx) = canonical_to_idx.get(&prod_str) {
-                                indices.insert(idx);
-                            }
-                        }
-                    }
-                } else if !self.is_non_sut_helper(resolved, canonical_to_idx.contains_key(resolved))
-                {
-                    if let Some(&idx) = canonical_to_idx.get(resolved) {
-                        indices.insert(idx);
-                    }
-                }
-            };
-
             for import in &imports {
                 if let Some(resolved) = exspec_core::observe::resolve_import_path(
                     self,
@@ -937,7 +906,14 @@ impl TypeScriptExtractor {
                     from_file,
                     &canonical_root,
                 ) {
-                    collect_matches(&resolved, &import.symbols, &mut matched_indices);
+                    exspec_core::observe::collect_import_matches(
+                        self,
+                        &resolved,
+                        &import.symbols,
+                        &canonical_to_idx,
+                        &mut matched_indices,
+                        &canonical_root,
+                    );
                 }
             }
 
@@ -954,7 +930,14 @@ impl TypeScriptExtractor {
                     if let Some(resolved) =
                         resolve_absolute_base_to_file(self, &alias_base, &canonical_root)
                     {
-                        collect_matches(&resolved, symbols, &mut matched_indices);
+                        exspec_core::observe::collect_import_matches(
+                            self,
+                            &resolved,
+                            symbols,
+                            &canonical_to_idx,
+                            &mut matched_indices,
+                            &canonical_root,
+                        );
                     }
                 }
             }
@@ -977,7 +960,14 @@ impl TypeScriptExtractor {
                     let resolved_dir_str = resolved_dir.to_string_lossy().into_owned();
                     for prod_canonical in canonical_to_idx.keys() {
                         if prod_canonical.starts_with(&resolved_dir_str) {
-                            collect_matches(prod_canonical, symbols, &mut matched_indices);
+                            exspec_core::observe::collect_import_matches(
+                                self,
+                                prod_canonical,
+                                symbols,
+                                &canonical_to_idx,
+                                &mut matched_indices,
+                                &canonical_root,
+                            );
                         }
                     }
                 }
