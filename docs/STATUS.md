@@ -44,7 +44,7 @@ observe PoC validated on 2 repositories. Static AST-only test-to-code mapping is
 | nestjs/nest (GT complete) | 99.4% | 93.4% | 96.3% | 1 | 11 |
 | typeorm (50-pair spot-check) | 100% | -- | -- | 0 | -- |
 
-Remaining FN (NestJS): cross-package barrel (7), interface/enum filter via barrel (partial, see B4).
+Remaining FN (NestJS): cross-package barrel (7), interface/enum filter via barrel (partial, see B4). B1 (namespace re-export) resolved in PR #102.
 
 ## Supported Languages
 
@@ -90,7 +90,7 @@ Remaining FN (NestJS): cross-package barrel (7), interface/enum filter via barre
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 835 passing | -- |
+| Tests | 946 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
