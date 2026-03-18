@@ -7,7 +7,7 @@ This document catalogs the known failure boundaries of `exspec observe` -- cases
 | # | Boundary | Root Cause | Impact | Fixability |
 |---|----------|-----------|--------|------------|
 | B1 | Namespace re-export | `re_export.scm` lacks `namespace_export` pattern | FN | Medium (query addition) |
-| B2 | Cross-package barrel import | Non-relative paths excluded from import tracing | FN | Hard (requires tsconfig/node_modules resolution) |
+| B2 | Cross-package barrel import | ~~Non-relative paths excluded from import tracing~~ **Resolved in B2** (yarn/pnpm symlink follow) | ~~FN~~ Resolved | node_modules symlink resolution (Layer 2c) |
 | B3 | tsconfig path alias | ~~Same as B2~~ **Resolved in 8c-3** | ~~FN~~ Resolved | tsconfig.json paths parsing |
 | B4 | Interface/enum filter side-effect | ~~`is_non_sut_helper` filters primary test targets~~ **Resolved in 8c-4** (direct import only) | ~~FN~~ Partially resolved | Context-aware filtering with `is_known_production` |
 | B5 | Dynamic import | `import_mapping.scm` only captures static `import` statements | FN | Low (rare in test code) |
@@ -29,17 +29,22 @@ Namespace re-export (`export * as Ns from`) produces a `namespace_export` AST no
 
 **Fix path**: Add a third pattern to `re_export.scm` targeting `namespace_export` nodes. **Decision**: Treat as opaque wildcard (`wildcard: true`). Ns.Foo -> Foo resolution is out of scope — wildcard covers all public symbols in the target module, avoiding FN with minimal FP risk (barrel precision 99.4%).
 
-## B2: Cross-package barrel import (non-relative path)
+## B2: Cross-package barrel import (non-relative path) -- Resolved in B2
 
 **Syntax**: `import { Foo } from '@org/common'`
 
-**Why it fails**: `extract_imports` filters out any module specifier that does not start with `./` or `../`. Package-scoped imports (`@org/common`, `@nestjs/common`) are indistinguishable from third-party dependencies without `node_modules` resolution.
+**Root cause**: `extract_imports` filters out any module specifier that does not start with `./` or `../`. Package-scoped imports (`@org/common`, `@nestjs/common`) are indistinguishable from third-party dependencies without `node_modules` resolution.
 
-**Impact**: This is the primary FN source (7/11 FN in NestJS eval). Monorepo packages that import from sibling packages via package names lose all import-tracing signal.
+**Resolution (Phase B2)**: Layer 2c follows yarn/pnpm workspace symlinks in `node_modules`. When `scan_root/node_modules/@org/common` is a symlink (as created by yarn/pnpm workspaces), it is canonicalized to the real package directory. All production files under that directory that appear in `production_files` are then mapped to the test file. tsconfig aliases (Layer 2b) take priority -- if a specifier is already resolved by tsconfig, Layer 2c is skipped.
 
-**Tests**: `boundary_b2_non_relative_import_skipped`, `boundary_b2_cross_pkg_barrel_unresolvable`
+**Scope constraint**: `production_files` must include the cross-package file for this to work. If only scan_root files are passed, B6 applies.
 
-**Fix path**: Parse `tsconfig.json` paths or resolve `node_modules` symlinks (common in Yarn/pnpm workspaces). High complexity, high reward.
+**Remaining limitations**:
+- npm (real directories in node_modules, not symlinks) is not resolved -- only symlinks
+- package.json `main`/`exports` parsing is not supported (barrel fallback only)
+- Windows not supported (symlink creation requires Unix APIs)
+
+**Tests**: `boundary_b2_non_relative_import_skipped` (unchanged -- extract_imports still filters non-relative), `boundary_b2_cross_pkg_symlink_resolved` (TP), `b2_sym_01_symlink_followed`, `b2_sym_02_real_directory_returns_none`, `b2_sym_03_nonexistent_returns_none`, `b2_map_02_tsconfig_alias_priority`, `b2_multi_01_two_test_files_both_mapped`
 
 ## B3: tsconfig path alias (`@app/*`) -- Resolved in 8c-3
 
@@ -100,10 +105,12 @@ Namespace re-export (`export * as Ns from`) produces a `namespace_export` AST no
 Based on these boundaries, observe is most reliable for:
 
 - **Single-package TypeScript projects** (no B2/B3/B6 impact)
-- **Projects using relative imports or tsconfig path aliases** (no B2 impact, B3 resolved)
+- **Projects using relative imports or tsconfig path aliases** (B2 resolved, B3 resolved)
 - **Projects with standard barrel patterns** (`export { X } from` or `export * from`, no B1 impact)
 
+- **yarn/pnpm monorepo workspaces** with cross-package imports (B2 resolved via symlink follow)
+
 Observe is **less reliable** for:
-- **Monorepo workspaces** with cross-package imports via node_modules (B2, B6)
+- **npm monorepo workspaces** with real-directory node_modules (not symlinks) for cross-package deps (B6)
 - **Projects heavy on namespace re-exports** (B1)
 - **Projects where enums/interfaces are re-exported through barrels** (B4 partial)
