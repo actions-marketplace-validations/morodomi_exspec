@@ -25,6 +25,7 @@ lcov.info
 
 # Claude Code
 .claude/agent-memory/
+.claude/plans/
 .claude/settings.local.json
 dogfooding/
 

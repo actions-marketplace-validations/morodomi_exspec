@@ -314,6 +314,34 @@ fn resolve_barrel_exports_inner(
     }
 }
 
+/// Helper: given a resolved file path, follow barrel re-exports if needed and
+/// collect matching production-file indices.
+pub fn collect_import_matches(
+    ext: &dyn ObserveExtractor,
+    resolved: &str,
+    symbols: &[String],
+    canonical_to_idx: &HashMap<String, usize>,
+    indices: &mut HashSet<usize>,
+    canonical_root: &Path,
+) {
+    if ext.is_barrel_file(resolved) {
+        let barrel_path = PathBuf::from(resolved);
+        let resolved_files = resolve_barrel_exports(ext, &barrel_path, symbols, canonical_root);
+        for prod in resolved_files {
+            let prod_str = prod.to_string_lossy().into_owned();
+            if !ext.is_non_sut_helper(&prod_str, canonical_to_idx.contains_key(&prod_str)) {
+                if let Some(&idx) = canonical_to_idx.get(&prod_str) {
+                    indices.insert(idx);
+                }
+            }
+        }
+    } else if !ext.is_non_sut_helper(resolved, canonical_to_idx.contains_key(resolved)) {
+        if let Some(&idx) = canonical_to_idx.get(resolved) {
+            indices.insert(idx);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -364,6 +392,70 @@ mod tests {
         }
     }
 
+    /// Configurable MockExtractor for CORE-CIM tests.
+    struct ConfigurableMockExtractor {
+        barrel_file_names: Vec<String>,
+        helper_file_paths: Vec<String>,
+    }
+
+    impl ConfigurableMockExtractor {
+        fn new() -> Self {
+            Self {
+                barrel_file_names: vec!["index.ts".to_string()],
+                helper_file_paths: vec![],
+            }
+        }
+
+        fn with_helpers(helper_paths: Vec<String>) -> Self {
+            Self {
+                barrel_file_names: vec!["index.ts".to_string()],
+                helper_file_paths: helper_paths,
+            }
+        }
+    }
+
+    impl ObserveExtractor for ConfigurableMockExtractor {
+        fn extract_production_functions(
+            &self,
+            _source: &str,
+            _file_path: &str,
+        ) -> Vec<ProductionFunction> {
+            vec![]
+        }
+        fn extract_imports(&self, _source: &str, _file_path: &str) -> Vec<ImportMapping> {
+            vec![]
+        }
+        fn extract_all_import_specifiers(&self, _source: &str) -> Vec<(String, Vec<String>)> {
+            vec![]
+        }
+        fn extract_barrel_re_exports(
+            &self,
+            _source: &str,
+            _file_path: &str,
+        ) -> Vec<BarrelReExport> {
+            // Returns empty to avoid real fs access; barrel resolution tested separately
+            vec![]
+        }
+        fn source_extensions(&self) -> &[&str] {
+            &["ts", "tsx"]
+        }
+        fn index_file_names(&self) -> &[&str] {
+            // Return a static slice matching our barrel file names
+            &["index.ts"]
+        }
+        fn production_stem<'a>(&self, path: &'a str) -> Option<&'a str> {
+            Path::new(path).file_stem()?.to_str()
+        }
+        fn test_stem<'a>(&self, path: &'a str) -> Option<&'a str> {
+            let stem = Path::new(path).file_stem()?.to_str()?;
+            stem.strip_suffix(".spec")
+                .or_else(|| stem.strip_suffix(".test"))
+        }
+        fn is_non_sut_helper(&self, file_path: &str, _is_known_production: bool) -> bool {
+            self.helper_file_paths.iter().any(|h| h == file_path)
+        }
+    }
+
     // TC-01: map_test_files で Layer 1 stem matching が動作
     #[test]
     fn tc01_map_test_files_stem_matching() {
@@ -405,5 +497,146 @@ mod tests {
         assert_send_sync::<MockExtractor>();
         // Box<dyn ObserveExtractor> should also work
         let _: Box<dyn ObserveExtractor + Send + Sync> = Box::new(MockExtractor);
+    }
+
+    // CORE-CIM-01: barrel file 経由の production match
+    //
+    // Given: is_barrel_file returns true (path ends in index.ts), but resolve_barrel_exports
+    //        returns no files (in-memory extractor avoids real fs access). The barrel path itself
+    //        is also present in canonical_to_idx as a fallback production entry.
+    //        When barrel resolves to zero files, no index should be added.
+    //        Separate assertion: when is_barrel_file=true the non-barrel branch is NOT taken.
+    #[test]
+    fn core_cim_01_barrel_file_skips_direct_match_branch() {
+        // Given
+        let ext = ConfigurableMockExtractor::new();
+        let barrel_path = "/project/src/index.ts";
+        let symbols: Vec<String> = vec!["UserService".to_string()];
+        let canonical_root = Path::new("/project/src");
+
+        // canonical_to_idx contains the barrel path itself
+        let mut canonical_to_idx: HashMap<String, usize> = HashMap::new();
+        canonical_to_idx.insert(barrel_path.to_string(), 0);
+        let mut indices: HashSet<usize> = HashSet::new();
+
+        // When: barrel file — resolve_barrel_exports returns empty (no real fs),
+        //       so no production files are resolved. indices must stay empty.
+        collect_import_matches(
+            &ext,
+            barrel_path,
+            &symbols,
+            &canonical_to_idx,
+            &mut indices,
+            canonical_root,
+        );
+
+        // Then: barrel branch was taken (no direct-match insert), indices remains empty
+        assert!(
+            indices.is_empty(),
+            "barrel path itself must not be added via direct-match branch"
+        );
+    }
+
+    // CORE-CIM-02: 非 barrel file の直接 match
+    //
+    // Given: is_barrel_file returns false, is_non_sut_helper returns false,
+    //        production file exists in canonical_to_idx at index 0
+    // When: collect_import_matches is called with the production file path
+    // Then: index 0 is inserted into indices
+    #[test]
+    fn core_cim_02_non_barrel_direct_match() {
+        // Given
+        let ext = ConfigurableMockExtractor::new();
+        let prod_path = "/project/src/user.service.ts";
+        let symbols: Vec<String> = vec!["UserService".to_string()];
+        let canonical_root = Path::new("/project/src");
+
+        let mut canonical_to_idx: HashMap<String, usize> = HashMap::new();
+        canonical_to_idx.insert(prod_path.to_string(), 0);
+        let mut indices: HashSet<usize> = HashSet::new();
+
+        // When
+        collect_import_matches(
+            &ext,
+            prod_path,
+            &symbols,
+            &canonical_to_idx,
+            &mut indices,
+            canonical_root,
+        );
+
+        // Then
+        assert!(
+            indices.contains(&0),
+            "production file index must be inserted for non-barrel direct match"
+        );
+        assert_eq!(indices.len(), 1);
+    }
+
+    // CORE-CIM-03: helper file はスキップ
+    //
+    // Given: is_non_sut_helper returns true for the resolved path
+    // When: collect_import_matches is called
+    // Then: indices stays empty
+    #[test]
+    fn core_cim_03_helper_file_skipped() {
+        // Given
+        let helper_path = "/project/src/test-utils.ts";
+        let ext = ConfigurableMockExtractor::with_helpers(vec![helper_path.to_string()]);
+        let symbols: Vec<String> = vec![];
+        let canonical_root = Path::new("/project/src");
+
+        let mut canonical_to_idx: HashMap<String, usize> = HashMap::new();
+        canonical_to_idx.insert(helper_path.to_string(), 0);
+        let mut indices: HashSet<usize> = HashSet::new();
+
+        // When
+        collect_import_matches(
+            &ext,
+            helper_path,
+            &symbols,
+            &canonical_to_idx,
+            &mut indices,
+            canonical_root,
+        );
+
+        // Then
+        assert!(
+            indices.is_empty(),
+            "helper files must be skipped and not added to indices"
+        );
+    }
+
+    // CORE-CIM-04: canonical_to_idx に存在しない file はスキップ
+    //
+    // Given: canonical_to_idx is empty
+    // When: collect_import_matches is called with any non-barrel, non-helper path
+    // Then: indices stays empty
+    #[test]
+    fn core_cim_04_unknown_file_skipped() {
+        // Given
+        let ext = ConfigurableMockExtractor::new();
+        let unknown_path = "/project/src/unknown.service.ts";
+        let symbols: Vec<String> = vec![];
+        let canonical_root = Path::new("/project/src");
+
+        let canonical_to_idx: HashMap<String, usize> = HashMap::new(); // empty
+        let mut indices: HashSet<usize> = HashSet::new();
+
+        // When
+        collect_import_matches(
+            &ext,
+            unknown_path,
+            &symbols,
+            &canonical_to_idx,
+            &mut indices,
+            canonical_root,
+        );
+
+        // Then
+        assert!(
+            indices.is_empty(),
+            "file not in canonical_to_idx must be skipped"
+        );
     }
 }

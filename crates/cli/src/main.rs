@@ -330,6 +330,76 @@ fn build_observe_report(
     }
 }
 
+/// Common observe pipeline: discover files → read test sources → map → report → output.
+///
+/// `lang_str` / `lang` select which files to discover.
+/// `map_fn` receives (production_files, test_sources, root) and returns file mappings.
+/// `route_fn` receives (production_files) and returns route entries (TypeScript only; others pass `|_| Vec::new()`).
+fn run_observe_common(
+    root: &str,
+    lang_str: &str,
+    lang: Language,
+    format: &str,
+    config: &Config,
+    map_fn: impl FnOnce(
+        &[String],
+        &HashMap<String, String>,
+        &Path,
+    ) -> Vec<exspec_core::observe::FileMapping>,
+    route_fn: impl FnOnce(&[String]) -> Vec<ObserveRouteEntry>,
+) {
+    let discovered = discover_files(root, Some(lang_str), &config.ignore_patterns);
+    let test_files: Vec<String> = discovered
+        .test_files
+        .get(&lang)
+        .cloned()
+        .unwrap_or_default();
+    let production_files = &discovered.source_files;
+
+    let mut test_sources: HashMap<String, String> = HashMap::new();
+    for test_file in &test_files {
+        if let Ok(source) = std::fs::read_to_string(test_file) {
+            test_sources.insert(test_file.clone(), source);
+        }
+    }
+
+    let file_mappings = map_fn(production_files, &test_sources, Path::new(root));
+    let route_entries = route_fn(production_files);
+
+    // Build route entries with coverage info
+    let mut prod_to_tests: HashMap<String, Vec<String>> = HashMap::new();
+    if !route_entries.is_empty() {
+        for m in &file_mappings {
+            if !m.test_files.is_empty() {
+                prod_to_tests.insert(m.production_file.clone(), m.test_files.clone());
+            }
+        }
+    }
+    let route_entries: Vec<ObserveRouteEntry> = route_entries
+        .into_iter()
+        .map(|mut entry| {
+            if let Some(tf) = prod_to_tests.get(&entry.file) {
+                entry.test_files = tf.clone();
+            }
+            entry
+        })
+        .collect();
+
+    let report = build_observe_report(
+        &file_mappings,
+        production_files,
+        test_files.len(),
+        route_entries,
+    );
+    let output = match format {
+        "json" => report.format_json(),
+        _ => report.format_terminal(),
+    };
+    if !output.is_empty() {
+        println!("{output}");
+    }
+}
+
 fn run_observe(args: ObserveArgs) {
     let observe_formats = ["terminal", "json"];
     if !observe_formats.contains(&args.format.as_str()) {
@@ -346,193 +416,77 @@ fn run_observe(args: ObserveArgs) {
 
     match args.lang.as_str() {
         "typescript" => {
-            let ts_extractor = TypeScriptExtractor::new();
-
-            let discovered = discover_files(root, Some("typescript"), &config.ignore_patterns);
-            let test_files: Vec<String> = discovered
-                .test_files
-                .get(&Language::TypeScript)
-                .cloned()
-                .unwrap_or_default();
-            let production_files = &discovered.source_files;
-
-            // Read source files and extract routes
-            let mut all_routes = Vec::new();
-            for prod_file in production_files {
-                let source = match std::fs::read_to_string(prod_file) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                };
-                let routes = ts_extractor.extract_routes(&source, prod_file);
-                all_routes.extend(routes);
-            }
-
-            // Read test sources into HashMap
-            let mut test_sources: HashMap<String, String> = HashMap::new();
-            for test_file in &test_files {
-                if let Ok(source) = std::fs::read_to_string(test_file) {
-                    test_sources.insert(test_file.clone(), source);
-                }
-            }
-
-            // Map test files to production files
-            let file_mappings = ts_extractor.map_test_files_with_imports(
-                production_files,
-                &test_sources,
-                Path::new(root),
-            );
-
-            // Build route entries with coverage info
-            let mut prod_to_tests: HashMap<String, Vec<String>> = HashMap::new();
-            for m in &file_mappings {
-                if !m.test_files.is_empty() {
-                    prod_to_tests.insert(m.production_file.clone(), m.test_files.clone());
-                }
-            }
-            let route_entries: Vec<ObserveRouteEntry> = all_routes
-                .iter()
-                .map(|route| {
-                    let tf = prod_to_tests.get(&route.file).cloned().unwrap_or_default();
-                    ObserveRouteEntry {
-                        http_method: route.http_method.clone(),
-                        path: route.path.clone(),
-                        handler: format!("{}.{}", route.class_name, route.handler_name),
-                        file: route.file.clone(),
-                        test_files: tf,
+            let ts_ext = TypeScriptExtractor::new();
+            run_observe_common(
+                root,
+                "typescript",
+                Language::TypeScript,
+                &args.format,
+                &config,
+                |prod, test_src, root_path| {
+                    ts_ext.map_test_files_with_imports(prod, test_src, root_path)
+                },
+                |prod_files| {
+                    let mut all_routes = Vec::new();
+                    for prod_file in prod_files {
+                        let source = match std::fs::read_to_string(prod_file) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        let routes = ts_ext.extract_routes(&source, prod_file);
+                        all_routes.extend(routes.into_iter().map(|r| ObserveRouteEntry {
+                            http_method: r.http_method,
+                            path: r.path,
+                            handler: format!("{}.{}", r.class_name, r.handler_name),
+                            file: r.file,
+                            test_files: Vec::new(),
+                        }));
                     }
-                })
-                .collect();
-
-            let report = build_observe_report(
-                &file_mappings,
-                production_files,
-                test_files.len(),
-                route_entries,
+                    all_routes
+                },
             );
-            let output = match args.format.as_str() {
-                "json" => report.format_json(),
-                _ => report.format_terminal(),
-            };
-            if !output.is_empty() {
-                println!("{output}");
-            }
         }
         "python" => {
-            let py_extractor = PythonExtractor::new();
-
-            let discovered = discover_files(root, Some("python"), &config.ignore_patterns);
-            let test_files: Vec<String> = discovered
-                .test_files
-                .get(&Language::Python)
-                .cloned()
-                .unwrap_or_default();
-            let production_files = &discovered.source_files;
-
-            // Read test sources into HashMap
-            let mut test_sources: HashMap<String, String> = HashMap::new();
-            for test_file in &test_files {
-                if let Ok(source) = std::fs::read_to_string(test_file) {
-                    test_sources.insert(test_file.clone(), source);
-                }
-            }
-
-            // Map test files to production files (Layer 1 + Layer 2)
-            let file_mappings = py_extractor.map_test_files_with_imports(
-                production_files,
-                &test_sources,
-                Path::new(root),
+            let py_ext = PythonExtractor::new();
+            run_observe_common(
+                root,
+                "python",
+                Language::Python,
+                &args.format,
+                &config,
+                |prod, test_src, root_path| {
+                    py_ext.map_test_files_with_imports(prod, test_src, root_path)
+                },
+                |_| Vec::new(),
             );
-
-            let report = build_observe_report(
-                &file_mappings,
-                production_files,
-                test_files.len(),
-                Vec::new(),
-            );
-            let output = match args.format.as_str() {
-                "json" => report.format_json(),
-                _ => report.format_terminal(),
-            };
-            if !output.is_empty() {
-                println!("{output}");
-            }
         }
         "rust" => {
-            let rust_extractor = RustExtractor::new();
-
-            let discovered = discover_files(root, Some("rust"), &config.ignore_patterns);
-            let test_files: Vec<String> = discovered
-                .test_files
-                .get(&Language::Rust)
-                .cloned()
-                .unwrap_or_default();
-            let production_files = &discovered.source_files;
-
-            // Read test sources into HashMap
-            let mut test_sources: HashMap<String, String> = HashMap::new();
-            for test_file in &test_files {
-                if let Ok(source) = std::fs::read_to_string(test_file) {
-                    test_sources.insert(test_file.clone(), source);
-                }
-            }
-
-            // Map test files to production files (Layer 0 + Layer 1 + Layer 2)
-            let file_mappings = rust_extractor.map_test_files_with_imports(
-                production_files,
-                &test_sources,
-                Path::new(root),
+            let rust_ext = RustExtractor::new();
+            run_observe_common(
+                root,
+                "rust",
+                Language::Rust,
+                &args.format,
+                &config,
+                |prod, test_src, root_path| {
+                    rust_ext.map_test_files_with_imports(prod, test_src, root_path)
+                },
+                |_| Vec::new(),
             );
-
-            let report = build_observe_report(
-                &file_mappings,
-                production_files,
-                test_files.len(),
-                Vec::new(),
-            );
-            let output = match args.format.as_str() {
-                "json" => report.format_json(),
-                _ => report.format_terminal(),
-            };
-            if !output.is_empty() {
-                println!("{output}");
-            }
         }
         "php" => {
-            let php_extractor = PhpExtractor::new();
-            let discovered = discover_files(root, Some("php"), &config.ignore_patterns);
-            let test_files: Vec<String> = discovered
-                .test_files
-                .get(&Language::Php)
-                .cloned()
-                .unwrap_or_default();
-            let production_files = &discovered.source_files;
-
-            let mut test_sources: HashMap<String, String> = HashMap::new();
-            for test_file in &test_files {
-                if let Ok(source) = std::fs::read_to_string(test_file) {
-                    test_sources.insert(test_file.clone(), source);
-                }
-            }
-
-            let file_mappings = php_extractor.map_test_files_with_imports(
-                production_files,
-                &test_sources,
-                Path::new(root),
+            let php_ext = PhpExtractor::new();
+            run_observe_common(
+                root,
+                "php",
+                Language::Php,
+                &args.format,
+                &config,
+                |prod, test_src, root_path| {
+                    php_ext.map_test_files_with_imports(prod, test_src, root_path)
+                },
+                |_| Vec::new(),
             );
-
-            let report = build_observe_report(
-                &file_mappings,
-                production_files,
-                test_files.len(),
-                Vec::new(),
-            );
-            let output = match args.format.as_str() {
-                "json" => report.format_json(),
-                _ => report.format_terminal(),
-            };
-            if !output.is_empty() {
-                println!("{output}");
-            }
         }
         _ => {
             eprintln!("error: observe is not yet supported for {}", args.lang);

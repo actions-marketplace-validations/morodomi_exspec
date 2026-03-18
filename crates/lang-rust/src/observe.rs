@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 
 use streaming_iterator::StreamingIterator;
@@ -692,7 +692,7 @@ impl RustExtractor {
                     &src_relative,
                     &canonical_root,
                 ) {
-                    collect_import_matches(
+                    exspec_core::observe::collect_import_matches(
                         self,
                         &resolved,
                         symbols,
@@ -723,39 +723,6 @@ impl RustExtractor {
     }
 }
 
-/// Helper: given a resolved file path, follow barrel re-exports if needed and
-/// collect matching production-file indices.
-fn collect_import_matches(
-    ext: &RustExtractor,
-    resolved: &str,
-    symbols: &[String],
-    canonical_to_idx: &HashMap<String, usize>,
-    indices: &mut HashSet<usize>,
-    canonical_root: &Path,
-) {
-    if ext.is_barrel_file(resolved) {
-        let barrel_path = PathBuf::from(resolved);
-        let resolved_files = exspec_core::observe::resolve_barrel_exports(
-            ext,
-            &barrel_path,
-            symbols,
-            canonical_root,
-        );
-        for prod in resolved_files {
-            let prod_str = prod.to_string_lossy().into_owned();
-            if !ext.is_non_sut_helper(&prod_str, canonical_to_idx.contains_key(&prod_str)) {
-                if let Some(&idx) = canonical_to_idx.get(&prod_str) {
-                    indices.insert(idx);
-                }
-            }
-        }
-    } else if !ext.is_non_sut_helper(resolved, canonical_to_idx.contains_key(resolved)) {
-        if let Some(&idx) = canonical_to_idx.get(resolved) {
-            indices.insert(idx);
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -763,6 +730,7 @@ fn collect_import_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     // -----------------------------------------------------------------------
     // RS-STEM-01: tests/test_foo.rs -> test_stem = Some("foo")
