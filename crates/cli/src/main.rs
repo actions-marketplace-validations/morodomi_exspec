@@ -478,8 +478,11 @@ fn run_observe(args: ObserveArgs) {
                             Ok(s) => s,
                             Err(_) => continue,
                         };
-                        let routes =
+                        let mut routes =
                             exspec_lang_python::observe::extract_routes(&source, prod_file);
+                        routes.extend(exspec_lang_python::observe::extract_django_routes(
+                            &source, prod_file,
+                        ));
                         all_routes.extend(routes.into_iter().map(|r| ObserveRouteEntry {
                             http_method: r.http_method,
                             path: r.path,

@@ -1530,7 +1530,13 @@ fn collect_router_prefixes(
 
 /// Strip surrounding quotes from a Python string literal.
 /// `"'/users'"` → `"/users"`, `'"hello"'` → `"hello"`, triple-quoted too.
+/// Also handles Python string prefixes: r"...", b"...", f"...", u"...", rb"...", etc.
+///
+/// Precondition: `raw` must be a tree-sitter `string` node text (always includes quotes after prefix).
 fn strip_string_quotes(raw: &str) -> String {
+    // Strip Python string prefix characters (r, b, f, u and combinations thereof).
+    // Safe because tree-sitter string nodes always have surrounding quotes after the prefix.
+    let raw = raw.trim_start_matches(|c: char| "rRbBfFuU".contains(c));
     // Try triple quotes first
     for q in &[r#"""""#, "'''"] {
         if let Some(inner) = raw.strip_prefix(q).and_then(|s| s.strip_suffix(q)) {
@@ -1902,5 +1908,542 @@ def root():
         assert_eq!(routes[0].http_method, "GET");
         assert_eq!(routes[0].path, "/");
         assert_eq!(routes[0].handler_name, "root");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Django URL conf route extraction
+// ---------------------------------------------------------------------------
+
+const DJANGO_URL_PATTERN_QUERY: &str = include_str!("../queries/django_url_pattern.scm");
+static DJANGO_URL_PATTERN_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
+static DJANGO_PATH_RE: OnceLock<regex::Regex> = OnceLock::new();
+static DJANGO_RE_PATH_RE: OnceLock<regex::Regex> = OnceLock::new();
+
+const HTTP_METHOD_ANY: &str = "ANY";
+
+/// Normalize a Django `path()` URL pattern to Express-style `:param` notation.
+/// `"users/<int:pk>/"` → `"users/:pk/"`
+/// `"users/<pk>/"` → `"users/:pk/"`
+pub fn normalize_django_path(path: &str) -> String {
+    let re = DJANGO_PATH_RE
+        .get_or_init(|| regex::Regex::new(r"<(?:\w+:)?(\w+)>").expect("invalid regex"));
+    re.replace_all(path, ":$1").into_owned()
+}
+
+/// Normalize a Django `re_path()` URL pattern.
+/// Strips leading `^` / trailing `$` anchors and converts `(?P<name>...)` to `:name`.
+pub fn normalize_re_path(path: &str) -> String {
+    // Strip leading ^ (only if the very first character is ^)
+    let s = path.strip_prefix('^').unwrap_or(path);
+    // Strip trailing $ (only if the very last character is $)
+    let s = s.strip_suffix('$').unwrap_or(s);
+    // Replace (?P<name>...) named groups with :name.
+    // Note: `[^)]*` correctly handles typical Django patterns like `(?P<year>[0-9]{4})`.
+    // Known limitation: nested parentheses inside a named group (e.g., `(?P<slug>(?:foo|bar))`)
+    // will not match because `[^)]*` stops at the first `)`. Such patterns are extremely rare
+    // in Django URL confs and are left as a known constraint.
+    let re = DJANGO_RE_PATH_RE
+        .get_or_init(|| regex::Regex::new(r"\(\?P<(\w+)>[^)]*\)").expect("invalid regex"));
+    re.replace_all(s, ":$1").into_owned()
+}
+
+/// Extract Django URL conf routes from Python source code.
+pub fn extract_django_routes(source: &str, file_path: &str) -> Vec<Route> {
+    if source.is_empty() {
+        return Vec::new();
+    }
+
+    let mut parser = PythonExtractor::parser();
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    let source_bytes = source.as_bytes();
+
+    let query = cached_query(&DJANGO_URL_PATTERN_QUERY_CACHE, DJANGO_URL_PATTERN_QUERY);
+
+    let func_idx = query.capture_index_for_name("django.func");
+    let path_idx = query.capture_index_for_name("django.path");
+    let handler_idx = query.capture_index_for_name("django.handler");
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
+
+    let mut routes = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    while let Some(m) = matches.next() {
+        let mut func: Option<String> = None;
+        let mut path_raw: Option<String> = None;
+        let mut handler: Option<String> = None;
+
+        for cap in m.captures {
+            let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
+            if func_idx == Some(cap.index) {
+                func = Some(text);
+            } else if path_idx == Some(cap.index) {
+                path_raw = Some(text);
+            } else if handler_idx == Some(cap.index) {
+                handler = Some(text);
+            }
+        }
+
+        let (func, path_raw, handler) = match (func, path_raw, handler) {
+            (Some(f), Some(p), Some(h)) => (f, p, h),
+            _ => continue,
+        };
+
+        let raw_path = strip_string_quotes(&path_raw);
+        let normalized = match func.as_str() {
+            "re_path" => normalize_re_path(&raw_path),
+            _ => normalize_django_path(&raw_path),
+        };
+
+        // Deduplicate: same (method, path, handler)
+        let key = (
+            HTTP_METHOD_ANY.to_string(),
+            normalized.clone(),
+            handler.clone(),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+
+        routes.push(Route {
+            http_method: HTTP_METHOD_ANY.to_string(),
+            path: normalized,
+            handler_name: handler,
+            file: file_path.to_string(),
+        });
+    }
+
+    routes
+}
+
+// ---------------------------------------------------------------------------
+// Django route extraction tests (DJ-NP-*, DJ-NR-*, DJ-RT-*, DJ-RT-E2E-*)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod django_route_tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Unit: normalize_django_path
+    // -----------------------------------------------------------------------
+
+    // DJ-NP-01: typed parameter
+    #[test]
+    fn dj_np_01_typed_parameter() {
+        // Given: a Django path with a typed parameter "users/<int:pk>/"
+        // When: normalize_django_path is called
+        // Then: returns "users/:pk/"
+        let result = normalize_django_path("users/<int:pk>/");
+        assert_eq!(result, "users/:pk/");
+    }
+
+    // DJ-NP-02: untyped parameter
+    #[test]
+    fn dj_np_02_untyped_parameter() {
+        // Given: a Django path with an untyped parameter "users/<pk>/"
+        // When: normalize_django_path is called
+        // Then: returns "users/:pk/"
+        let result = normalize_django_path("users/<pk>/");
+        assert_eq!(result, "users/:pk/");
+    }
+
+    // DJ-NP-03: multiple parameters
+    #[test]
+    fn dj_np_03_multiple_parameters() {
+        // Given: a Django path with multiple parameters
+        // When: normalize_django_path is called
+        // Then: returns "posts/:slug/comments/:id/"
+        let result = normalize_django_path("posts/<slug:slug>/comments/<int:id>/");
+        assert_eq!(result, "posts/:slug/comments/:id/");
+    }
+
+    // DJ-NP-04: no parameters
+    #[test]
+    fn dj_np_04_no_parameters() {
+        // Given: a Django path with no parameters "users/"
+        // When: normalize_django_path is called
+        // Then: returns "users/" unchanged
+        let result = normalize_django_path("users/");
+        assert_eq!(result, "users/");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit: normalize_re_path
+    // -----------------------------------------------------------------------
+
+    // DJ-NR-01: single named group
+    #[test]
+    fn dj_nr_01_single_named_group() {
+        // Given: a re_path pattern with one named group
+        // When: normalize_re_path is called
+        // Then: returns "articles/:year/"
+        let result = normalize_re_path("^articles/(?P<year>[0-9]{4})/$");
+        assert_eq!(result, "articles/:year/");
+    }
+
+    // DJ-NR-02: multiple named groups
+    #[test]
+    fn dj_nr_02_multiple_named_groups() {
+        // Given: a re_path pattern with multiple named groups
+        // When: normalize_re_path is called
+        // Then: returns ":year/:month/"
+        let result = normalize_re_path("^(?P<year>[0-9]{4})/(?P<month>[0-9]{2})/$");
+        assert_eq!(result, ":year/:month/");
+    }
+
+    // DJ-NR-03: no named groups
+    #[test]
+    fn dj_nr_03_no_named_groups() {
+        // Given: a re_path pattern with no named groups
+        // When: normalize_re_path is called
+        // Then: anchor stripped → "users/"
+        let result = normalize_re_path("^users/$");
+        assert_eq!(result, "users/");
+    }
+
+    // DJ-NR-04: ^ inside character class must not be stripped
+    #[test]
+    fn dj_nr_04_character_class_caret_preserved() {
+        // Given: a re_path pattern with ^ inside a character class [^/]+
+        // When: normalize_re_path is called
+        // Then: the ^ inside [] is NOT treated as an anchor: "items/[^/]+/"
+        let result = normalize_re_path("^items/[^/]+/$");
+        assert_eq!(result, "items/[^/]+/");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit: extract_django_routes
+    // -----------------------------------------------------------------------
+
+    // DJ-RT-01: basic path() with attribute handler (views.user_list)
+    #[test]
+    fn dj_rt_01_basic_path_attribute_handler() {
+        // Given: urlpatterns with path("users/", views.user_list)
+        let source = r#"
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("users/", views.user_list),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: 1 route, method="ANY", path="users/", handler="user_list"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].http_method, "ANY");
+        assert_eq!(routes[0].path, "users/");
+        assert_eq!(routes[0].handler_name, "user_list");
+    }
+
+    // DJ-RT-02: path() with direct import handler
+    #[test]
+    fn dj_rt_02_path_direct_import_handler() {
+        // Given: urlpatterns with path("users/", user_list) — direct function import
+        let source = r#"
+from django.urls import path
+from .views import user_list
+
+urlpatterns = [
+    path("users/", user_list),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: 1 route, method="ANY", path="users/", handler="user_list"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].http_method, "ANY");
+        assert_eq!(routes[0].path, "users/");
+        assert_eq!(routes[0].handler_name, "user_list");
+    }
+
+    // DJ-RT-03: path() with typed parameter
+    #[test]
+    fn dj_rt_03_path_typed_parameter() {
+        // Given: path("users/<int:pk>/", views.user_detail)
+        let source = r#"
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("users/<int:pk>/", views.user_detail),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: path = "users/:pk/"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].path, "users/:pk/");
+    }
+
+    // DJ-RT-04: path() with untyped parameter
+    #[test]
+    fn dj_rt_04_path_untyped_parameter() {
+        // Given: path("users/<pk>/", views.user_detail)
+        let source = r#"
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("users/<pk>/", views.user_detail),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: path = "users/:pk/"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].path, "users/:pk/");
+    }
+
+    // DJ-RT-05: re_path() with named group
+    #[test]
+    fn dj_rt_05_re_path_named_group() {
+        // Given: re_path("^articles/(?P<year>[0-9]{4})/$", views.year_archive)
+        let source = r#"
+from django.urls import re_path
+from . import views
+
+urlpatterns = [
+    re_path(r"^articles/(?P<year>[0-9]{4})/$", views.year_archive),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: path = "articles/:year/"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].path, "articles/:year/");
+    }
+
+    // DJ-RT-06: multiple routes — all method "ANY"
+    #[test]
+    fn dj_rt_06_multiple_routes() {
+        // Given: 3 path() entries in urlpatterns
+        let source = r#"
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("users/", views.user_list),
+    path("users/<int:pk>/", views.user_detail),
+    path("about/", views.about),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: 3 routes, all method "ANY"
+        assert_eq!(routes.len(), 3, "expected 3 routes, got {:?}", routes);
+        for r in &routes {
+            assert_eq!(r.http_method, "ANY", "expected method ANY for {:?}", r);
+        }
+    }
+
+    // DJ-RT-07: path() with name kwarg — name kwarg ignored, handler captured
+    #[test]
+    fn dj_rt_07_path_with_name_kwarg() {
+        // Given: path("login/", views.login_view, name="login")
+        let source = r#"
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("login/", views.login_view, name="login"),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: 1 route, handler = "login_view" (name kwarg ignored)
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].handler_name, "login_view");
+    }
+
+    // DJ-RT-08: empty source
+    #[test]
+    fn dj_rt_08_empty_source() {
+        // Given: ""
+        // When: extract_django_routes is called
+        let routes = extract_django_routes("", "urls.py");
+
+        // Then: empty Vec
+        assert!(routes.is_empty(), "expected empty Vec for empty source");
+    }
+
+    // DJ-RT-09: no path/re_path calls
+    #[test]
+    fn dj_rt_09_no_path_calls() {
+        // Given: source with no path() or re_path() calls
+        let source = r#"
+from django.db import models
+
+class User(models.Model):
+    name = models.CharField(max_length=100)
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "models.py");
+
+        // Then: empty Vec
+        assert!(
+            routes.is_empty(),
+            "expected empty Vec for non-URL source, got {:?}",
+            routes
+        );
+    }
+
+    // DJ-RT-10: deduplication — same (path, handler) appears twice → 1 route
+    #[test]
+    fn dj_rt_10_deduplication() {
+        // Given: two identical path() entries
+        let source = r#"
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("users/", views.user_list),
+    path("users/", views.user_list),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: 1 route (deduplicated)
+        assert_eq!(
+            routes.len(),
+            1,
+            "expected 1 route after dedup, got {:?}",
+            routes
+        );
+    }
+
+    // DJ-RT-11: include() is ignored
+    #[test]
+    fn dj_rt_11_include_is_ignored() {
+        // Given: urlpatterns with include() only
+        let source = r#"
+from django.urls import path, include
+
+urlpatterns = [
+    path("api/", include("myapp.urls")),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: empty Vec (include() is not a handler)
+        assert!(
+            routes.is_empty(),
+            "expected empty Vec for include()-only urlpatterns, got {:?}",
+            routes
+        );
+    }
+
+    // DJ-RT-12: multiple path parameters
+    #[test]
+    fn dj_rt_12_multiple_path_parameters() {
+        // Given: path("posts/<slug:slug>/comments/<int:id>/", views.comment_detail)
+        let source = r#"
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("posts/<slug:slug>/comments/<int:id>/", views.comment_detail),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: path = "posts/:slug/comments/:id/"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].path, "posts/:slug/comments/:id/");
+    }
+
+    // DJ-RT-13: re_path with multiple named groups
+    #[test]
+    fn dj_rt_13_re_path_multiple_named_groups() {
+        // Given: re_path("^(?P<year>[0-9]{4})/(?P<month>[0-9]{2})/$", views.archive)
+        let source = r#"
+from django.urls import re_path
+from . import views
+
+urlpatterns = [
+    re_path(r"^(?P<year>[0-9]{4})/(?P<month>[0-9]{2})/$", views.archive),
+]
+"#;
+        // When: extract_django_routes is called
+        let routes = extract_django_routes(source, "urls.py");
+
+        // Then: path = ":year/:month/"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].path, ":year/:month/");
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration: CLI (DJ-RT-E2E-01)
+    // -----------------------------------------------------------------------
+
+    // DJ-RT-E2E-01: observe with Django routes — routes_total = 2
+    #[test]
+    fn dj_rt_e2e_01_observe_django_routes_coverage() {
+        use tempfile::TempDir;
+
+        // Given: tempdir with urls.py (2 routes) and test_urls.py
+        let dir = TempDir::new().unwrap();
+        let urls_py = dir.path().join("urls.py");
+        let test_urls_py = dir.path().join("test_urls.py");
+
+        std::fs::write(
+            &urls_py,
+            r#"from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("users/", views.user_list),
+    path("users/<int:pk>/", views.user_detail),
+]
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            &test_urls_py,
+            r#"def test_user_list():
+    pass
+
+def test_user_detail():
+    pass
+"#,
+        )
+        .unwrap();
+
+        // When: extract_django_routes from urls.py
+        let urls_source = std::fs::read_to_string(&urls_py).unwrap();
+        let urls_path = urls_py.to_string_lossy().into_owned();
+
+        let routes = extract_django_routes(&urls_source, &urls_path);
+
+        // Then: routes_total = 2
+        assert_eq!(
+            routes.len(),
+            2,
+            "expected 2 routes extracted from urls.py, got {:?}",
+            routes
+        );
+
+        // Verify both routes have method "ANY"
+        for r in &routes {
+            assert_eq!(r.http_method, "ANY", "expected method ANY, got {:?}", r);
+        }
     }
 }
