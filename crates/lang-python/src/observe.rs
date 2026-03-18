@@ -336,40 +336,59 @@ impl ObserveExtractor for PythonExtractor {
             .capture_index_for_name("from_specifier")
             .expect("@from_specifier capture not found in re_export.scm");
         let symbol_name_idx = query.capture_index_for_name("symbol_name");
+        let wildcard_idx = query.capture_index_for_name("wildcard");
 
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
 
-        // Group symbols by from_specifier
-        let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+        // Group symbols by from_specifier, tracking wildcard flag separately
+        struct ReExportEntry {
+            symbols: Vec<String>,
+            wildcard: bool,
+        }
+        let mut grouped: HashMap<String, ReExportEntry> = HashMap::new();
 
         while let Some(m) = matches.next() {
             let mut from_spec: Option<String> = None;
             let mut sym: Option<String> = None;
+            let mut is_wildcard = false;
 
             for cap in m.captures {
                 if cap.index == from_specifier_idx {
                     let raw = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
                     from_spec = Some(python_module_to_relative_specifier(&raw));
+                } else if wildcard_idx == Some(cap.index) {
+                    is_wildcard = true;
                 } else if symbol_name_idx == Some(cap.index) {
                     sym = Some(cap.node.utf8_text(source_bytes).unwrap_or("").to_string());
                 }
             }
 
-            if let (Some(spec), Some(symbol)) = (from_spec, sym) {
+            if let Some(spec) = from_spec {
                 // Only include relative re-exports
                 if spec.starts_with("./") || spec.starts_with("../") {
-                    grouped.entry(spec).or_default().push(symbol);
+                    let entry = grouped.entry(spec).or_insert(ReExportEntry {
+                        symbols: Vec::new(),
+                        wildcard: false,
+                    });
+                    if is_wildcard {
+                        entry.wildcard = true;
+                    }
+                    if let Some(symbol) = sym {
+                        if !entry.symbols.contains(&symbol) {
+                            entry.symbols.push(symbol);
+                        }
+                    }
                 }
             }
         }
 
         grouped
             .into_iter()
-            .map(|(from_specifier, symbols)| BarrelReExport {
-                symbols,
+            .map(|(from_specifier, entry)| BarrelReExport {
+                symbols: entry.symbols,
                 from_specifier,
-                wildcard: false,
+                wildcard: entry.wildcard,
                 namespace_wildcard: false,
             })
             .collect()
@@ -1068,6 +1087,230 @@ def endpoint():
             !result,
             "expected file_exports_any_symbol to return false for Bar"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-BARREL-05: `from .module import *` extracts wildcard=true
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_barrel_05_re_export_wildcard() {
+        // Given: __init__.py content with a wildcard re-export
+        let source = "from .module import *\n";
+
+        // When: extract_barrel_re_exports is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_barrel_re_exports(source, "__init__.py");
+
+        // Then: one entry with wildcard=true, from_specifier="./module", empty symbols
+        let entry = result.iter().find(|e| e.from_specifier == "./module");
+        assert!(entry.is_some(), "./module not found in {:?}", result);
+        let entry = entry.unwrap();
+        assert!(entry.wildcard, "expected wildcard=true, got {:?}", entry);
+        assert!(
+            entry.symbols.is_empty(),
+            "expected empty symbols for wildcard, got {:?}",
+            entry.symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-BARREL-06: `from .module import Foo, Bar` extracts named (wildcard=false)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_barrel_06_re_export_named_multi_symbol() {
+        // Given: __init__.py content with multiple named re-exports
+        let source = "from .module import Foo, Bar\n";
+
+        // When: extract_barrel_re_exports is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_barrel_re_exports(source, "__init__.py");
+
+        // Then: one entry with wildcard=false, symbols=["Foo", "Bar"]
+        let entry = result.iter().find(|e| e.from_specifier == "./module");
+        assert!(entry.is_some(), "./module not found in {:?}", result);
+        let entry = entry.unwrap();
+        assert!(
+            !entry.wildcard,
+            "expected wildcard=false for named re-export, got {:?}",
+            entry
+        );
+        assert!(
+            entry.symbols.contains(&"Foo".to_string()),
+            "Foo not in symbols: {:?}",
+            entry.symbols
+        );
+        assert!(
+            entry.symbols.contains(&"Bar".to_string()),
+            "Bar not in symbols: {:?}",
+            entry.symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-BARREL-07: e2e: wildcard barrel resolves imported symbol
+    // test imports `from pkg import Foo`, pkg/__init__.py has `from .module import *`,
+    // pkg/module.py defines Foo → mapped
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_barrel_07_e2e_wildcard_barrel_mapped() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+
+        // pkg/__init__.py: wildcard re-export
+        std::fs::write(pkg.join("__init__.py"), "from .module import *\n").unwrap();
+        // pkg/module.py: defines Foo
+        std::fs::write(pkg.join("module.py"), "class Foo:\n    pass\n").unwrap();
+        // tests/test_foo.py: imports from pkg
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::write(
+            tests_dir.join("test_foo.py"),
+            "from pkg import Foo\n\ndef test_foo():\n    assert Foo()\n",
+        )
+        .unwrap();
+
+        let extractor = PythonExtractor::new();
+        let module_path = pkg.join("module.py").to_string_lossy().into_owned();
+        let test_path = tests_dir.join("test_foo.py").to_string_lossy().into_owned();
+        let test_source = std::fs::read_to_string(&test_path).unwrap();
+
+        let production_files = vec![module_path.clone()];
+        let test_sources: HashMap<String, String> =
+            [(test_path.clone(), test_source)].into_iter().collect();
+
+        // When: map_test_files_with_imports
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: module.py is matched to test_foo.py via barrel chain
+        let mapping = result.iter().find(|m| m.production_file == module_path);
+        assert!(
+            mapping.is_some(),
+            "module.py not found in mappings: {:?}",
+            result
+        );
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&test_path),
+            "test_foo.py not matched to module.py: {:?}",
+            mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-BARREL-08: e2e: named barrel resolves imported symbol
+    // test imports `from pkg import Foo`, pkg/__init__.py has `from .module import Foo`,
+    // pkg/module.py defines Foo → mapped
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_barrel_08_e2e_named_barrel_mapped() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+
+        // pkg/__init__.py: named re-export
+        std::fs::write(pkg.join("__init__.py"), "from .module import Foo\n").unwrap();
+        // pkg/module.py: defines Foo
+        std::fs::write(pkg.join("module.py"), "class Foo:\n    pass\n").unwrap();
+        // tests/test_foo.py: imports from pkg
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::write(
+            tests_dir.join("test_foo.py"),
+            "from pkg import Foo\n\ndef test_foo():\n    assert Foo()\n",
+        )
+        .unwrap();
+
+        let extractor = PythonExtractor::new();
+        let module_path = pkg.join("module.py").to_string_lossy().into_owned();
+        let test_path = tests_dir.join("test_foo.py").to_string_lossy().into_owned();
+        let test_source = std::fs::read_to_string(&test_path).unwrap();
+
+        let production_files = vec![module_path.clone()];
+        let test_sources: HashMap<String, String> =
+            [(test_path.clone(), test_source)].into_iter().collect();
+
+        // When: map_test_files_with_imports
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: module.py is matched to test_foo.py via barrel chain
+        let mapping = result.iter().find(|m| m.production_file == module_path);
+        assert!(
+            mapping.is_some(),
+            "module.py not found in mappings: {:?}",
+            result
+        );
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&test_path),
+            "test_foo.py not matched to module.py: {:?}",
+            mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-BARREL-09: e2e: wildcard barrel does NOT map non-exported symbol
+    // test imports `from pkg import NonExistent`, pkg/__init__.py has `from .module import *`,
+    // pkg/module.py has __all__ = ["Foo"] (does NOT export NonExistent) → NOT mapped
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_barrel_09_e2e_wildcard_barrel_non_exported_not_mapped() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+
+        // pkg/__init__.py: wildcard re-export
+        std::fs::write(pkg.join("__init__.py"), "from .module import *\n").unwrap();
+        // pkg/module.py: __all__ explicitly limits exports to Foo only
+        std::fs::write(
+            pkg.join("module.py"),
+            "__all__ = [\"Foo\"]\n\nclass Foo:\n    pass\n\nclass NonExistent:\n    pass\n",
+        )
+        .unwrap();
+        // tests/test_nonexistent.py: imports NonExistent from pkg
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::write(
+            tests_dir.join("test_nonexistent.py"),
+            "from pkg import NonExistent\n\ndef test_ne():\n    assert NonExistent()\n",
+        )
+        .unwrap();
+
+        let extractor = PythonExtractor::new();
+        let module_path = pkg.join("module.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_nonexistent.py")
+            .to_string_lossy()
+            .into_owned();
+        let test_source = std::fs::read_to_string(&test_path).unwrap();
+
+        let production_files = vec![module_path.clone()];
+        let test_sources: HashMap<String, String> =
+            [(test_path.clone(), test_source)].into_iter().collect();
+
+        // When: map_test_files_with_imports
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: module.py is NOT matched to test_nonexistent.py
+        // (NonExistent is not exported by module.py)
+        let mapping = result.iter().find(|m| m.production_file == module_path);
+        if let Some(mapping) = mapping {
+            assert!(
+                !mapping.test_files.contains(&test_path),
+                "test_nonexistent.py should NOT be matched to module.py: {:?}",
+                mapping.test_files
+            );
+        }
+        // If no mapping found for module.py at all, that's also correct
     }
 
     // -----------------------------------------------------------------------
