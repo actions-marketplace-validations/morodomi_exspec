@@ -776,6 +776,7 @@ impl TypeScriptExtractor {
 
         let symbol_idx = query.capture_index_for_name("symbol_name");
         let wildcard_idx = query.capture_index_for_name("wildcard");
+        let ns_wildcard_idx = query.capture_index_for_name("ns_wildcard");
         let specifier_idx = query
             .capture_index_for_name("from_specifier")
             .expect("@from_specifier capture not found in re_export.scm");
@@ -789,6 +790,7 @@ impl TypeScriptExtractor {
         struct ReExportEntry {
             symbols: Vec<String>,
             wildcard: bool,
+            namespace_wildcard: bool,
         }
         let mut grouped: HashMap<String, ReExportEntry> = HashMap::new();
 
@@ -796,9 +798,13 @@ impl TypeScriptExtractor {
             let mut from_spec = None;
             let mut sym_name = None;
             let mut is_wildcard = false;
+            let mut is_ns_wildcard = false;
 
             for cap in m.captures {
-                if wildcard_idx == Some(cap.index) {
+                if ns_wildcard_idx == Some(cap.index) {
+                    is_wildcard = true;
+                    is_ns_wildcard = true;
+                } else if wildcard_idx == Some(cap.index) {
                     is_wildcard = true;
                 } else if cap.index == specifier_idx {
                     from_spec = Some(cap.node.utf8_text(source_bytes).unwrap_or("").to_string());
@@ -812,9 +818,13 @@ impl TypeScriptExtractor {
             let entry = grouped.entry(spec).or_insert(ReExportEntry {
                 symbols: Vec::new(),
                 wildcard: false,
+                namespace_wildcard: false,
             });
             if is_wildcard {
                 entry.wildcard = true;
+            }
+            if is_ns_wildcard {
+                entry.namespace_wildcard = true;
             }
             if let Some(sym) = sym_name {
                 if !sym.is_empty() && !entry.symbols.contains(&sym) {
@@ -829,6 +839,7 @@ impl TypeScriptExtractor {
                 symbols: entry.symbols,
                 from_specifier: from_spec,
                 wildcard: entry.wildcard,
+                namespace_wildcard: entry.namespace_wildcard,
             })
             .collect()
     }
@@ -2928,12 +2939,13 @@ describe('UsersController', () => {});
     }
 
     // === Boundary Specification Tests (B1-B6) ===
-    // These tests document CURRENT behavior at failure boundaries.
-    // All assertions reflect known limitations, not desired future behavior.
+    // These tests document behavior at failure boundaries.
+    // B1: Fixed — namespace re-export is now captured as wildcard.
+    // B2-B6: Assertions reflect known limitations (not desired future behavior).
 
-    // TC-01: Boundary B1 — namespace re-export is NOT captured by extract_barrel_re_exports
+    // TC-01: Boundary B1 — namespace re-export captured as wildcard=true (B1 fix applied)
     #[test]
-    fn boundary_b1_ns_reexport_not_captured() {
+    fn boundary_b1_ns_reexport_captured_as_wildcard() {
         // Given: barrel index.ts with `export * as Ns from './validators'`
         let source = "export * as Validators from './validators';";
         let extractor = TypeScriptExtractor::new();
@@ -2941,13 +2953,19 @@ describe('UsersController', () => {});
         // When: extract_barrel_re_exports
         let re_exports = extractor.extract_barrel_re_exports(source, "index.ts");
 
-        // Then: namespace re-export is NOT captured (empty vec)
-        // Note: re_export.scm only handles `export { X } from` and `export * from`,
-        //       not `export * as Ns from` (namespace export is a different AST node)
-        assert!(
-            re_exports.is_empty(),
-            "expected empty re_exports for namespace export, got {:?}",
+        // Then: namespace re-export IS captured as wildcard=true (B1 fix applied)
+        assert_eq!(
+            re_exports.len(),
+            1,
+            "expected 1 re-export for namespace export, got {:?}",
             re_exports
+        );
+        let re = &re_exports[0];
+        assert_eq!(re.from_specifier, "./validators");
+        assert!(
+            re.wildcard,
+            "expected wildcard=true for namespace re-export, got {:?}",
+            re
         );
     }
 
@@ -3006,14 +3024,20 @@ describe('UsersController', () => {});
         let mappings =
             extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
 
-        // Then: foo.service.ts has NO test_files (FN — namespace re-export not resolved)
-        // Layer 1 (filename convention) produces no match either, so the mapping has no test_files.
-        let all_test_files: Vec<&String> =
-            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        // Then: foo.service.ts IS mapped to foo.spec.ts (B1 fix: namespace re-export resolved)
+        let prod_mapping = mappings
+            .iter()
+            .find(|m| m.production_file.contains("foo.service.ts"));
         assert!(
-            all_test_files.is_empty(),
-            "expected no test_files mapped (FN: namespace re-export not resolved), got {:?}",
-            all_test_files
+            prod_mapping.is_some(),
+            "expected foo.service.ts to appear in mappings, got {:?}",
+            mappings
+        );
+        let mapping = prod_mapping.unwrap();
+        assert!(
+            !mapping.test_files.is_empty(),
+            "expected foo.service.ts to have test_files (Layer 2 via namespace re-export), got {:?}",
+            mapping
         );
     }
 
@@ -3696,6 +3720,216 @@ describe('Mixed', () => {});
             all_test_files.is_empty(),
             "expected no test_files (import target outside scan_root), got {:?}",
             all_test_files
+        );
+    }
+
+    // === B1 namespace re-export fix tests (TS-B1-NS-01 to TS-B1-NS-04) ===
+
+    // TS-B1-NS-01: namespace re-export が wildcard として抽出される
+    #[test]
+    fn test_b1_ns_reexport_extracted_as_wildcard() {
+        // Given: `export * as Validators from './validators';`
+        let source = "export * as Validators from './validators';";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_barrel_re_exports
+        let re_exports = extractor.extract_barrel_re_exports(source, "index.ts");
+
+        // Then: 1件返る: from_specifier="./validators", wildcard=true
+        assert_eq!(
+            re_exports.len(),
+            1,
+            "expected 1 re-export, got {:?}",
+            re_exports
+        );
+        let re = &re_exports[0];
+        assert_eq!(re.from_specifier, "./validators");
+        assert!(
+            re.wildcard,
+            "expected wildcard=true for `export * as Ns from`, got {:?}",
+            re
+        );
+    }
+
+    // TS-B1-NS-02: namespace re-export 経由の mapping が TP になる
+    #[test]
+    fn test_b1_ns_reexport_mapping_resolves_via_layer2() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   validators/foo.service.ts (production)
+        //   index.ts: `export * as Ns from './validators'`
+        //   validators/index.ts: `export { FooService } from './foo.service'`
+        //   test/foo.spec.ts: `import { Ns } from '../index'`
+        let dir = TempDir::new().unwrap();
+        let validators_dir = dir.path().join("validators");
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&validators_dir).unwrap();
+        std::fs::create_dir_all(&test_dir).unwrap();
+
+        let prod_path = validators_dir.join("foo.service.ts");
+        std::fs::File::create(&prod_path).unwrap();
+
+        std::fs::write(
+            dir.path().join("index.ts"),
+            "export * as Ns from './validators';",
+        )
+        .unwrap();
+        std::fs::write(
+            validators_dir.join("index.ts"),
+            "export { FooService } from './foo.service';",
+        )
+        .unwrap();
+
+        let test_path = test_dir.join("foo.spec.ts");
+        std::fs::write(
+            &test_path,
+            "import { Ns } from '../index';\ndescribe('FooService', () => {});",
+        )
+        .unwrap();
+
+        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: foo.service.ts が test_files にマッチ (Layer 2 via namespace re-export)
+        let prod_mapping = mappings
+            .iter()
+            .find(|m| m.production_file.contains("foo.service.ts"));
+        assert!(
+            prod_mapping.is_some(),
+            "expected foo.service.ts in mappings, got {:?}",
+            mappings
+        );
+        let mapping = prod_mapping.unwrap();
+        assert!(
+            !mapping.test_files.is_empty(),
+            "expected foo.service.ts mapped to foo.spec.ts via namespace re-export, got {:?}",
+            mapping
+        );
+        assert!(
+            mapping.test_files.iter().any(|f| f.contains("foo.spec.ts")),
+            "expected foo.spec.ts in test_files, got {:?}",
+            mapping.test_files
+        );
+    }
+
+    // TS-B1-NS-03: 通常の wildcard と namespace re-export の混在
+    #[test]
+    fn test_b1_ns_reexport_mixed_with_plain_wildcard() {
+        // Given: `export * from './a'; export * as B from './b';`
+        let source = "export * from './a';\nexport * as B from './b';";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_barrel_re_exports
+        let mut re_exports = extractor.extract_barrel_re_exports(source, "index.ts");
+
+        // Then: 2件返る: 両方 wildcard=true
+        assert_eq!(
+            re_exports.len(),
+            2,
+            "expected 2 re-exports, got {:?}",
+            re_exports
+        );
+
+        re_exports.sort_by(|a, b| a.from_specifier.cmp(&b.from_specifier));
+
+        let re_a = re_exports.iter().find(|r| r.from_specifier == "./a");
+        let re_b = re_exports.iter().find(|r| r.from_specifier == "./b");
+
+        assert!(
+            re_a.is_some(),
+            "expected re-export from './a', got {:?}",
+            re_exports
+        );
+        assert!(
+            re_b.is_some(),
+            "expected re-export from './b', got {:?}",
+            re_exports
+        );
+        let a = re_a.unwrap();
+        let b = re_b.unwrap();
+        assert!(
+            a.wildcard,
+            "expected wildcard=true for plain `export * from './a'`, got {:?}",
+            a
+        );
+        assert!(
+            !a.namespace_wildcard,
+            "expected namespace_wildcard=false for plain wildcard, got {:?}",
+            a
+        );
+        assert!(
+            b.wildcard,
+            "expected wildcard=true for namespace `export * as B from './b'`, got {:?}",
+            b
+        );
+        assert!(
+            b.namespace_wildcard,
+            "expected namespace_wildcard=true for namespace re-export, got {:?}",
+            b
+        );
+    }
+
+    // TS-B1-NS-04: named re-export との混在
+    #[test]
+    fn test_b1_ns_reexport_mixed_with_named_reexport() {
+        // Given: `export { Foo } from './a'; export * as B from './b';`
+        let source = "export { Foo } from './a';\nexport * as B from './b';";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract_barrel_re_exports
+        let re_exports = extractor.extract_barrel_re_exports(source, "index.ts");
+
+        // Then: 2件: a は symbols=["Foo"], b は wildcard=true
+        assert_eq!(
+            re_exports.len(),
+            2,
+            "expected 2 re-exports, got {:?}",
+            re_exports
+        );
+
+        let re_a = re_exports.iter().find(|r| r.from_specifier == "./a");
+        let re_b = re_exports.iter().find(|r| r.from_specifier == "./b");
+
+        assert!(
+            re_a.is_some(),
+            "expected re-export from './a', got {:?}",
+            re_exports
+        );
+        assert!(
+            re_b.is_some(),
+            "expected re-export from './b', got {:?}",
+            re_exports
+        );
+
+        let re_a = re_a.unwrap();
+        assert!(
+            !re_a.wildcard,
+            "expected wildcard=false for named re-export from './a', got {:?}",
+            re_a
+        );
+        assert_eq!(
+            re_a.symbols,
+            vec!["Foo".to_string()],
+            "expected symbols=[\"Foo\"] for './a', got {:?}",
+            re_a.symbols
+        );
+
+        let re_b = re_b.unwrap();
+        assert!(
+            re_b.wildcard,
+            "expected wildcard=true for namespace re-export from './b', got {:?}",
+            re_b
         );
     }
 }

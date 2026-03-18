@@ -367,6 +367,7 @@ impl ObserveExtractor for PythonExtractor {
                 symbols,
                 from_specifier,
                 wildcard: false,
+                namespace_wildcard: false,
             })
             .collect()
     }

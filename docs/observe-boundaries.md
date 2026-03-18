@@ -25,9 +25,9 @@ Namespace re-export (`export * as Ns from`) produces a `namespace_export` AST no
 
 **Impact**: When a barrel file uses namespace grouping, all symbols behind that namespace become invisible to import tracing. This is uncommon in NestJS but appears in some utility packages.
 
-**Tests**: `boundary_b1_ns_reexport_not_captured`, `boundary_b1_ns_reexport_mapping_miss`
+**Tests**: `boundary_b1_ns_reexport_captured_as_wildcard`, `boundary_b1_ns_reexport_mapping_miss` (both inverted to TP after fix)
 
-**Fix path**: Add a third pattern to `re_export.scm` targeting `namespace_export` nodes. Requires deciding whether to resolve the namespace (Ns.Foo -> Foo) or treat the entire namespace as an opaque symbol.
+**Fix path**: Add a third pattern to `re_export.scm` targeting `namespace_export` nodes. **Decision**: Treat as opaque wildcard (`wildcard: true`). Ns.Foo -> Foo resolution is out of scope — wildcard covers all public symbols in the target module, avoiding FN with minimal FP risk (barrel precision 99.4%).
 
 ## B2: Cross-package barrel import (non-relative path)
 
