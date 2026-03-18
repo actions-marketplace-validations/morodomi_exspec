@@ -298,6 +298,7 @@ impl ObserveExtractor for RustExtractor {
                             symbols: Vec::new(),
                             from_specifier: format!("./{mod_name}"),
                             wildcard: true,
+                            namespace_wildcard: false,
                         });
                     }
                 }
@@ -583,6 +584,7 @@ fn extract_pub_use_re_exports(
             symbols: Vec::new(),
             from_specifier: format!("./{}", module_part.replace("::", "/")),
             wildcard: true,
+            namespace_wildcard: false,
         });
         return;
     }
@@ -601,6 +603,7 @@ fn extract_pub_use_re_exports(
                 symbols,
                 from_specifier: format!("./{}", module_part.replace("::", "/")),
                 wildcard: false,
+                namespace_wildcard: false,
             });
         }
         return;
@@ -615,6 +618,7 @@ fn extract_pub_use_re_exports(
             symbols: vec![symbol.to_string()],
             from_specifier: format!("./{}", module_parts.join("/")),
             wildcard: false,
+            namespace_wildcard: false,
         });
     }
 }

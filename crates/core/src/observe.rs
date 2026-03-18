@@ -41,6 +41,10 @@ pub struct BarrelReExport {
     pub symbols: Vec<String>,
     pub from_specifier: String,
     pub wildcard: bool,
+    /// True when this is a namespace re-export (`export * as Ns from '...'`).
+    /// The namespace name changes the symbol space, so nested resolution must
+    /// treat this as an opaque wildcard (symbols dropped on recursion).
+    pub namespace_wildcard: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -273,10 +277,18 @@ fn resolve_barrel_exports_inner(
             resolve_import_path(ext, &re_export.from_specifier, barrel_path, scan_root)
         {
             if ext.is_barrel_file(&resolved_str) {
+                // Namespace re-export (`export * as Ns from '...'`) changes the symbol
+                // namespace, so the caller's symbol names no longer match the nested
+                // exports. Treat as opaque wildcard by passing empty symbols.
+                let nested_symbols: &[String] = if re_export.namespace_wildcard {
+                    &[]
+                } else {
+                    symbols
+                };
                 resolve_barrel_exports_inner(
                     ext,
                     &PathBuf::from(&resolved_str),
-                    symbols,
+                    nested_symbols,
                     scan_root,
                     canonical_root,
                     visited,
@@ -284,6 +296,8 @@ fn resolve_barrel_exports_inner(
                     results,
                 );
             } else if !ext.is_non_sut_helper(&resolved_str, false) {
+                // Non-barrel path: namespace_wildcard does not change symbols filtering here.
+                // The caller's symbols are used as-is for file_exports_any_symbol check.
                 if !symbols.is_empty()
                     && re_export.wildcard
                     && !ext.file_exports_any_symbol(Path::new(&resolved_str), symbols)

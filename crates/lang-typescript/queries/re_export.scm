@@ -11,3 +11,9 @@
   "*" @wildcard
   source: (string
     (string_fragment) @from_specifier))
+
+;; Namespace re-export: export * as Ns from './module'
+(export_statement
+  (namespace_export) @ns_wildcard
+  source: (string
+    (string_fragment) @from_specifier))
