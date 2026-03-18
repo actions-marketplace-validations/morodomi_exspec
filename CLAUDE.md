@@ -92,4 +92,6 @@ CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 → Agent Teams、それ以外 → 並行
 - `codex exec resume --last --full-auto`: セッション継続（cwdフィルタ）
 - `codex review` は使わない
 
+**Auto-orchestrate after plan approve**: The `## Post-Approve Action` section in plan files persists in compressed context after compact. This triggers /orchestrate automatically after compact + accept edits on transition.
+
 **Post-Approve sequence**: plan approve 後は sync-plan → plan-review → orchestrate(RED→GREEN→REFACTOR→REVIEW→COMMIT) の順で実行。直接 orchestrate に飛ばない。
