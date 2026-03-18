@@ -18,6 +18,9 @@ static PRODUCTION_FUNCTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 const CFG_TEST_QUERY: &str = include_str!("../queries/cfg_test.scm");
 static CFG_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
+const EXPORTED_SYMBOL_QUERY: &str = include_str!("../queries/exported_symbol.scm");
+static EXPORTED_SYMBOL_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
 fn rust_language() -> tree_sitter::Language {
     tree_sitter_rust::LANGUAGE.into()
 }
@@ -334,6 +337,42 @@ impl ObserveExtractor for RustExtractor {
     fn is_non_sut_helper(&self, file_path: &str, is_known_production: bool) -> bool {
         is_non_sut_helper(file_path, is_known_production)
     }
+
+    fn file_exports_any_symbol(&self, path: &Path, symbols: &[String]) -> bool {
+        if symbols.is_empty() {
+            return true;
+        }
+        // Optimistic fallback on read/parse failure (matches core default and Python).
+        // FN avoidance is preferred over FP avoidance here.
+        let source = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return true,
+        };
+        let mut parser = Self::parser();
+        let tree = match parser.parse(&source, None) {
+            Some(t) => t,
+            None => return true,
+        };
+        let query = cached_query(&EXPORTED_SYMBOL_QUERY_CACHE, EXPORTED_SYMBOL_QUERY);
+        let symbol_idx = query
+            .capture_index_for_name("symbol_name")
+            .expect("@symbol_name capture not found in exported_symbol.scm");
+
+        let source_bytes = source.as_bytes();
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
+        while let Some(m) = matches.next() {
+            for cap in m.captures {
+                if cap.index == symbol_idx {
+                    let name = cap.node.utf8_text(source_bytes).unwrap_or("");
+                    if symbols.iter().any(|s| s == name) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +509,120 @@ pub fn extract_import_specifiers_with_crate_name(
     }
 
     result_map.into_iter().collect()
+}
+
+// ---------------------------------------------------------------------------
+// Workspace support
+// ---------------------------------------------------------------------------
+
+/// A member crate in a Cargo workspace.
+#[derive(Debug)]
+pub struct WorkspaceMember {
+    /// Crate name (hyphens converted to underscores).
+    pub crate_name: String,
+    /// Absolute path to the member crate root (directory containing Cargo.toml).
+    pub member_root: std::path::PathBuf,
+}
+
+/// Directories to skip during workspace member traversal.
+const SKIP_DIRS: &[&str] = &["target", ".cargo", "vendor"];
+
+/// Maximum directory traversal depth when searching for workspace members.
+const MAX_TRAVERSE_DEPTH: usize = 4;
+
+/// Check whether a `Cargo.toml` at `scan_root` contains a `[workspace]` section.
+pub fn has_workspace_section(scan_root: &Path) -> bool {
+    let cargo_toml = scan_root.join("Cargo.toml");
+    let content = match std::fs::read_to_string(&cargo_toml) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    content.lines().any(|line| line.trim() == "[workspace]")
+}
+
+/// Find all member crates in a Cargo workspace rooted at `scan_root`.
+///
+/// Returns an empty `Vec` if `scan_root` does not have a `[workspace]` section
+/// in its `Cargo.toml`.
+///
+/// Supports both virtual workspaces (no `[package]`) and non-virtual workspaces
+/// (both `[workspace]` and `[package]`).
+///
+/// Directories named `target`, `.cargo`, `vendor`, or starting with `.` are
+/// skipped.  Traversal is limited to `MAX_TRAVERSE_DEPTH` levels.
+pub fn find_workspace_members(scan_root: &Path) -> Vec<WorkspaceMember> {
+    if !has_workspace_section(scan_root) {
+        return Vec::new();
+    }
+
+    let mut members = Vec::new();
+    find_members_recursive(scan_root, scan_root, 0, &mut members);
+    members
+}
+
+fn find_members_recursive(
+    scan_root: &Path,
+    dir: &Path,
+    depth: usize,
+    members: &mut Vec<WorkspaceMember>,
+) {
+    if depth > MAX_TRAVERSE_DEPTH {
+        return;
+    }
+
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Skip hidden directories and known non-source dirs
+        if dir_name.starts_with('.') || SKIP_DIRS.contains(&dir_name) {
+            continue;
+        }
+
+        // Skip the scan root itself (already checked above)
+        if path == scan_root {
+            continue;
+        }
+
+        // Check if this subdirectory has a member Cargo.toml with [package]
+        if let Some(crate_name) = parse_crate_name(&path) {
+            members.push(WorkspaceMember {
+                crate_name,
+                member_root: path.to_path_buf(),
+            });
+            // Don't recurse into member crates (avoids cross-crate confusion)
+            // However, nested workspaces / virtual manifests are rare; skip for now.
+            continue;
+        }
+
+        // Recurse into directories without their own [package]
+        find_members_recursive(scan_root, &path, depth + 1, members);
+    }
+}
+
+/// Find the workspace member that owns `path` by longest prefix match.
+///
+/// Returns `None` if no member's `member_root` is a prefix of `path`.
+pub fn find_member_for_path<'a>(
+    path: &Path,
+    members: &'a [WorkspaceMember],
+) -> Option<&'a WorkspaceMember> {
+    members
+        .iter()
+        .filter(|m| path.starts_with(&m.member_root))
+        .max_by_key(|m| m.member_root.components().count())
 }
 
 /// Parse the `name = "..."` field from a Cargo.toml `[package]` section.
@@ -677,37 +830,55 @@ impl RustExtractor {
 
         // Resolve crate name for integration test import matching
         let crate_name = parse_crate_name(scan_root);
+        let members = find_workspace_members(scan_root);
 
         // Layer 2: import tracing
-        for (test_file, source) in test_sources {
-            let imports = extract_import_specifiers_with_crate_name(source, crate_name.as_deref());
-            let mut matched_indices = HashSet::<usize>::new();
+        if let Some(ref name) = crate_name {
+            // Root has a [package]: apply L2 for root crate itself
+            self.apply_l2_imports(
+                test_sources,
+                name,
+                scan_root,
+                &canonical_root,
+                &canonical_to_idx,
+                &mut mappings,
+            );
+        }
 
-            for (specifier, symbols) in &imports {
-                // Convert specifier to file path relative to crate root (src/)
-                let src_relative = scan_root.join("src").join(specifier);
+        if !members.is_empty() {
+            // Workspace mode: apply L2 per member crate
+            for member in &members {
+                // Collect only the test files belonging to this member
+                let member_test_sources: HashMap<String, String> = test_sources
+                    .iter()
+                    .filter(|(path, _)| {
+                        find_member_for_path(Path::new(path.as_str()), &members)
+                            .map(|m| std::ptr::eq(m, member))
+                            .unwrap_or(false)
+                    })
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
 
-                if let Some(resolved) = exspec_core::observe::resolve_absolute_base_to_file(
-                    self,
-                    &src_relative,
+                self.apply_l2_imports(
+                    &member_test_sources,
+                    &member.crate_name,
+                    &member.member_root,
                     &canonical_root,
-                ) {
-                    exspec_core::observe::collect_import_matches(
-                        self,
-                        &resolved,
-                        symbols,
-                        &canonical_to_idx,
-                        &mut matched_indices,
-                        &canonical_root,
-                    );
-                }
+                    &canonical_to_idx,
+                    &mut mappings,
+                );
             }
-
-            for idx in matched_indices {
-                if !mappings[idx].test_files.contains(test_file) {
-                    mappings[idx].test_files.push(test_file.clone());
-                }
-            }
+        } else if crate_name.is_none() {
+            // Fallback: no [package] and no workspace members; apply L2 with "crate"
+            // pseudo-name to handle `use crate::...` references
+            self.apply_l2_imports(
+                test_sources,
+                "crate",
+                scan_root,
+                &canonical_root,
+                &canonical_to_idx,
+                &mut mappings,
+            );
         }
 
         // Update strategy: if a production file had no Layer 1 matches but has Layer 2 matches,
@@ -720,6 +891,51 @@ impl RustExtractor {
         }
 
         mappings
+    }
+
+    /// Apply Layer 2 import tracing for a single crate root.
+    ///
+    /// `crate_name`: the crate name (underscored).
+    /// `crate_root`: the crate root directory (contains `Cargo.toml` and `src/`).
+    fn apply_l2_imports(
+        &self,
+        test_sources: &HashMap<String, String>,
+        crate_name: &str,
+        crate_root: &Path,
+        canonical_root: &Path,
+        canonical_to_idx: &HashMap<String, usize>,
+        mappings: &mut [FileMapping],
+    ) {
+        for (test_file, source) in test_sources {
+            let imports = extract_import_specifiers_with_crate_name(source, Some(crate_name));
+            let mut matched_indices = HashSet::<usize>::new();
+
+            for (specifier, symbols) in &imports {
+                // Convert specifier to file path relative to member crate root (src/)
+                let src_relative = crate_root.join("src").join(specifier);
+
+                if let Some(resolved) = exspec_core::observe::resolve_absolute_base_to_file(
+                    self,
+                    &src_relative,
+                    canonical_root,
+                ) {
+                    exspec_core::observe::collect_import_matches(
+                        self,
+                        &resolved,
+                        symbols,
+                        canonical_to_idx,
+                        &mut matched_indices,
+                        canonical_root,
+                    );
+                }
+            }
+
+            for idx in matched_indices {
+                if !mappings[idx].test_files.contains(test_file) {
+                    mappings[idx].test_files.push(test_file.clone());
+                }
+            }
+        }
     }
 }
 
@@ -1725,5 +1941,612 @@ mod tests {
             "Expected symbols=[\"Exported\"] entry for pub use internal::Exported, got: {:?}",
             result
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-01: pub fn match
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_01_pub_fn_match() {
+        // Given: a file with pub fn create_user
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/rust/observe/exported_pub_symbols.rs");
+        let extractor = RustExtractor::new();
+        let symbols = vec!["create_user".to_string()];
+
+        // When: file_exports_any_symbol is called
+        let result = extractor.file_exports_any_symbol(&path, &symbols);
+
+        // Then: returns true
+        assert!(result, "Expected true for pub fn create_user");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-02: pub struct match
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_02_pub_struct_match() {
+        // Given: a file with pub struct User
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/rust/observe/exported_pub_symbols.rs");
+        let extractor = RustExtractor::new();
+        let symbols = vec!["User".to_string()];
+
+        // When: file_exports_any_symbol is called
+        let result = extractor.file_exports_any_symbol(&path, &symbols);
+
+        // Then: returns true
+        assert!(result, "Expected true for pub struct User");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-03: non-existent symbol
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_03_nonexistent_symbol() {
+        // Given: a file without NonExistent symbol
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/rust/observe/exported_pub_symbols.rs");
+        let extractor = RustExtractor::new();
+        let symbols = vec!["NonExistent".to_string()];
+
+        // When: file_exports_any_symbol is called
+        let result = extractor.file_exports_any_symbol(&path, &symbols);
+
+        // Then: returns false
+        assert!(!result, "Expected false for NonExistent symbol");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-04: file with no pub symbols
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_04_no_pub_symbols() {
+        // Given: a file with no pub items
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/rust/observe/no_pub_symbols.rs");
+        let extractor = RustExtractor::new();
+        let symbols = vec!["internal_only".to_string()];
+
+        // When: file_exports_any_symbol is called
+        let result = extractor.file_exports_any_symbol(&path, &symbols);
+
+        // Then: returns false
+        assert!(!result, "Expected false for file with no pub symbols");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-05: pub use/mod only (no direct pub definitions)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_05_pub_use_mod_only() {
+        // Given: a file with only pub use and pub mod (barrel re-exports)
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/rust/observe/pub_use_only.rs");
+        let extractor = RustExtractor::new();
+        let symbols = vec!["Foo".to_string()];
+
+        // When: file_exports_any_symbol is called
+        let result = extractor.file_exports_any_symbol(&path, &symbols);
+
+        // Then: returns false (pub use/mod are handled by barrel resolution)
+        assert!(
+            !result,
+            "Expected false for pub use/mod only file (barrel resolution handles these)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-06: empty symbol list
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_06_empty_symbols() {
+        // Given: any file
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/rust/observe/exported_pub_symbols.rs");
+        let extractor = RustExtractor::new();
+        let symbols: Vec<String> = vec![];
+
+        // When: file_exports_any_symbol is called with empty symbols
+        let result = extractor.file_exports_any_symbol(&path, &symbols);
+
+        // Then: returns true (short-circuit)
+        assert!(result, "Expected true for empty symbol list");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-07: non-existent file (optimistic fallback)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_07_nonexistent_file() {
+        // Given: a non-existent file path
+        let path = PathBuf::from("/nonexistent/path/to/file.rs");
+        let extractor = RustExtractor::new();
+        let symbols = vec!["Foo".to_string()];
+
+        // When: file_exports_any_symbol is called
+        // Then: returns true (optimistic fallback, matches core default and Python)
+        let result = extractor.file_exports_any_symbol(&path, &symbols);
+        assert!(
+            result,
+            "Expected true for non-existent file (optimistic fallback)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-01: workspace with 2 members -> 2 members detected
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_01_workspace_two_members() {
+        // Given: a workspace with 2 member crates
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crate_a\", \"crate_b\"]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("crate_a/src")).unwrap();
+        std::fs::write(
+            tmp.path().join("crate_a/Cargo.toml"),
+            "[package]\nname = \"crate_a\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("crate_b/src")).unwrap();
+        std::fs::write(
+            tmp.path().join("crate_b/Cargo.toml"),
+            "[package]\nname = \"crate_b\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // When: find_workspace_members is called
+        let members = find_workspace_members(tmp.path());
+
+        // Then: 2 WorkspaceMembers detected
+        assert_eq!(members.len(), 2, "Expected 2 members, got: {:?}", members);
+        let names: Vec<&str> = members.iter().map(|m| m.crate_name.as_str()).collect();
+        assert!(
+            names.contains(&"crate_a"),
+            "crate_a not found in {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"crate_b"),
+            "crate_b not found in {:?}",
+            names
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-02: single crate (non-workspace) returns empty
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_02_single_crate_returns_empty() {
+        // Given: a single crate (no [workspace] section, has [package])
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my_crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+
+        // When: find_workspace_members is called
+        let members = find_workspace_members(tmp.path());
+
+        // Then: empty Vec (not a workspace root)
+        assert!(members.is_empty(), "Expected empty, got: {:?}", members);
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-03: target/ directory is skipped
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_03_target_dir_skipped() {
+        // Given: a workspace where target/ contains a Cargo.toml
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crate_a\"]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("crate_a/src")).unwrap();
+        std::fs::write(
+            tmp.path().join("crate_a/Cargo.toml"),
+            "[package]\nname = \"crate_a\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        // A Cargo.toml inside target/ (should be ignored)
+        std::fs::create_dir_all(tmp.path().join("target/debug/build/fake")).unwrap();
+        std::fs::write(
+            tmp.path().join("target/debug/build/fake/Cargo.toml"),
+            "[package]\nname = \"fake_crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // When: find_workspace_members is called
+        let members = find_workspace_members(tmp.path());
+
+        // Then: only crate_a detected (target/ is skipped)
+        assert_eq!(members.len(), 1, "Expected 1 member, got: {:?}", members);
+        assert_eq!(members[0].crate_name, "crate_a");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-04: hyphenated crate name -> underscore conversion
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_04_hyphenated_crate_name_converted() {
+        // Given: a workspace with a member crate named "my-crate" (hyphenated)
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"my-crate\"]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("my-crate/src")).unwrap();
+        std::fs::write(
+            tmp.path().join("my-crate/Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // When: find_workspace_members is called
+        let members = find_workspace_members(tmp.path());
+
+        // Then: crate_name = "my_crate" (hyphens converted to underscores)
+        assert_eq!(members.len(), 1, "Expected 1 member, got: {:?}", members);
+        assert_eq!(members[0].crate_name, "my_crate");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-05: test file in member/tests/ -> Some(foo member)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_05_find_member_for_path_in_tests() {
+        // Given: workspace members [crate_a at /tmp/ws/crate_a]
+        let tmp = tempfile::tempdir().unwrap();
+        let member_root = tmp.path().join("crate_a");
+        std::fs::create_dir_all(&member_root).unwrap();
+        let members = vec![WorkspaceMember {
+            crate_name: "crate_a".to_string(),
+            member_root: member_root.clone(),
+        }];
+
+        // When: find_member_for_path with a test file inside crate_a/tests/
+        let test_file = member_root.join("tests").join("integration.rs");
+        let result = find_member_for_path(&test_file, &members);
+
+        // Then: returns Some(crate_a member)
+        assert!(result.is_some(), "Expected Some(crate_a), got None");
+        assert_eq!(result.unwrap().crate_name, "crate_a");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-06: test file not in any member -> None
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_06_find_member_for_path_not_in_any() {
+        // Given: workspace members [crate_a]
+        let tmp = tempfile::tempdir().unwrap();
+        let member_root = tmp.path().join("crate_a");
+        std::fs::create_dir_all(&member_root).unwrap();
+        let members = vec![WorkspaceMember {
+            crate_name: "crate_a".to_string(),
+            member_root: member_root.clone(),
+        }];
+
+        // When: find_member_for_path with a path outside any member
+        let outside_path = tmp.path().join("other").join("test.rs");
+        let result = find_member_for_path(&outside_path, &members);
+
+        // Then: returns None
+        assert!(
+            result.is_none(),
+            "Expected None, got: {:?}",
+            result.map(|m| &m.crate_name)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-07: longest prefix match for nested members
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_07_find_member_longest_prefix() {
+        // Given: workspace with nested members [ws/crates/foo, ws/crates/foo-extra]
+        let tmp = tempfile::tempdir().unwrap();
+        let foo_root = tmp.path().join("crates").join("foo");
+        let foo_extra_root = tmp.path().join("crates").join("foo-extra");
+        std::fs::create_dir_all(&foo_root).unwrap();
+        std::fs::create_dir_all(&foo_extra_root).unwrap();
+        let members = vec![
+            WorkspaceMember {
+                crate_name: "foo".to_string(),
+                member_root: foo_root.clone(),
+            },
+            WorkspaceMember {
+                crate_name: "foo_extra".to_string(),
+                member_root: foo_extra_root.clone(),
+            },
+        ];
+
+        // When: find_member_for_path with a path inside foo-extra/
+        let test_file = foo_extra_root.join("tests").join("test_bar.rs");
+        let result = find_member_for_path(&test_file, &members);
+
+        // Then: returns foo-extra (longest prefix match)
+        assert!(result.is_some(), "Expected Some(foo_extra), got None");
+        assert_eq!(result.unwrap().crate_name, "foo_extra");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-E2E-01: workspace L2 import tracing works
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_e2e_01_workspace_l2_import_tracing() {
+        // Given: a workspace with crate_a containing src/user.rs and tests/test_user.rs
+        // that imports `use crate_a::user::create_user`
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crate_a\"]\n",
+        )
+        .unwrap();
+
+        let member_dir = tmp.path().join("crate_a");
+        std::fs::create_dir_all(member_dir.join("src")).unwrap();
+        std::fs::create_dir_all(member_dir.join("tests")).unwrap();
+        std::fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"crate_a\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let user_rs = member_dir.join("src").join("user.rs");
+        std::fs::write(&user_rs, "pub fn create_user() {}\n").unwrap();
+
+        let test_rs = member_dir.join("tests").join("test_user.rs");
+        std::fs::write(
+            &test_rs,
+            "use crate_a::user::create_user;\n#[test]\nfn test_create_user() { create_user(); }\n",
+        )
+        .unwrap();
+
+        let extractor = RustExtractor::new();
+        let prod_path = user_rs.to_string_lossy().into_owned();
+        let test_path = test_rs.to_string_lossy().into_owned();
+        let production_files = vec![prod_path.clone()];
+        let test_sources: HashMap<String, String> = [(
+            test_path.clone(),
+            std::fs::read_to_string(&test_rs).unwrap(),
+        )]
+        .into_iter()
+        .collect();
+
+        // When: map_test_files_with_imports is called at workspace root
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+
+        // Then: test_user.rs -> user.rs via Layer 2 (ImportTracing)
+        let mapping = result.iter().find(|m| m.production_file == prod_path);
+        assert!(mapping.is_some(), "No mapping for user.rs");
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&test_path),
+            "Expected test_user.rs in test_files, got: {:?}",
+            mapping.test_files
+        );
+        assert_eq!(
+            mapping.strategy,
+            MappingStrategy::ImportTracing,
+            "Expected ImportTracing strategy, got: {:?}",
+            mapping.strategy
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-E2E-02: L0/L1 still work at workspace level
+    //
+    // Layer 1 (FileNameConvention) matches within the same directory only.
+    // Cross-directory matches (src/ vs tests/) are handled by Layer 2.
+    // This test verifies:
+    //   - L0: src/service.rs with inline tests -> self-mapped
+    //   - L1: src/test_service.rs -> src/service.rs (same src/ directory)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_e2e_02_l0_l1_still_work_at_workspace_level() {
+        // Given: a workspace with crate_a containing src/service.rs (with inline tests)
+        // and src/test_service.rs (same-directory filename convention match)
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crate_a\"]\n",
+        )
+        .unwrap();
+
+        let member_dir = tmp.path().join("crate_a");
+        std::fs::create_dir_all(member_dir.join("src")).unwrap();
+        std::fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"crate_a\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // Layer 0: inline tests in service.rs
+        let service_rs = member_dir.join("src").join("service.rs");
+        std::fs::write(
+            &service_rs,
+            r#"pub fn do_work() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_do_work() { do_work(); }
+}
+"#,
+        )
+        .unwrap();
+
+        // Layer 1: test_service.rs in the same src/ directory -> service.rs
+        let test_service_rs = member_dir.join("src").join("test_service.rs");
+        std::fs::write(
+            &test_service_rs,
+            "#[test]\nfn test_service_smoke() { assert!(true); }\n",
+        )
+        .unwrap();
+
+        let extractor = RustExtractor::new();
+        let prod_path = service_rs.to_string_lossy().into_owned();
+        let test_path = test_service_rs.to_string_lossy().into_owned();
+        let production_files = vec![prod_path.clone()];
+        let test_sources: HashMap<String, String> = [(
+            test_path.clone(),
+            std::fs::read_to_string(&test_service_rs).unwrap(),
+        )]
+        .into_iter()
+        .collect();
+
+        // When: map_test_files_with_imports is called at workspace root
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+
+        // Then: service.rs self-mapped (Layer 0) and test_service.rs mapped (Layer 1)
+        let mapping = result.iter().find(|m| m.production_file == prod_path);
+        assert!(mapping.is_some(), "No mapping for service.rs");
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&prod_path),
+            "Expected service.rs self-mapped (Layer 0), got: {:?}",
+            mapping.test_files
+        );
+        assert!(
+            mapping.test_files.contains(&test_path),
+            "Expected test_service.rs mapped (Layer 1), got: {:?}",
+            mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-E2E-03: Non-virtual workspace (both [workspace] and [package])
+    //
+    // Root Cargo.toml has both [workspace] and [package] (like clap).
+    // L2 must work for both root crate and member crates.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_e2e_03_non_virtual_workspace_l2() {
+        // Given: a non-virtual workspace with root package "root_pkg"
+        // and member "member_a"
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member_a\"]\n\n[package]\nname = \"root_pkg\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // Root crate src + tests
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
+        let root_src = tmp.path().join("src").join("lib.rs");
+        std::fs::write(&root_src, "pub fn root_fn() {}\n").unwrap();
+        let root_test = tmp.path().join("tests").join("test_root.rs");
+        std::fs::write(
+            &root_test,
+            "use root_pkg::lib::root_fn;\n#[test]\nfn test_root() { }\n",
+        )
+        .unwrap();
+
+        // Member crate
+        let member_dir = tmp.path().join("member_a");
+        std::fs::create_dir_all(member_dir.join("src")).unwrap();
+        std::fs::create_dir_all(member_dir.join("tests")).unwrap();
+        std::fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"member_a\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let member_src = member_dir.join("src").join("handler.rs");
+        std::fs::write(&member_src, "pub fn handle() {}\n").unwrap();
+        let member_test = member_dir.join("tests").join("test_handler.rs");
+        std::fs::write(
+            &member_test,
+            "use member_a::handler::handle;\n#[test]\nfn test_handle() { handle(); }\n",
+        )
+        .unwrap();
+
+        let extractor = RustExtractor::new();
+        let root_src_path = root_src.to_string_lossy().into_owned();
+        let member_src_path = member_src.to_string_lossy().into_owned();
+        let root_test_path = root_test.to_string_lossy().into_owned();
+        let member_test_path = member_test.to_string_lossy().into_owned();
+
+        let production_files = vec![root_src_path.clone(), member_src_path.clone()];
+        let test_sources: HashMap<String, String> = [
+            (
+                root_test_path.clone(),
+                std::fs::read_to_string(&root_test).unwrap(),
+            ),
+            (
+                member_test_path.clone(),
+                std::fs::read_to_string(&member_test).unwrap(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        // When: map_test_files_with_imports at workspace root
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+
+        // Then: member's test maps to member's src via L2
+        let member_mapping = result.iter().find(|m| m.production_file == member_src_path);
+        assert!(member_mapping.is_some(), "No mapping for member handler.rs");
+        let member_mapping = member_mapping.unwrap();
+        assert!(
+            member_mapping.test_files.contains(&member_test_path),
+            "Expected member test mapped via L2, got: {:?}",
+            member_mapping.test_files
+        );
+        assert_eq!(
+            member_mapping.strategy,
+            MappingStrategy::ImportTracing,
+            "Expected ImportTracing for member, got: {:?}",
+            member_mapping.strategy
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-WS-08: has_workspace_section detects [workspace]
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_ws_08_has_workspace_section() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Virtual workspace
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"a\"]\n",
+        )
+        .unwrap();
+        assert!(has_workspace_section(tmp.path()));
+
+        // Non-virtual workspace
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"a\"]\n\n[package]\nname = \"root\"\n",
+        )
+        .unwrap();
+        assert!(has_workspace_section(tmp.path()));
+
+        // Single crate (no workspace)
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"single\"\n",
+        )
+        .unwrap();
+        assert!(!has_workspace_section(tmp.path()));
+
+        // No Cargo.toml
+        std::fs::remove_file(tmp.path().join("Cargo.toml")).unwrap();
+        assert!(!has_workspace_section(tmp.path()));
     }
 }
