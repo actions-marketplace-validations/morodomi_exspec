@@ -889,6 +889,9 @@ impl TypeScriptExtractor {
                     })
             });
 
+        // Cache for node_modules symlink resolution (shared across all test files)
+        let mut nm_symlink_cache: HashMap<String, Option<PathBuf>> = HashMap::new();
+
         // Layer 2: import tracing for all test files (Layer 1 matched tests may
         // also import other production files not matched by filename convention)
         for (test_file, source) in test_sources {
@@ -938,11 +941,13 @@ impl TypeScriptExtractor {
                 }
             }
 
+            // Extract non-relative specifiers once (used by Layer 2b and 2c)
+            let all_specifiers =
+                <Self as ObserveExtractor>::extract_all_import_specifiers(self, source);
+
             // Layer 2b: tsconfig alias resolution
             if let Some(ref tc_paths) = tsconfig_paths {
-                let alias_imports =
-                    <Self as ObserveExtractor>::extract_all_import_specifiers(self, source);
-                for (specifier, symbols) in &alias_imports {
+                for (specifier, symbols) in &all_specifiers {
                     let Some(alias_base) = tc_paths.resolve_alias(specifier) else {
                         continue;
                     };
@@ -950,6 +955,30 @@ impl TypeScriptExtractor {
                         resolve_absolute_base_to_file(self, &alias_base, &canonical_root)
                     {
                         collect_matches(&resolved, symbols, &mut matched_indices);
+                    }
+                }
+            }
+
+            // Layer 2c: node_modules symlink resolution (monorepo cross-package)
+            // Follow yarn/pnpm workspace symlinks in node_modules to resolve
+            // cross-package imports that are not covered by tsconfig aliases.
+            for (specifier, symbols) in &all_specifiers {
+                // Skip if already resolved by tsconfig alias (Layer 2b)
+                if let Some(ref tc_paths) = tsconfig_paths {
+                    if tc_paths.resolve_alias(specifier).is_some() {
+                        continue;
+                    }
+                }
+                if let Some(resolved_dir) =
+                    resolve_node_modules_symlink(specifier, &canonical_root, &mut nm_symlink_cache)
+                {
+                    // The symlink points to a package root directory (e.g., packages/common).
+                    // Find all production files that are under this resolved directory.
+                    let resolved_dir_str = resolved_dir.to_string_lossy().into_owned();
+                    for prod_canonical in canonical_to_idx.keys() {
+                        if prod_canonical.starts_with(&resolved_dir_str) {
+                            collect_matches(prod_canonical, symbols, &mut matched_indices);
+                        }
                     }
                 }
             }
@@ -976,6 +1005,37 @@ impl TypeScriptExtractor {
 
         mappings
     }
+}
+
+/// Resolve a non-relative specifier by following node_modules symlinks.
+///
+/// In yarn/pnpm workspaces, cross-package dependencies are installed as symlinks:
+///   scan_root/node_modules/@org/common -> ../../packages/common
+///
+/// This function:
+/// 1. Checks cache first (same specifier is reused across test files)
+/// 2. Builds the path scan_root/node_modules/{specifier}
+/// 3. Returns Some(canonical_path) only if that path is a symlink (not a real dir)
+/// 4. Returns None for real directories (npm install), missing paths, or errors
+///
+/// Only enabled on Unix (symlink creation requires Unix APIs in tests).
+fn resolve_node_modules_symlink(
+    specifier: &str,
+    scan_root: &Path,
+    cache: &mut HashMap<String, Option<PathBuf>>,
+) -> Option<PathBuf> {
+    if let Some(cached) = cache.get(specifier) {
+        return cached.clone();
+    }
+
+    let candidate = scan_root.join("node_modules").join(specifier);
+    let result = match std::fs::symlink_metadata(&candidate) {
+        Ok(meta) if meta.file_type().is_symlink() => candidate.canonicalize().ok(),
+        _ => None,
+    };
+
+    cache.insert(specifier.to_string(), result.clone());
+    result
 }
 
 /// Resolve a module specifier to an absolute file path.
@@ -3059,29 +3119,46 @@ describe('UsersController', () => {});
         );
     }
 
-    // TC-04: Boundary B2 — cross-package barrel import is unresolvable (FN)
+    // TC-04: Boundary B2 — cross-package symlink import is resolved via node_modules symlink (TP)
+    // Formerly "boundary_b2_cross_pkg_barrel_unresolvable" (was asserting FN; now asserts TP after B2 fix)
+    #[cfg(unix)]
     #[test]
-    fn boundary_b2_cross_pkg_barrel_unresolvable() {
+    fn boundary_b2_cross_pkg_symlink_resolved() {
+        use std::os::unix::fs::symlink;
         use tempfile::TempDir;
 
         // Given:
+        //   packages/common/src/foo.ts (production, cross-package file)
         //   packages/core/ (scan_root)
-        //   packages/core/src/foo.service.ts (production)
-        //   packages/common/src/foo.ts (production, in different package)
-        //   packages/core/test/foo.spec.ts: `import { Foo } from '@org/common'` (non-relative)
+        //   packages/core/src/foo.service.ts (local production)
+        //   packages/core/node_modules/@org/common -> ../../common (symlink)
+        //   packages/core/test/foo.spec.ts: `import { Foo } from '@org/common'`
+        //   production_files contains BOTH foo.service.ts AND packages/common/src/foo.ts
         let dir = TempDir::new().unwrap();
         let core_src = dir.path().join("packages").join("core").join("src");
         let core_test = dir.path().join("packages").join("core").join("test");
+        let core_nm_org = dir
+            .path()
+            .join("packages")
+            .join("core")
+            .join("node_modules")
+            .join("@org");
         let common_src = dir.path().join("packages").join("common").join("src");
         std::fs::create_dir_all(&core_src).unwrap();
         std::fs::create_dir_all(&core_test).unwrap();
+        std::fs::create_dir_all(&core_nm_org).unwrap();
         std::fs::create_dir_all(&common_src).unwrap();
 
-        let prod_path = core_src.join("foo.service.ts");
-        std::fs::File::create(&prod_path).unwrap();
+        let local_prod_path = core_src.join("foo.service.ts");
+        std::fs::File::create(&local_prod_path).unwrap();
 
         let common_path = common_src.join("foo.ts");
         std::fs::File::create(&common_path).unwrap();
+
+        // Create symlink: packages/core/node_modules/@org/common -> ../../common
+        let symlink_path = core_nm_org.join("common");
+        let target = dir.path().join("packages").join("common");
+        symlink(&target, &symlink_path).unwrap();
 
         let test_path = core_test.join("foo.spec.ts");
         std::fs::write(
@@ -3091,7 +3168,11 @@ describe('UsersController', () => {});
         .unwrap();
 
         let scan_root = dir.path().join("packages").join("core");
-        let production_files = vec![prod_path.to_string_lossy().into_owned()];
+        // production_files contains cross-package file (common/src/foo.ts)
+        let production_files = vec![
+            local_prod_path.to_string_lossy().into_owned(),
+            common_path.to_string_lossy().into_owned(),
+        ];
         let mut test_sources = HashMap::new();
         test_sources.insert(
             test_path.to_string_lossy().into_owned(),
@@ -3104,14 +3185,275 @@ describe('UsersController', () => {});
         let mappings =
             extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
 
-        // Then: packages/common/src/foo.ts has NO test_files (cross-package import not resolved)
-        // Since `@org/common` is non-relative, extract_imports will skip it entirely.
-        let all_test_files: Vec<&String> =
-            mappings.iter().flat_map(|m| m.test_files.iter()).collect();
+        // Then: packages/common/src/foo.ts IS mapped (symlink resolved via Layer 2c)
+        let common_path_str = common_path.to_string_lossy().into_owned();
+        let common_mapping = mappings
+            .iter()
+            .find(|m| m.production_file == common_path_str);
         assert!(
-            all_test_files.is_empty(),
-            "expected no test_files mapped (FN: cross-package import not resolved), got {:?}",
-            all_test_files
+            common_mapping.is_some(),
+            "expected common/src/foo.ts to have a mapping"
+        );
+        let test_file_str = test_path.to_string_lossy().into_owned();
+        assert!(
+            common_mapping.unwrap().test_files.contains(&test_file_str),
+            "expected foo.spec.ts to be mapped to common/src/foo.ts via symlink"
+        );
+    }
+
+    // TS-B2-SYM-01: resolve_node_modules_symlink follows symlink to real path
+    #[cfg(unix)]
+    #[test]
+    fn b2_sym_01_symlink_followed() {
+        use std::os::unix::fs::symlink;
+        use tempfile::TempDir;
+
+        // Given:
+        //   scan_root/node_modules/@org/common -> ../../packages/common (symlink)
+        let dir = TempDir::new().unwrap();
+        let nm_org = dir.path().join("node_modules").join("@org");
+        std::fs::create_dir_all(&nm_org).unwrap();
+        let target = dir.path().join("packages").join("common");
+        std::fs::create_dir_all(&target).unwrap();
+        let symlink_path = nm_org.join("common");
+        symlink(&target, &symlink_path).unwrap();
+
+        let mut cache = HashMap::new();
+
+        // When: resolve_node_modules_symlink("@org/common", scan_root)
+        let result = resolve_node_modules_symlink("@org/common", dir.path(), &mut cache);
+
+        // Then: returns Some(canonical path of packages/common)
+        let expected = target.canonicalize().unwrap();
+        assert_eq!(
+            result,
+            Some(expected),
+            "expected symlink to be followed to real path"
+        );
+    }
+
+    // TS-B2-SYM-02: resolve_node_modules_symlink returns None for real directory (not symlink)
+    #[cfg(unix)]
+    #[test]
+    fn b2_sym_02_real_directory_returns_none() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   scan_root/node_modules/@org/common is a real directory (not symlink)
+        let dir = TempDir::new().unwrap();
+        let nm_org = dir.path().join("node_modules").join("@org").join("common");
+        std::fs::create_dir_all(&nm_org).unwrap();
+
+        let mut cache = HashMap::new();
+
+        // When: resolve_node_modules_symlink("@org/common", scan_root)
+        let result = resolve_node_modules_symlink("@org/common", dir.path(), &mut cache);
+
+        // Then: returns None (real directory is not a monorepo symlink)
+        assert_eq!(
+            result, None,
+            "expected None for real directory (not symlink)"
+        );
+    }
+
+    // TS-B2-SYM-03: resolve_node_modules_symlink returns None for non-existent specifier
+    #[cfg(unix)]
+    #[test]
+    fn b2_sym_03_nonexistent_returns_none() {
+        use tempfile::TempDir;
+
+        // Given: scan_root/node_modules has no @org/nonexistent
+        let dir = TempDir::new().unwrap();
+        let nm = dir.path().join("node_modules");
+        std::fs::create_dir_all(&nm).unwrap();
+
+        let mut cache = HashMap::new();
+
+        // When: resolve_node_modules_symlink("@org/nonexistent", scan_root)
+        let result = resolve_node_modules_symlink("@org/nonexistent", dir.path(), &mut cache);
+
+        // Then: returns None
+        assert_eq!(result, None, "expected None for non-existent specifier");
+    }
+
+    // TS-B2-MAP-02: tsconfig alias takes priority over symlink fallback
+    #[cfg(unix)]
+    #[test]
+    fn b2_map_02_tsconfig_alias_priority() {
+        use std::os::unix::fs::symlink;
+        use tempfile::TempDir;
+
+        // Given:
+        //   packages/core/ (scan_root)
+        //   packages/core/src/foo.service.ts (production, tsconfig alias target)
+        //   packages/common/src/foo.ts (cross-package production)
+        //   packages/core/node_modules/@org/common -> ../../common (symlink)
+        //   packages/core/tsconfig.json: paths: { "@org/common": ["src/foo.service"] }
+        //   packages/core/test/foo.spec.ts: `import { Foo } from '@org/common'`
+        let dir = TempDir::new().unwrap();
+        let core_src = dir.path().join("packages").join("core").join("src");
+        let core_test = dir.path().join("packages").join("core").join("test");
+        let core_nm_org = dir
+            .path()
+            .join("packages")
+            .join("core")
+            .join("node_modules")
+            .join("@org");
+        let common_src = dir.path().join("packages").join("common").join("src");
+        std::fs::create_dir_all(&core_src).unwrap();
+        std::fs::create_dir_all(&core_test).unwrap();
+        std::fs::create_dir_all(&core_nm_org).unwrap();
+        std::fs::create_dir_all(&common_src).unwrap();
+
+        let local_prod_path = core_src.join("foo.service.ts");
+        std::fs::write(&local_prod_path, "export class FooService {}").unwrap();
+
+        let common_path = common_src.join("foo.ts");
+        std::fs::File::create(&common_path).unwrap();
+
+        let symlink_path = core_nm_org.join("common");
+        let target = dir.path().join("packages").join("common");
+        symlink(&target, &symlink_path).unwrap();
+
+        // tsconfig.json: alias @org/common -> src/foo.service
+        let tsconfig = serde_json::json!({
+            "compilerOptions": {
+                "paths": {
+                    "@org/common": ["src/foo.service"]
+                }
+            }
+        });
+        let core_root = dir.path().join("packages").join("core");
+        std::fs::write(core_root.join("tsconfig.json"), tsconfig.to_string()).unwrap();
+
+        let test_path = core_test.join("foo.spec.ts");
+        std::fs::write(
+            &test_path,
+            "import { Foo } from '@org/common';\ndescribe('Foo', () => {});",
+        )
+        .unwrap();
+
+        let production_files = vec![
+            local_prod_path.to_string_lossy().into_owned(),
+            common_path.to_string_lossy().into_owned(),
+        ];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports with tsconfig alias present
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, &core_root);
+
+        // Then: foo.service.ts is mapped (tsconfig alias wins), common/src/foo.ts is NOT mapped
+        let test_file_str = test_path.to_string_lossy().into_owned();
+        let local_prod_str = local_prod_path.to_string_lossy().into_owned();
+        let common_path_str = common_path.to_string_lossy().into_owned();
+
+        let local_mapping = mappings
+            .iter()
+            .find(|m| m.production_file == local_prod_str);
+        assert!(
+            local_mapping.map_or(false, |m| m.test_files.contains(&test_file_str)),
+            "expected foo.service.ts to be mapped via tsconfig alias"
+        );
+
+        let common_mapping = mappings
+            .iter()
+            .find(|m| m.production_file == common_path_str);
+        assert!(
+            !common_mapping.map_or(false, |m| m.test_files.contains(&test_file_str)),
+            "expected common/src/foo.ts NOT to be mapped (tsconfig alias should win)"
+        );
+    }
+
+    // TS-B2-MULTI-01: same specifier in 2 test files both get mapped (behavior test)
+    #[cfg(unix)]
+    #[test]
+    fn b2_multi_01_two_test_files_both_mapped() {
+        use std::os::unix::fs::symlink;
+        use tempfile::TempDir;
+
+        // Given:
+        //   packages/common/src/foo.ts (production, cross-package)
+        //   packages/core/node_modules/@org/common -> ../../common (symlink)
+        //   packages/core/test/foo.spec.ts: `import { Foo } from '@org/common'`
+        //   packages/core/test/bar.spec.ts: `import { Foo } from '@org/common'`
+        let dir = TempDir::new().unwrap();
+        let core_test = dir.path().join("packages").join("core").join("test");
+        let core_nm_org = dir
+            .path()
+            .join("packages")
+            .join("core")
+            .join("node_modules")
+            .join("@org");
+        let common_src = dir.path().join("packages").join("common").join("src");
+        std::fs::create_dir_all(&core_test).unwrap();
+        std::fs::create_dir_all(&core_nm_org).unwrap();
+        std::fs::create_dir_all(&common_src).unwrap();
+
+        let common_path = common_src.join("foo.ts");
+        std::fs::File::create(&common_path).unwrap();
+
+        let symlink_path = core_nm_org.join("common");
+        let target = dir.path().join("packages").join("common");
+        symlink(&target, &symlink_path).unwrap();
+
+        let test_path1 = core_test.join("foo.spec.ts");
+        let test_path2 = core_test.join("bar.spec.ts");
+        std::fs::write(
+            &test_path1,
+            "import { Foo } from '@org/common';\ndescribe('Foo', () => {});",
+        )
+        .unwrap();
+        std::fs::write(
+            &test_path2,
+            "import { Foo } from '@org/common';\ndescribe('Bar', () => {});",
+        )
+        .unwrap();
+
+        let scan_root = dir.path().join("packages").join("core");
+        let production_files = vec![common_path.to_string_lossy().into_owned()];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_path1.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path1).unwrap(),
+        );
+        test_sources.insert(
+            test_path2.to_string_lossy().into_owned(),
+            std::fs::read_to_string(&test_path2).unwrap(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: map_test_files_with_imports
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+
+        // Then: common/src/foo.ts is mapped to BOTH test files
+        let common_path_str = common_path.to_string_lossy().into_owned();
+        let test1_str = test_path1.to_string_lossy().into_owned();
+        let test2_str = test_path2.to_string_lossy().into_owned();
+
+        let common_mapping = mappings
+            .iter()
+            .find(|m| m.production_file == common_path_str);
+        assert!(
+            common_mapping.is_some(),
+            "expected common/src/foo.ts to have a mapping"
+        );
+        let mapped_tests = &common_mapping.unwrap().test_files;
+        assert!(
+            mapped_tests.contains(&test1_str),
+            "expected foo.spec.ts to be mapped"
+        );
+        assert!(
+            mapped_tests.contains(&test2_str),
+            "expected bar.spec.ts to be mapped"
         );
     }
 
