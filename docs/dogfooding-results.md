@@ -695,9 +695,9 @@ symfony remaining 615 BLOCKs: majority TP (mock verification, parent delegation)
 
 4. **exspec: 19/21 mapped, all L0**. Self-dogfooding via inline tests. 2 unmapped files (hints.rs, lib.rs) have no tests.
 
-### Workspace Limitation (Known)
+### Workspace Limitation (Resolved in #98)
 
-When `scan_root` points to a workspace root (e.g., `/tmp/clap`), `parse_crate_name` returns `None` because the Cargo.toml has `[workspace]` instead of `[package]`. Integration tests in member crates are not resolved at workspace level. **Workaround**: run observe per member crate.
+~~When `scan_root` points to a workspace root, `parse_crate_name` returns `None` and Layer 2 is skipped.~~ **Fixed**: `find_workspace_members()` auto-detects member crates and applies L2 per member. Both virtual and non-virtual workspaces supported. See Post-#98 section below.
 
 ### tokio Layer 2 Detail
 
@@ -724,7 +724,7 @@ When `scan_root` points to a workspace root (e.g., `/tmp/clap`), `parse_crate_na
 
 ### Remaining Gaps
 
-1. **Workspace-level scanning**: Need to aggregate per-crate results for monorepo support.
+1. ~~**Workspace-level scanning**~~: Resolved in #98.
 2. **Wildcard imports**: `use tokio::*` is not resolved (by design — too noisy).
 3. **Deep re-export chains**: `tokio/src/lib.rs` re-exports `pub mod sync`, but the chain from `use tokio::sync::Mutex` to `src/sync/mutex.rs` requires multi-hop barrel resolution.
 4. **Macro-generated test functions**: tokio's `#[tokio::test]` is handled (detected as `#[test]`), but custom `loom_cfg_*` macros hide some test files.
@@ -771,6 +771,59 @@ All 4 new matches result from `pub mod` being treated as wildcard barrel re-expo
 
 #99/#100 delivered incremental improvement (+4 L2 matches in tokio) with zero false positives and zero regressions. The `pub mod` wildcard strategy correctly resolves multi-hop module chains (e.g., `tokio::net::unix::pipe` → `net/mod.rs` → `unix/mod.rs` → `pipe.rs`). Remaining gaps are workspace-level aggregation and deeper re-export chain resolution.
 
+### Post-#98 Workspace Aggregation (2026-03-18)
+
+**exspec version**: post-#98 (commit b564e28)
+**Changes**: #98 (`find_workspace_members` + `has_workspace_section` for workspace-level L2 aggregation)
+
+#### Summary (workspace root scanning)
+
+| Project | Prod | Test | Mapped | L0/L1 | L2 | Unmapped | Delta vs subcrate-only |
+|---------|------|------|--------|-------|----|----------|----------------------|
+| tokio (workspace) | 495 | 272 | 71 | 40 | **31** | 424 | **+13 L2** (vs tokio/tokio 18) |
+| clap (workspace) | 195 | 134 | 22 | 20 | **2** | 173 | **+2 L2** (vs 0 before) |
+| tokio/tokio (subcrate) | 343 | 198 | 55 | 37 | 18 | 288 | unchanged |
+
+#### Key Findings
+
+1. **tokio workspace L2: 18 → 31 (+13)**. Workspace-level scanning now resolves imports in tokio-stream, tokio-test, tokio-util member crates. Previously these required per-subcrate runs.
+
+2. **clap workspace L2: 0 → 2**. clap has both `[workspace]` and `[package]` in root Cargo.toml (non-virtual workspace). The initial #98 implementation only handled virtual workspaces; the fix added `has_workspace_section()` to detect workspaces regardless of `[package]` presence.
+
+3. **No regressions**: tokio/tokio subcrate results unchanged (55 mapped, 18 L2). L0/L1 unchanged across all projects.
+
+#### New L2 matches from workspace members
+
+tokio workspace gained 13 new L2 matches from member crates:
+
+| Member | Production File | Test Files | Import Pattern |
+|--------|----------------|-----------|----------------|
+| tokio-stream | src/wrappers.rs | 3 tests | `use tokio_stream::wrappers` |
+| tokio-test | src/io.rs | 1 test | `use tokio_test::io` |
+| tokio-test | src/stream_mock.rs | 1 test | `use tokio_test::stream_mock` |
+| tokio-util | src/codec/length_delimited.rs | 1 test | `use tokio_util::codec` |
+| tokio-util | src/compat.rs | 1 test | `use tokio_util::compat` |
+| tokio-util | src/context.rs | 1 test | `use tokio_util::context` |
+| tokio-util | src/sync/cancellation_token.rs | 2 tests | `use tokio_util::sync` |
+| tokio-util | src/sync/mpsc.rs | 3 tests | `use tokio_util::sync::PollSender` |
+| tokio-util | src/sync/poll_semaphore.rs | 1 test | `use tokio_util::sync` |
+| tokio-util | src/sync/reusable_box.rs | 1 test | `use tokio_util::sync` |
+| tokio-util | src/task/join_map.rs | 1 test | `use tokio_util::task` |
+| tokio-util | src/time/delay_queue.rs | 2 tests | `use tokio_util::time` |
+| tokio-util | src/udp/frame.rs | 1 test | `use tokio_util::udp` |
+
+All 13 verified as TP (correct import → production file mapping).
+
+#### Precision/Recall Update
+
+- **Precision**: 100% (31/31 workspace L2 matches verified as TP).
+- **Recall (tokio workspace)**: ~14% (71/495 production files mapped). Improved from ~9% (subcrate-only). Remaining gaps: wildcard imports, deep re-export chains, macro-generated tests.
+- **Recall (clap workspace)**: ~11% (22/195). Improved from ~10% (L2 contribution small but non-zero).
+
+#### Workspace Limitation: Resolved
+
+The "Known" workspace limitation from the initial dogfooding is now fully resolved. Both virtual workspaces (tokio) and non-virtual workspaces (clap) are supported. No per-subcrate workaround needed.
+
 ## Reproduction
 
 ```bash
@@ -790,8 +843,9 @@ cargo build --release
 
 # Observe (test-to-code mapping)
 ./target/release/exspec observe --lang rust --format json .
-./target/release/exspec observe --lang rust --format json /tmp/tokio/tokio
-./target/release/exspec observe --lang rust --format json /tmp/clap
+./target/release/exspec observe --lang rust --format json /tmp/tokio          # workspace root
+./target/release/exspec observe --lang rust --format json /tmp/tokio/tokio    # subcrate
+./target/release/exspec observe --lang rust --format json /tmp/clap           # non-virtual workspace
 ./target/release/exspec observe --lang rust --format json /tmp/ripgrep
 ./target/release/exspec --lang python --format json /tmp/django/tests
 ./target/release/exspec --lang python --format json /tmp/pytest/testing
