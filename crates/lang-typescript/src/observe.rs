@@ -1157,6 +1157,163 @@ pub fn resolve_barrel_exports(
     exspec_core::observe::resolve_barrel_exports(&ext, barrel_path, symbols, scan_root)
 }
 
+/// HTTP methods recognized in Next.js App Router route handlers.
+const NEXTJS_HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+const NEXTJS_ROUTE_HANDLER_QUERY: &str = include_str!("../queries/nextjs_route_handler.scm");
+static NEXTJS_ROUTE_HANDLER_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
+/// Convert a Next.js App Router file path to a route path.
+///
+/// Returns `None` if the file is not a `route.ts` / `route.tsx` file.
+///
+/// Transformation rules:
+/// - Strip leading `src/` prefix if present
+/// - Strip leading `app/` segment
+/// - Strip `route.ts` / `route.tsx` filename
+/// - Remove route group segments like `(group)`
+/// - Convert `[param]` → `:param`
+/// - Convert `[...slug]` → `:slug*`
+/// - Convert `[[...slug]]` → `:slug*?`
+/// - Root route (`app/route.ts`) → `"/"`
+pub fn file_path_to_route_path(file_path: &str) -> Option<String> {
+    // Normalize path separators
+    let normalized = file_path.replace('\\', "/");
+
+    // Must end with route.ts or route.tsx
+    if !normalized.ends_with("/route.ts") && !normalized.ends_with("/route.tsx") {
+        return None;
+    }
+
+    // Find the `app/` anchor in the path.
+    // Supports: "app/...", "src/app/...", "/abs/path/to/src/app/...", etc.
+    let path = if let Some(pos) = normalized.find("/src/app/") {
+        &normalized[pos + "/src/app/".len()..]
+    } else if let Some(pos) = normalized.find("/app/") {
+        &normalized[pos + "/app/".len()..]
+    } else if let Some(stripped) = normalized.strip_prefix("src/app/") {
+        stripped
+    } else if let Some(stripped) = normalized.strip_prefix("app/") {
+        stripped
+    } else {
+        return None;
+    };
+
+    // Remove the trailing route.ts / route.tsx filename
+    let path = path
+        .strip_suffix("/route.ts")
+        .or_else(|| path.strip_suffix("/route.tsx"))
+        .unwrap_or("");
+
+    // Process segments
+    let mut result = String::new();
+    for segment in path.split('/') {
+        if segment.is_empty() {
+            continue;
+        }
+        // Route group: (group) → skip
+        if segment.starts_with('(') && segment.ends_with(')') {
+            continue;
+        }
+        // Optional catch-all: [[...slug]] → :slug*?
+        if segment.starts_with("[[...") && segment.ends_with("]]") {
+            let name = &segment[5..segment.len() - 2];
+            result.push('/');
+            result.push(':');
+            result.push_str(name);
+            result.push_str("*?");
+            continue;
+        }
+        // Catch-all: [...slug] → :slug*
+        if segment.starts_with("[...") && segment.ends_with(']') {
+            let name = &segment[4..segment.len() - 1];
+            result.push('/');
+            result.push(':');
+            result.push_str(name);
+            result.push('*');
+            continue;
+        }
+        // Dynamic segment: [param] → :param
+        if segment.starts_with('[') && segment.ends_with(']') {
+            let name = &segment[1..segment.len() - 1];
+            result.push('/');
+            result.push(':');
+            result.push_str(name);
+            continue;
+        }
+        // Static segment
+        result.push('/');
+        result.push_str(segment);
+    }
+
+    if result.is_empty() {
+        Some("/".to_string())
+    } else {
+        Some(result)
+    }
+}
+
+impl TypeScriptExtractor {
+    /// Extract Next.js App Router routes from a route handler source file.
+    ///
+    /// Returns an empty Vec if `file_path` is not a `route.ts` / `route.tsx` file,
+    /// or if no HTTP method exports are found.
+    pub fn extract_nextjs_routes(&self, source: &str, file_path: &str) -> Vec<Route> {
+        let route_path = match file_path_to_route_path(file_path) {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+
+        if source.is_empty() {
+            return Vec::new();
+        }
+
+        let mut parser = Self::parser();
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let source_bytes = source.as_bytes();
+
+        let query = cached_query(
+            &NEXTJS_ROUTE_HANDLER_QUERY_CACHE,
+            NEXTJS_ROUTE_HANDLER_QUERY,
+        );
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
+
+        let handler_name_idx = query
+            .capture_index_for_name("handler_name")
+            .expect("nextjs_route_handler.scm must define @handler_name capture");
+
+        let mut routes = Vec::new();
+        while let Some(m) = matches.next() {
+            for cap in m.captures {
+                if cap.index == handler_name_idx {
+                    let name = match cap.node.utf8_text(source_bytes) {
+                        Ok(n) => n.to_string(),
+                        Err(_) => continue,
+                    };
+                    if NEXTJS_HTTP_METHODS.contains(&name.as_str()) {
+                        let line = cap.node.start_position().row + 1;
+                        routes.push(Route {
+                            http_method: name.clone(),
+                            path: route_path.clone(),
+                            handler_name: name,
+                            class_name: String::new(),
+                            file: file_path.to_string(),
+                            line,
+                        });
+                    }
+                }
+            }
+        }
+
+        routes
+    }
+}
+
 fn production_stem(path: &str) -> Option<&str> {
     Path::new(path).file_stem()?.to_str()
 }
@@ -4263,5 +4420,235 @@ describe('Mixed', () => {});
             "expected wildcard=true for namespace re-export from './b', got {:?}",
             re_b
         );
+    }
+
+    // === file_path_to_route_path Tests (NX-FP-01 ~ NX-FP-09) ===
+
+    // NX-FP-01: basic app router path
+    #[test]
+    fn nx_fp_01_basic_app_router_path() {
+        // Given: a route.ts file at app/api/users/route.ts
+        // When: convert to route path
+        let result = file_path_to_route_path("app/api/users/route.ts");
+        // Then: returns "/api/users"
+        assert_eq!(result, Some("/api/users".to_string()));
+    }
+
+    // NX-FP-02: src/app prefix is stripped
+    #[test]
+    fn nx_fp_02_src_app_prefix_stripped() {
+        // Given: a route.ts file under src/app/
+        // When: convert to route path
+        let result = file_path_to_route_path("src/app/api/users/route.ts");
+        // Then: src/ prefix is stripped and returns "/api/users"
+        assert_eq!(result, Some("/api/users".to_string()));
+    }
+
+    // NX-FP-03: dynamic segment [id] → :id
+    #[test]
+    fn nx_fp_03_dynamic_segment() {
+        // Given: a route file with a dynamic segment [id]
+        // When: convert to route path
+        let result = file_path_to_route_path("app/api/users/[id]/route.ts");
+        // Then: [id] is converted to :id
+        assert_eq!(result, Some("/api/users/:id".to_string()));
+    }
+
+    // NX-FP-04: route group (admin) is removed
+    #[test]
+    fn nx_fp_04_route_group_removed() {
+        // Given: a route file inside a route group (admin)
+        // When: convert to route path
+        let result = file_path_to_route_path("app/(admin)/api/route.ts");
+        // Then: (admin) group segment is removed
+        assert_eq!(result, Some("/api".to_string()));
+    }
+
+    // NX-FP-05: route.tsx extension is accepted
+    #[test]
+    fn nx_fp_05_route_tsx_extension() {
+        // Given: a route.tsx file
+        // When: convert to route path
+        let result = file_path_to_route_path("app/api/route.tsx");
+        // Then: returns "/api"
+        assert_eq!(result, Some("/api".to_string()));
+    }
+
+    // NX-FP-06: non-route file is rejected
+    #[test]
+    fn nx_fp_06_non_route_file_rejected() {
+        // Given: a page.ts file (not a route handler)
+        // When: convert to route path
+        let result = file_path_to_route_path("app/api/users/page.ts");
+        // Then: returns None
+        assert_eq!(result, None);
+    }
+
+    // NX-FP-07: catch-all segment [...slug] → :slug*
+    #[test]
+    fn nx_fp_07_catch_all_segment() {
+        // Given: a route file with catch-all segment [...slug]
+        // When: convert to route path
+        let result = file_path_to_route_path("app/api/[...slug]/route.ts");
+        // Then: [...slug] is converted to :slug*
+        assert_eq!(result, Some("/api/:slug*".to_string()));
+    }
+
+    // NX-FP-08: optional catch-all [[...slug]] → :slug*?
+    #[test]
+    fn nx_fp_08_optional_catch_all_segment() {
+        // Given: a route file with optional catch-all segment [[...slug]]
+        // When: convert to route path
+        let result = file_path_to_route_path("app/api/[[...slug]]/route.ts");
+        // Then: [[...slug]] is converted to :slug*?
+        assert_eq!(result, Some("/api/:slug*?".to_string()));
+    }
+
+    // NX-FP-09: root route returns "/"
+    #[test]
+    fn nx_fp_09_root_route() {
+        // Given: app/route.ts (root-level route handler)
+        // When: convert to route path
+        let result = file_path_to_route_path("app/route.ts");
+        // Then: returns "/"
+        assert_eq!(result, Some("/".to_string()));
+    }
+
+    // === extract_nextjs_routes Tests (NX-RT-01 ~ NX-RT-08) ===
+
+    // NX-RT-01: basic GET handler returns 1 route
+    #[test]
+    fn nx_rt_01_basic_get_handler() {
+        // Given: a route.ts with a single exported GET handler
+        let source = "export async function GET(request: Request) { return Response.json([]); }";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract Next.js routes
+        let routes = extractor.extract_nextjs_routes(source, "app/api/users/route.ts");
+
+        // Then: 1 route, method=GET, path="/api/users"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].http_method, "GET");
+        assert_eq!(routes[0].path, "/api/users");
+        assert_eq!(routes[0].handler_name, "GET");
+    }
+
+    // NX-RT-02: multiple HTTP methods (GET + POST) return 2 routes
+    #[test]
+    fn nx_rt_02_multiple_http_methods() {
+        // Given: a route.ts with exported GET and POST handlers
+        let source = r#"
+export async function GET() { return Response.json([]); }
+export async function POST() { return Response.json({}); }
+"#;
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract Next.js routes
+        let routes = extractor.extract_nextjs_routes(source, "app/api/users/route.ts");
+
+        // Then: 2 routes, same path "/api/users", methods GET and POST
+        assert_eq!(routes.len(), 2, "expected 2 routes, got {:?}", routes);
+        let methods: Vec<&str> = routes.iter().map(|r| r.http_method.as_str()).collect();
+        assert!(methods.contains(&"GET"), "expected GET in {methods:?}");
+        assert!(methods.contains(&"POST"), "expected POST in {methods:?}");
+        for r in &routes {
+            assert_eq!(r.path, "/api/users");
+        }
+    }
+
+    // NX-RT-03: dynamic segment in path
+    #[test]
+    fn nx_rt_03_dynamic_segment_path() {
+        // Given: a route.ts in a dynamic segment directory
+        let source = "export async function GET() { return Response.json({}); }";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract Next.js routes
+        let routes = extractor.extract_nextjs_routes(source, "app/api/users/[id]/route.ts");
+
+        // Then: path = "/api/users/:id"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].path, "/api/users/:id");
+    }
+
+    // NX-RT-04: non-route file returns empty Vec
+    #[test]
+    fn nx_rt_04_non_route_file_returns_empty() {
+        // Given: a page.ts file with exported GET (not a route handler file)
+        let source = "export async function GET() { return null; }";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract Next.js routes from a non-route file
+        let routes = extractor.extract_nextjs_routes(source, "app/api/users/page.ts");
+
+        // Then: empty Vec (page.ts is not a route handler)
+        assert!(
+            routes.is_empty(),
+            "expected empty routes for page.ts, got {:?}",
+            routes
+        );
+    }
+
+    // NX-RT-05: no HTTP method exports returns empty Vec
+    #[test]
+    fn nx_rt_05_no_http_method_exports_returns_empty() {
+        // Given: a route.ts with only non-HTTP-method exports
+        let source = "export function helper() { return null; }";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract Next.js routes
+        let routes = extractor.extract_nextjs_routes(source, "app/api/route.ts");
+
+        // Then: empty Vec (helper is not an HTTP method)
+        assert!(
+            routes.is_empty(),
+            "expected empty routes for helper(), got {:?}",
+            routes
+        );
+    }
+
+    // NX-RT-06: arrow function export is recognized
+    #[test]
+    fn nx_rt_06_arrow_function_export() {
+        // Given: a route.ts with an arrow function export for GET
+        let source = "export const GET = async () => Response.json([]);";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract Next.js routes
+        let routes = extractor.extract_nextjs_routes(source, "app/api/route.ts");
+
+        // Then: 1 route, method=GET, path="/api"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].http_method, "GET");
+        assert_eq!(routes[0].path, "/api");
+        assert_eq!(routes[0].handler_name, "GET");
+    }
+
+    // NX-RT-07: empty source returns empty Vec
+    #[test]
+    fn nx_rt_07_empty_source_returns_empty() {
+        // Given: empty source code
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract Next.js routes from empty string
+        let routes = extractor.extract_nextjs_routes("", "app/api/route.ts");
+
+        // Then: empty Vec
+        assert!(routes.is_empty(), "expected empty routes for empty source");
+    }
+
+    // NX-RT-08: route group in path is removed
+    #[test]
+    fn nx_rt_08_route_group_in_path() {
+        // Given: a route.ts inside a route group (auth)
+        let source = "export async function GET() { return Response.json({}); }";
+        let extractor = TypeScriptExtractor::new();
+
+        // When: extract Next.js routes
+        let routes = extractor.extract_nextjs_routes(source, "app/(auth)/api/login/route.ts");
+
+        // Then: path = "/api/login" (route group is removed)
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].path, "/api/login");
     }
 }

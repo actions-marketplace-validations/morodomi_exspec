@@ -433,11 +433,25 @@ fn run_observe(args: ObserveArgs) {
                             Ok(s) => s,
                             Err(_) => continue,
                         };
-                        let routes = ts_ext.extract_routes(&source, prod_file);
-                        all_routes.extend(routes.into_iter().map(|r| ObserveRouteEntry {
+                        // NestJS routes (decorator-based)
+                        let nestjs_routes = ts_ext.extract_routes(&source, prod_file);
+                        all_routes.extend(nestjs_routes.into_iter().map(|r| ObserveRouteEntry {
                             http_method: r.http_method,
                             path: r.path,
                             handler: format!("{}.{}", r.class_name, r.handler_name),
+                            file: r.file,
+                            test_files: Vec::new(),
+                        }));
+                        // Next.js App Router routes (file-based)
+                        let nextjs_routes = ts_ext.extract_nextjs_routes(&source, prod_file);
+                        all_routes.extend(nextjs_routes.into_iter().map(|r| ObserveRouteEntry {
+                            http_method: r.http_method,
+                            path: r.path,
+                            handler: if r.class_name.is_empty() {
+                                r.handler_name
+                            } else {
+                                format!("{}.{}", r.class_name, r.handler_name)
+                            },
                             file: r.file,
                             test_files: Vec::new(),
                         }));
@@ -1991,6 +2005,123 @@ def test_read_users():
             .collect();
 
         let report = build_observe_report(&[], &[main_path], 1, route_entries);
+
+        // Then: routes_total = 2, routes_covered >= 1
+        assert_eq!(report.summary.routes_total, 2, "expected routes_total = 2");
+        assert!(
+            report.summary.routes_covered >= 1,
+            "expected routes_covered >= 1, got {}",
+            report.summary.routes_covered
+        );
+
+        // Verify JSON output contains route data
+        let json = report.format_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(parsed["summary"]["routes_total"], 2);
+        assert!(
+            parsed["summary"]["routes_covered"].as_u64().unwrap_or(0) >= 1,
+            "routes_covered should be >= 1"
+        );
+    }
+
+    // --- NX-RT-E2E-01: observe with Next.js routes via CLI dispatch logic ---
+    //
+    // Verifies that the TypeScript route_fn in run_observe_common correctly merges
+    // NestJS routes and Next.js App Router routes, and that Next.js routes appear
+    // in the final report with non-empty handler names (no leading ".").
+
+    #[test]
+    fn nx_rt_e2e_01_observe_nextjs_routes_coverage() {
+        use exspec_lang_typescript::TypeScriptExtractor;
+        use tempfile::TempDir;
+
+        // Given: tempdir with Next.js App Router route handler (GET + POST) and a test file
+        let dir = TempDir::new().unwrap();
+        let app_dir = dir.path().join("app").join("api").join("users");
+        std::fs::create_dir_all(&app_dir).unwrap();
+
+        let route_ts = app_dir.join("route.ts");
+        let test_ts = app_dir.join("route.test.ts");
+
+        std::fs::write(
+            &route_ts,
+            r#"export async function GET() {
+  return Response.json([]);
+}
+
+export async function POST() {
+  return Response.json({});
+}
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            &test_ts,
+            r#"import { GET } from './route';
+
+test('GET returns array', async () => {
+  const res = await GET();
+  expect(res).toBeDefined();
+});
+"#,
+        )
+        .unwrap();
+
+        // When: run the same dispatch logic as TypeScript route_fn in run_observe_common
+        let ts_ext = TypeScriptExtractor::new();
+        let route_source = std::fs::read_to_string(&route_ts).unwrap();
+        let route_path = route_ts.to_string_lossy().into_owned();
+        let test_path = test_ts.to_string_lossy().into_owned();
+
+        // Replicate the merged dispatch: NestJS routes + Next.js routes
+        let mut all_routes: Vec<ObserveRouteEntry> = Vec::new();
+
+        let nestjs_routes = ts_ext.extract_routes(&route_source, &route_path);
+        all_routes.extend(nestjs_routes.into_iter().map(|r| ObserveRouteEntry {
+            http_method: r.http_method,
+            path: r.path,
+            handler: format!("{}.{}", r.class_name, r.handler_name),
+            file: r.file,
+            test_files: Vec::new(),
+        }));
+
+        let nextjs_routes = ts_ext.extract_nextjs_routes(&route_source, &route_path);
+        all_routes.extend(nextjs_routes.into_iter().map(|r| ObserveRouteEntry {
+            http_method: r.http_method,
+            path: r.path,
+            handler: if r.class_name.is_empty() {
+                r.handler_name
+            } else {
+                format!("{}.{}", r.class_name, r.handler_name)
+            },
+            file: r.file,
+            test_files: vec![test_path.clone()],
+        }));
+
+        // Then: dispatch produces 2 routes from Next.js (NestJS yields 0 for this file)
+        assert_eq!(
+            all_routes.len(),
+            2,
+            "expected 2 routes from dispatch, got {:?}",
+            all_routes
+        );
+
+        // Verify handler format: Next.js handlers must not start with '.'
+        for entry in &all_routes {
+            assert!(
+                !entry.handler.starts_with('.'),
+                "handler should not start with '.': {:?}",
+                entry
+            );
+            assert!(
+                !entry.handler.is_empty(),
+                "handler should not be empty: {:?}",
+                entry
+            );
+        }
+
+        let report = build_observe_report(&[], &[route_path], 1, all_routes);
 
         // Then: routes_total = 2, routes_covered >= 1
         assert_eq!(report.summary.routes_total, 2, "expected routes_total = 2");
