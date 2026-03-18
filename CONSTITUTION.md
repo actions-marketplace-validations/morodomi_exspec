@@ -69,10 +69,13 @@ exspec errs on the side of being quiet. A false positive at BLOCK level destroys
 - No network, no LLM, no runtime dependency
 
 ### Observe (exspec observe)
-- TypeScript only (PoC validated on NestJS + typeorm)
-- Static test-to-code mapping via AST
-- Barrel import resolution with symbol-aware filtering
-- Ship criteria: Precision >= 98%, Recall >= 90%
+- 4 languages: TypeScript, Python, Rust, PHP
+- Static test-to-code mapping via AST (Layer 1: filename convention, Layer 2: import tracing)
+- TypeScript: barrel/re-export resolution, tsconfig path alias, NestJS route extraction
+- Python: dotted import resolution, `__init__.py` barrel
+- Rust: `use crate::`/`use cratename::` resolution, workspace member aggregation, `pub mod` barrel
+- PHP: PSR-4 namespace resolution
+- Ship criteria: Precision >= 98%, Recall >= 90% (test file coverage)
 
 ### The 4 Properties
 

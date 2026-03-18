@@ -9,90 +9,19 @@
 
 ## Now
 
-### Phase 9: observe multi-language (test-to-code mapping)
+### Phase 10: observe route extraction
 
-Goal: Expand `exspec observe` from TypeScript-only to all 4 supported languages. Test-to-code mapping only (route extraction deferred).
+Goal: Extract API route definitions from framework decorators/config and map them to tests. Output: "which routes have tests, which don't?"
 
-**Why multi-language, why now**: observe is exspec's differentiator -- no competing tool does static test-to-code mapping. TypeScript PoC proved the approach (NestJS F1 96.3%, typeorm Precision 100%). Expanding to Python/Rust/PHP before deepening TypeScript precision because: (a) "4 languages supported" is a stronger OSS signal than "TypeScript is 99.9% precise", (b) the two-layer mapping algorithm is proven and portable, (c) remaining TypeScript FN (#85 namespace re-export, cross-package barrel) are edge cases with diminishing returns.
+**Why now**: observe multi-language (Phase 9) is complete. Route extraction is the next differentiator — no existing tool shows "this API endpoint has 0 tests" via static analysis.
 
-**Scope**: Layer 1 (filename convention) + Layer 2 (import tracing) for each language. No route extraction (framework-specific, deferred). No framework-specific patterns (Django URL conf, Actix routes etc.).
-
-**Architecture prerequisite**: Extract `ObserveExtractor` trait from TypeScript-specific implementation. Current observe is hardcoded to TypeScript in CLI + all logic lives in `crates/lang-typescript/src/observe.rs`.
-
-#### 9a: ObserveExtractor trait extraction
-
-Extract language-agnostic observe interface from TypeScript implementation.
-
-**Why first**: All language implementations depend on this trait. Without it, each language would duplicate the mapping algorithm.
-
-| Component | Location | Reusable? |
-|-----------|----------|-----------|
-| `ObserveReport`, `ObserveFileEntry`, `ObserveSummary` | `core/observe_report.rs` | Already language-agnostic |
-| Two-layer mapping algorithm | `lang-typescript/observe.rs` | Extract to trait |
-| Barrel/re-export resolution | `lang-typescript/observe.rs` | Extract pattern, impl per-language |
-| Helper filtering (`is_non_sut_helper`) | `lang-typescript/observe.rs` | Language-specific suffixes |
-| CLI dispatch | `cli/main.rs` | Needs trait-based dispatch |
-
-**Deliverable**: `ObserveExtractor` trait in `crates/core/`, TypeScript refactored to implement it, CLI dispatches via trait object. All existing TypeScript observe tests pass unchanged.
-
-**Review gate**: 9a 完了時に trait の公開 API を設計レビューする。9b 以降で破壊的変更が生じないよう、trait 境界（言語非依存の two-layer アルゴリズム vs 言語固有の import/barrel 解決）を確定してから次に進む。
-
-**Technical debt to address**: `ObserveReport` の `routes` フィールドは TypeScript (NestJS) 固有。Phase 9 では Python/Rust/PHP が空の routes を返す設計になる。route extraction 対応時に `ObserveReport` を refactor する前提で、現時点では許容する。
-
-#### 9b: Python observe
-
-**Why Python first**: Strongest naming conventions (`test_*.py`), simplest import system (no barrel complexity like TypeScript), largest user base.
-
-| Layer | Python equivalent | Complexity |
-|-------|-------------------|------------|
-| Layer 1 (filename) | `test_user.py` -> `user.py` | Low -- strip `test_` prefix or `_test` suffix |
-| Layer 2 (import) | `from myapp.models import User` | Medium -- dotted path to file resolution |
-| Barrel equivalent | `__init__.py` with `__all__` | Low -- simpler than TypeScript barrels |
-| Helper filtering | `conftest.py`, `constants.py`, `__init__.py` | Low |
-
-**Queries needed**: `production_function.scm`, `import_mapping.scm` (Python `from X import Y` + `import X`), `exported_symbol.scm` (optional, for `__all__`).
-
-**Dogfooding target**: fastapi or pytest (both in dogfooding corpus).
-
-**Success criteria**: Precision >= 90%, Recall >= 80% on dogfooding target.
-
-#### 9c: Rust observe
-
-| Layer | Rust equivalent | Complexity |
-|-------|-----------------|------------|
-| Layer 1 (filename) | `tests/test_foo.rs` -> `src/foo.rs`, inline `mod tests` | Low -- but inline tests need special handling |
-| Layer 2 (import) | `use crate::module::Foo` | Medium -- crate-relative paths |
-| Barrel equivalent | `mod.rs`, `lib.rs` re-exports | Medium |
-| Helper filtering | `test_utils.rs`, `fixtures/` | Low |
-
-**Unique challenge**: Rust tests are often inline (`#[cfg(test)] mod tests` in the same file). Layer 1 maps these trivially (same file), but Layer 2 needs to handle `use super::*` and `use crate::` paths. **Important**: 同一ファイルが production_file かつ test_file を兼ねるケースで、`unmapped_production_files` の計算ロジックと `ObserveSummary` のカウントが破綻しないよう、実装前に計算ロジックを明確化すること。
-
-**Dogfooding target**: tokio or clap (both in dogfooding corpus). exspec 自身も self-dogfooding 候補。
-
-**Success criteria**: Precision >= 90%, Recall >= 80%.
-
-#### 9d: PHP observe
-
-| Layer | PHP equivalent | Complexity |
-|-------|---------------|------------|
-| Layer 1 (filename) | `tests/UserTest.php` -> `src/User.php` | Low -- strip `Test` suffix |
-| Layer 2 (import) | `use App\Models\User` | Medium -- PSR-4 namespace to file mapping |
-| Barrel equivalent | N/A (PHP has no barrel pattern) | N/A |
-| Helper filtering | `TestCase.php`, `Factory.php`, `Trait*.php` | Low |
-
-**Unique challenge**: PSR-4 autoloading maps namespace to directory. Need to detect `composer.json` autoload config or fall back to convention. composer.json パースは外部ファイル読み取りを伴い、他言語より実装コストが高い。convention fallback で精度が出るかを先に検証し、不足なら composer.json パースを追加する段階的アプローチを取る。
-
-**Dogfooding target**: Laravel or Symfony (both in dogfooding corpus).
-
-**Success criteria**: Precision >= 90%, Recall >= 80%.
+**Scope**: NestJS (`@Get/@Post` decorators) first, then Django (URL conf), FastAPI (`@app.get`). TypeScript route extraction already exists as PoC in observe.
 
 ## Next
 
 | Priority | Task | Trigger |
 |----------|------|---------|
-| P1 | TypeScript observe precision (#85 namespace re-export, cross-package barrel) | After Phase 9 |
-| P1 | observe route extraction (NestJS, Django, FastAPI, Actix) | After multi-language observe stabilizes |
-| P2 | GitHub Action marketplace | After observe multi-language ships |
+| P1 | TypeScript observe precision (#85 namespace re-export, cross-package barrel) | When FN reports come in |
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
 
 ## Backlog
@@ -100,13 +29,14 @@ Extract language-agnostic observe interface from TypeScript implementation.
 | Priority | Task | Trigger |
 |----------|------|---------|
 | P2 | T201 spec-quality (advisory mode) | "I want semantic quality checks" |
+| P2 | GitHub Action marketplace | After route extraction ships |
 | P3 | T203 AST similarity duplicate detection | "I want duplicate test detection" |
 | P3 | Go language support (lint) | After observe multi-language proves demand |
 | Rejected | LSP/VSCode extension | Too early -- low user count for UI investment |
 
 **Decision: Go language deferred** -- observe multi-language for existing 4 languages takes priority over adding a 5th language to lint. The product differentiator is observe, not language breadth for lint.
 
-**Decision: LSP/VSCode rejection** -- exspec has near-zero external users as of v0.2.0. Building an IDE extension before establishing a user base invests in distribution UX before the core product has proven its value. Reconsiderable after external adoption signals (GitHub stars, issues from non-maintainers).
+**Decision: LSP/VSCode rejection** -- exspec has near-zero external users as of v0.3.0. Building an IDE extension before establishing a user base invests in distribution UX before the core product has proven its value. Reconsiderable after external adoption signals (GitHub stars, issues from non-maintainers).
 
 ## Non-goals
 
@@ -169,5 +99,6 @@ Extract language-agnostic observe interface from TypeScript implementation.
 | 8a | Lint Reliability: BLOCK FP fixes, WARN/INFO survey, severity adjustments, helper delegation | v0.1.2 |
 | 8b | observe PoC: TypeScript test-to-code mapping (NestJS F1 96.3%, typeorm Precision 100%) | v0.2.0 |
 | 8c | observe MVP: failure boundaries, ship criteria, tsconfig path alias, enum/interface filter | v0.2.0 |
+| 9 | observe multi-language: Python, Rust, PHP. Workspace aggregation, barrel resolution, PSR-4 | v0.3.0 |
 
 Detail for completed phases is archived in git history. Key decisions are preserved in "Key Design Decisions" above.

@@ -68,37 +68,38 @@ Each language has specific detection patterns and known gaps. See [docs/language
 
 See [docs/SPEC.md](docs/SPEC.md) for the full rule reference.
 
-## Observe (TypeScript)
-
-> **Experimental**. Validated on NestJS and typeorm (Precision 99.4%, Recall 93.4%).
+## Observe
 
 Static test-to-code mapping. Answers "what is tested, where are the gaps?" without running tests.
 
+Supports **TypeScript, Python, Rust, PHP**.
+
 ```bash
-exspec observe --lang typescript .              # Terminal output
-exspec observe --lang typescript --format json . # JSON for CI
+exspec observe --lang typescript .    # TypeScript (NestJS, barrel resolution)
+exspec observe --lang python .        # Python (dotted imports)
+exspec observe --lang rust .          # Rust (use crate::, workspace aggregation)
+exspec observe --lang php .           # PHP (PSR-4 namespace resolution)
+exspec observe --lang rust --format json .  # JSON for CI
 ```
 
 ### What it does
 
-1. **File mapping**: Maps test files to production files via filename convention (`users.service.spec.ts` -> `users.service.ts`) and import tracing
-2. **Route coverage**: Detects NestJS controller routes and shows which have test coverage
+1. **File mapping**: Maps test files to production files via filename convention (Layer 1) and import tracing (Layer 2)
+2. **Route coverage** (TypeScript/NestJS): Detects controller routes and shows which have test coverage
 3. **Gap detection**: Lists unmapped production files (potential test gaps)
 
-### Best for
+### Dogfooding results
 
-- Single-package TypeScript projects
-- Projects using relative imports
-- NestJS applications with standard barrel patterns
+| Project | Lang | Prod | Mapped | Precision |
+|---------|------|------|--------|-----------|
+| NestJS | TypeScript | 1279 | 466 (36%) | ~100% |
+| FastAPI | Python | 620 | 122 (20%) | ~100% |
+| Django | Python | 2266 | 381 (17%) | ~100% |
+| tokio | Rust | 495 | 71 (14%) | 100% |
+| Laravel | PHP | 1945 | 968 (50%) | ~100% |
+| Symfony | PHP | 7937 | 4117 (52%) | ~100% |
 
-### Known limitations
-
-- **Monorepo cross-package imports** (`@org/common`): Not resolved (requires tsconfig/node_modules)
-- **tsconfig path aliases** (`@app/*`): Not resolved
-- **Namespace re-exports** (`export * as Ns from`): Not captured
-- **Dynamic imports** (`import()`): Not captured
-
-See [docs/observe-boundaries.md](docs/observe-boundaries.md) for full details.
+See [docs/dogfooding-results.md](docs/dogfooding-results.md) for full details.
 
 ## Gradual Adoption
 
