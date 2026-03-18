@@ -1440,3 +1440,467 @@ def endpoint():
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Route extraction
+// ---------------------------------------------------------------------------
+
+const ROUTE_DECORATOR_QUERY: &str = include_str!("../queries/route_decorator.scm");
+static ROUTE_DECORATOR_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
+const HTTP_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "head", "options"];
+
+/// A route extracted from a FastAPI application.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Route {
+    pub http_method: String,
+    pub path: String,
+    pub handler_name: String,
+    pub file: String,
+}
+
+/// Extract `router = APIRouter(prefix="...")` assignments from source.
+/// Returns a HashMap from variable name to prefix string.
+fn collect_router_prefixes(
+    source_bytes: &[u8],
+    tree: &tree_sitter::Tree,
+) -> HashMap<String, String> {
+    let mut prefixes = HashMap::new();
+
+    // Walk the tree to find: assignment where right side is APIRouter(prefix="...")
+    let root = tree.root_node();
+    let mut stack = vec![root];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "assignment" {
+            let left = node.child_by_field_name("left");
+            let right = node.child_by_field_name("right");
+
+            if let (Some(left_node), Some(right_node)) = (left, right) {
+                if left_node.kind() == "identifier" && right_node.kind() == "call" {
+                    let var_name = left_node.utf8_text(source_bytes).unwrap_or("").to_string();
+
+                    // Check if the call is APIRouter(...)
+                    let fn_node = right_node.child_by_field_name("function");
+                    let is_api_router = fn_node
+                        .and_then(|f| f.utf8_text(source_bytes).ok())
+                        .map(|name| name == "APIRouter")
+                        .unwrap_or(false);
+
+                    if is_api_router {
+                        // Look for prefix keyword argument
+                        let args_node = right_node.child_by_field_name("arguments");
+                        if let Some(args) = args_node {
+                            let mut args_cursor = args.walk();
+                            for arg in args.named_children(&mut args_cursor) {
+                                if arg.kind() == "keyword_argument" {
+                                    let kw_name = arg
+                                        .child_by_field_name("name")
+                                        .and_then(|n| n.utf8_text(source_bytes).ok())
+                                        .unwrap_or("");
+                                    if kw_name == "prefix" {
+                                        if let Some(val) = arg.child_by_field_name("value") {
+                                            if val.kind() == "string" {
+                                                let raw = val.utf8_text(source_bytes).unwrap_or("");
+                                                let prefix = strip_string_quotes(raw);
+                                                prefixes.insert(var_name.clone(), prefix);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // If no prefix found, insert empty string (APIRouter() without prefix)
+                        prefixes.entry(var_name).or_default();
+                    }
+                }
+            }
+        }
+
+        // Push children in reverse order so they are popped in source order (DFS)
+        let mut w = node.walk();
+        let children: Vec<_> = node.named_children(&mut w).collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    prefixes
+}
+
+/// Strip surrounding quotes from a Python string literal.
+/// `"'/users'"` → `"/users"`, `'"hello"'` → `"hello"`, triple-quoted too.
+fn strip_string_quotes(raw: &str) -> String {
+    // Try triple quotes first
+    for q in &[r#"""""#, "'''"] {
+        if let Some(inner) = raw.strip_prefix(q).and_then(|s| s.strip_suffix(q)) {
+            return inner.to_string();
+        }
+    }
+    // Single quotes
+    for q in &["\"", "'"] {
+        if let Some(inner) = raw.strip_prefix(q).and_then(|s| s.strip_suffix(q)) {
+            return inner.to_string();
+        }
+    }
+    raw.to_string()
+}
+
+/// Extract FastAPI routes from Python source code.
+pub fn extract_routes(source: &str, file_path: &str) -> Vec<Route> {
+    if source.is_empty() {
+        return Vec::new();
+    }
+
+    let mut parser = PythonExtractor::parser();
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    let source_bytes = source.as_bytes();
+
+    // Pass 1: collect APIRouter prefix assignments
+    let router_prefixes = collect_router_prefixes(source_bytes, &tree);
+
+    // Pass 2: run route_decorator query
+    let query = cached_query(&ROUTE_DECORATOR_QUERY_CACHE, ROUTE_DECORATOR_QUERY);
+
+    let obj_idx = query.capture_index_for_name("route.object");
+    let method_idx = query.capture_index_for_name("route.method");
+    let path_idx = query.capture_index_for_name("route.path");
+    let handler_idx = query.capture_index_for_name("route.handler");
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
+
+    let mut routes = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    while let Some(m) = matches.next() {
+        let mut obj: Option<String> = None;
+        let mut method: Option<String> = None;
+        let mut path_raw: Option<String> = None;
+        let mut path_is_string = false;
+        let mut handler: Option<String> = None;
+
+        for cap in m.captures {
+            let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
+            if obj_idx == Some(cap.index) {
+                obj = Some(text);
+            } else if method_idx == Some(cap.index) {
+                method = Some(text);
+            } else if path_idx == Some(cap.index) {
+                // Determine if it's a string literal or identifier
+                path_is_string = cap.node.kind() == "string";
+                path_raw = Some(text);
+            } else if handler_idx == Some(cap.index) {
+                handler = Some(text);
+            }
+        }
+
+        let (obj, method, handler) = match (obj, method, handler) {
+            (Some(o), Some(m), Some(h)) => (o, m, h),
+            _ => continue,
+        };
+
+        // Filter: method must be a known HTTP method
+        if !HTTP_METHODS.contains(&method.as_str()) {
+            continue;
+        }
+
+        // Resolve path
+        let sub_path = match path_raw {
+            Some(ref raw) if path_is_string => strip_string_quotes(raw),
+            Some(_) => "<dynamic>".to_string(),
+            None => "<dynamic>".to_string(),
+        };
+
+        // Resolve prefix from router variable
+        let prefix = router_prefixes.get(&obj).map(|s| s.as_str()).unwrap_or("");
+        let full_path = if prefix.is_empty() {
+            sub_path
+        } else {
+            format!("{prefix}{sub_path}")
+        };
+
+        // Deduplicate: same (method, path, handler)
+        let key = (method.clone(), full_path.clone(), handler.clone());
+        if !seen.insert(key) {
+            continue;
+        }
+
+        routes.push(Route {
+            http_method: method.to_uppercase(),
+            path: full_path,
+            handler_name: handler,
+            file: file_path.to_string(),
+        });
+    }
+
+    routes
+}
+
+// ---------------------------------------------------------------------------
+// Route extraction tests (FA-RT-01 ~ FA-RT-10)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    // FA-RT-01: basic @app.get route
+    #[test]
+    fn fa_rt_01_basic_app_get_route() {
+        // Given: source with `@app.get("/users") def read_users(): ...`
+        let source = r#"
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/users")
+def read_users():
+    return []
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: [Route { method: "GET", path: "/users", handler: "read_users" }]
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].http_method, "GET");
+        assert_eq!(routes[0].path, "/users");
+        assert_eq!(routes[0].handler_name, "read_users");
+    }
+
+    // FA-RT-02: multiple HTTP methods
+    #[test]
+    fn fa_rt_02_multiple_http_methods() {
+        // Given: source with @app.get, @app.post, @app.put, @app.delete on separate functions
+        let source = r#"
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/items")
+def list_items():
+    return []
+
+@app.post("/items")
+def create_item():
+    return {}
+
+@app.put("/items/{item_id}")
+def update_item(item_id: int):
+    return {}
+
+@app.delete("/items/{item_id}")
+def delete_item(item_id: int):
+    return {}
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: 4 routes with correct methods
+        assert_eq!(routes.len(), 4, "expected 4 routes, got {:?}", routes);
+        let methods: Vec<&str> = routes.iter().map(|r| r.http_method.as_str()).collect();
+        assert!(methods.contains(&"GET"), "missing GET");
+        assert!(methods.contains(&"POST"), "missing POST");
+        assert!(methods.contains(&"PUT"), "missing PUT");
+        assert!(methods.contains(&"DELETE"), "missing DELETE");
+    }
+
+    // FA-RT-03: path parameter
+    #[test]
+    fn fa_rt_03_path_parameter() {
+        // Given: `@app.get("/items/{item_id}")`
+        let source = r#"
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/items/{item_id}")
+def read_item(item_id: int):
+    return {}
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: path = "/items/{item_id}"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].path, "/items/{item_id}");
+    }
+
+    // FA-RT-04: @router.get with APIRouter prefix
+    #[test]
+    fn fa_rt_04_router_get_with_prefix() {
+        // Given: `router = APIRouter(prefix="/items")` + `@router.get("/{item_id}")`
+        let source = r#"
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/items")
+
+@router.get("/{item_id}")
+def read_item(item_id: int):
+    return {}
+"#;
+
+        // When: extract_routes(source, "routes.py")
+        let routes = extract_routes(source, "routes.py");
+
+        // Then: path = "/items/{item_id}"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(
+            routes[0].path, "/items/{item_id}",
+            "expected prefix-resolved path"
+        );
+    }
+
+    // FA-RT-05: @router.get without prefix
+    #[test]
+    fn fa_rt_05_router_get_without_prefix() {
+        // Given: `router = APIRouter()` + `@router.get("/health")`
+        let source = r#"
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/health")
+def health_check():
+    return {"status": "ok"}
+"#;
+
+        // When: extract_routes(source, "routes.py")
+        let routes = extract_routes(source, "routes.py");
+
+        // Then: path = "/health"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(routes[0].path, "/health");
+    }
+
+    // FA-RT-06: non-route decorator ignored
+    #[test]
+    fn fa_rt_06_non_route_decorator_ignored() {
+        // Given: `@pytest.fixture` or `@staticmethod` decorated function
+        let source = r#"
+import pytest
+
+@pytest.fixture
+def client():
+    return None
+
+class MyClass:
+    @staticmethod
+    def helper():
+        pass
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: empty Vec
+        assert!(
+            routes.is_empty(),
+            "expected no routes for non-route decorators, got {:?}",
+            routes
+        );
+    }
+
+    // FA-RT-07: dynamic path (non-literal)
+    #[test]
+    fn fa_rt_07_dynamic_path_non_literal() {
+        // Given: `@app.get(some_variable)`
+        let source = r#"
+from fastapi import FastAPI
+app = FastAPI()
+
+ROUTE_PATH = "/dynamic"
+
+@app.get(ROUTE_PATH)
+def dynamic_route():
+    return {}
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: path = "<dynamic>"
+        assert_eq!(
+            routes.len(),
+            1,
+            "expected 1 route for dynamic path, got {:?}",
+            routes
+        );
+        assert_eq!(
+            routes[0].path, "<dynamic>",
+            "expected <dynamic> for non-literal path argument"
+        );
+    }
+
+    // FA-RT-08: empty source
+    #[test]
+    fn fa_rt_08_empty_source() {
+        // Given: ""
+        let source = "";
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: empty Vec
+        assert!(routes.is_empty(), "expected empty Vec for empty source");
+    }
+
+    // FA-RT-09: async def handler
+    #[test]
+    fn fa_rt_09_async_def_handler() {
+        // Given: `@app.get("/") async def root(): ...`
+        let source = r#"
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"message": "hello"}
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: handler = "root" (async は無視)
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(
+            routes[0].handler_name, "root",
+            "async def should produce handler_name = 'root'"
+        );
+    }
+
+    // FA-RT-10: multiple decorators on same function
+    #[test]
+    fn fa_rt_10_multiple_decorators_on_same_function() {
+        // Given: `@app.get("/") @require_auth def root(): ...`
+        let source = r#"
+from fastapi import FastAPI
+app = FastAPI()
+
+def require_auth(func):
+    return func
+
+@app.get("/")
+@require_auth
+def root():
+    return {}
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: 1 route (non-route decorators ignored)
+        assert_eq!(
+            routes.len(),
+            1,
+            "expected exactly 1 route (non-route decorators ignored), got {:?}",
+            routes
+        );
+        assert_eq!(routes[0].http_method, "GET");
+        assert_eq!(routes[0].path, "/");
+        assert_eq!(routes[0].handler_name, "root");
+    }
+}

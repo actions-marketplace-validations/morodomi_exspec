@@ -457,7 +457,25 @@ fn run_observe(args: ObserveArgs) {
                 |prod, test_src, root_path| {
                     py_ext.map_test_files_with_imports(prod, test_src, root_path)
                 },
-                |_| Vec::new(),
+                |production_files| {
+                    let mut all_routes = Vec::new();
+                    for prod_file in production_files {
+                        let source = match std::fs::read_to_string(prod_file) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        let routes =
+                            exspec_lang_python::observe::extract_routes(&source, prod_file);
+                        all_routes.extend(routes.into_iter().map(|r| ObserveRouteEntry {
+                            http_method: r.http_method,
+                            path: r.path,
+                            handler: r.handler_name,
+                            file: r.file,
+                            test_files: Vec::new(),
+                        }));
+                    }
+                    all_routes
+                },
             );
         }
         "rust" => {
@@ -1905,5 +1923,90 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(parsed["metrics"].is_object());
         assert!(parsed["metrics"]["assertion_density_avg"].is_number());
+    }
+
+    // --- FA-RT-E2E-01: observe with routes shows route coverage ---
+
+    #[test]
+    fn fa_rt_e2e_01_observe_python_routes_coverage() {
+        use exspec_lang_python::observe::extract_routes;
+        use tempfile::TempDir;
+
+        // Given: tempdir with FastAPI app (main.py with 2 routes, test_main.py importing main)
+        let dir = TempDir::new().unwrap();
+        let main_py = dir.path().join("main.py");
+        let test_main_py = dir.path().join("test_main.py");
+
+        std::fs::write(
+            &main_py,
+            r#"from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/users")
+def read_users():
+    return []
+
+@app.post("/users")
+def create_user():
+    return {}
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            &test_main_py,
+            r#"from main import app
+
+def test_read_users():
+    assert app is not None
+"#,
+        )
+        .unwrap();
+
+        // When: extract routes from main.py and build observe report
+        let main_source = std::fs::read_to_string(&main_py).unwrap();
+        let main_path = main_py.to_string_lossy().into_owned();
+        let test_path = test_main_py.to_string_lossy().into_owned();
+
+        let routes = extract_routes(&main_source, &main_path);
+
+        // Then: routes_total = 2
+        assert_eq!(
+            routes.len(),
+            2,
+            "expected 2 routes extracted from main.py, got {:?}",
+            routes
+        );
+
+        // Build route entries with test file coverage
+        let route_entries: Vec<ObserveRouteEntry> = routes
+            .into_iter()
+            .map(|r| ObserveRouteEntry {
+                http_method: r.http_method,
+                path: r.path,
+                handler: r.handler_name,
+                file: r.file,
+                test_files: vec![test_path.clone()],
+            })
+            .collect();
+
+        let report = build_observe_report(&[], &[main_path], 1, route_entries);
+
+        // Then: routes_total = 2, routes_covered >= 1
+        assert_eq!(report.summary.routes_total, 2, "expected routes_total = 2");
+        assert!(
+            report.summary.routes_covered >= 1,
+            "expected routes_covered >= 1, got {}",
+            report.summary.routes_covered
+        );
+
+        // Verify JSON output contains route data
+        let json = report.format_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(parsed["summary"]["routes_total"], 2);
+        assert!(
+            parsed["summary"]["routes_covered"].as_u64().unwrap_or(0) >= 1,
+            "routes_covered should be >= 1"
+        );
     }
 }
