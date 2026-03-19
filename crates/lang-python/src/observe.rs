@@ -282,6 +282,7 @@ impl ObserveExtractor for PythonExtractor {
 
         let module_name_idx = query.capture_index_for_name("module_name");
         let symbol_name_idx = query.capture_index_for_name("symbol_name");
+        let import_name_idx = query.capture_index_for_name("import_name");
 
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
@@ -291,13 +292,38 @@ impl ObserveExtractor for PythonExtractor {
         while let Some(m) = matches.next() {
             let mut module_text: Option<String> = None;
             let mut symbol_text: Option<String> = None;
+            let mut import_name_parts: Vec<String> = Vec::new();
 
             for cap in m.captures {
                 if module_name_idx == Some(cap.index) {
                     module_text = Some(cap.node.utf8_text(source_bytes).unwrap_or("").to_string());
                 } else if symbol_name_idx == Some(cap.index) {
                     symbol_text = Some(cap.node.utf8_text(source_bytes).unwrap_or("").to_string());
+                } else if import_name_idx == Some(cap.index) {
+                    // Use the parent dotted_name node's text to reconstruct the full
+                    // module name (e.g., `os.path` from individual `identifier` captures).
+                    let dotted_text = cap
+                        .node
+                        .parent()
+                        .and_then(|p| p.utf8_text(source_bytes).ok())
+                        .unwrap_or_else(|| cap.node.utf8_text(source_bytes).unwrap_or(""))
+                        .to_string();
+                    import_name_parts.push(dotted_text);
                 }
+            }
+
+            if !import_name_parts.is_empty() {
+                // bare import: `import X` or `import os.path`
+                // Dedup in case multiple identifier captures share the same dotted_name parent.
+                import_name_parts.dedup();
+                let specifier = python_module_to_absolute_specifier(&import_name_parts[0]);
+                if !specifier.starts_with("./")
+                    && !specifier.starts_with("../")
+                    && !specifier.is_empty()
+                {
+                    specifier_symbols.entry(specifier).or_default();
+                }
+                continue;
             }
 
             let (module_text, symbol_text) = match (module_text, symbol_text) {
@@ -982,12 +1008,18 @@ def endpoint():
         let extractor = PythonExtractor::new();
         let result = extractor.extract_all_import_specifiers(source);
 
-        // Then: "os" is not in the result (plain imports are skipped)
+        // Then: "os" is present with empty symbols (bare import produces no symbol constraints)
         let os_entry = result.iter().find(|(spec, _)| spec == "os");
         assert!(
-            os_entry.is_none(),
-            "plain 'import os' should be skipped, got {:?}",
+            os_entry.is_some(),
+            "plain 'import os' should be included as bare import, got {:?}",
             result
+        );
+        let (_, symbols) = os_entry.unwrap();
+        assert!(
+            symbols.is_empty(),
+            "expected empty symbols for bare import, got {:?}",
+            symbols
         );
     }
 
@@ -1011,6 +1043,84 @@ def endpoint():
             imp.symbols.contains(&"views".to_string()),
             "views not in symbols: {:?}",
             imp.symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-IMPORT-01: `import httpx` -> specifier="httpx", symbols=[]
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_import_01_bare_import_simple() {
+        // Given: source with a bare import of a third-party package
+        let source = "import httpx\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: contains ("httpx", []) -- bare import produces empty symbols
+        let entry = result.iter().find(|(spec, _)| spec == "httpx");
+        assert!(
+            entry.is_some(),
+            "httpx not found in {:?}; bare import should be included",
+            result
+        );
+        let (_, symbols) = entry.unwrap();
+        assert!(
+            symbols.is_empty(),
+            "expected empty symbols for bare import, got {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-IMPORT-02: `import os.path` -> specifier="os/path", symbols=[]
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_import_02_bare_import_dotted() {
+        // Given: source with a dotted bare import
+        let source = "import os.path\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: contains ("os/path", []) -- dots converted to slashes
+        let entry = result.iter().find(|(spec, _)| spec == "os/path");
+        assert!(
+            entry.is_some(),
+            "os/path not found in {:?}; dotted bare import should be converted",
+            result
+        );
+        let (_, symbols) = entry.unwrap();
+        assert!(
+            symbols.is_empty(),
+            "expected empty symbols for dotted bare import, got {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-IMPORT-03: `from httpx import Client` -> specifier="httpx", symbols=["Client"]
+    //               (regression: from-import still works after bare-import change)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_import_03_from_import_regression() {
+        // Given: source with a from-import (existing behaviour must not regress)
+        let source = "from httpx import Client\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: contains ("httpx", ["Client"])
+        let entry = result.iter().find(|(spec, _)| spec == "httpx");
+        assert!(entry.is_some(), "httpx not found in {:?}", result);
+        let (_, symbols) = entry.unwrap();
+        assert!(
+            symbols.contains(&"Client".to_string()),
+            "Client not in symbols: {:?}",
+            symbols
         );
     }
 
@@ -2874,5 +2984,105 @@ def test_user_detail():
         for r in &routes {
             assert_eq!(r.http_method, "ANY", "expected method ANY, got {:?}", r);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-IMPORT-04: e2e: `import pkg`, pkg/__init__.py has `from .module import *`,
+    //               pkg/module.py has Foo -> module.py mapped
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_import_04_e2e_bare_import_wildcard_barrel_mapped() {
+        use tempfile::TempDir;
+
+        // Given: tempdir with pkg/__init__.py (wildcard re-export) + pkg/module.py
+        //        and test_foo.py that uses bare `import pkg`
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+
+        std::fs::write(pkg.join("__init__.py"), "from .module import *\n").unwrap();
+        std::fs::write(pkg.join("module.py"), "class Foo:\n    pass\n").unwrap();
+
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        let test_content = "import pkg\n\ndef test_foo():\n    assert pkg.Foo()\n";
+        std::fs::write(tests_dir.join("test_foo.py"), test_content).unwrap();
+
+        let module_path = pkg.join("module.py").to_string_lossy().into_owned();
+        let test_path = tests_dir.join("test_foo.py").to_string_lossy().into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![module_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: module.py is matched via bare import + wildcard barrel chain
+        let mapping = result.iter().find(|m| m.production_file == module_path);
+        assert!(
+            mapping.is_some(),
+            "module.py not mapped; bare import + wildcard barrel should resolve. mappings={:?}",
+            result
+        );
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&test_path),
+            "test_foo.py not in test_files for module.py: {:?}",
+            mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-IMPORT-05: e2e: `import pkg`, pkg/__init__.py has `from .module import Foo`
+    //               (named), pkg/module.py has Foo -> module.py mapped
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_import_05_e2e_bare_import_named_barrel_mapped() {
+        use tempfile::TempDir;
+
+        // Given: tempdir with pkg/__init__.py (named re-export) + pkg/module.py
+        //        and test_foo.py that uses bare `import pkg`
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+
+        std::fs::write(pkg.join("__init__.py"), "from .module import Foo\n").unwrap();
+        std::fs::write(pkg.join("module.py"), "class Foo:\n    pass\n").unwrap();
+
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        let test_content = "import pkg\n\ndef test_foo():\n    assert pkg.Foo()\n";
+        std::fs::write(tests_dir.join("test_foo.py"), test_content).unwrap();
+
+        let module_path = pkg.join("module.py").to_string_lossy().into_owned();
+        let test_path = tests_dir.join("test_foo.py").to_string_lossy().into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![module_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: module.py is matched via bare import + named barrel chain
+        let mapping = result.iter().find(|m| m.production_file == module_path);
+        assert!(
+            mapping.is_some(),
+            "module.py not mapped; bare import + named barrel should resolve. mappings={:?}",
+            result
+        );
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&test_path),
+            "test_foo.py not in test_files for module.py: {:?}",
+            mapping.test_files
+        );
     }
 }
