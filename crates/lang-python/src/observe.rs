@@ -24,6 +24,9 @@ static RE_EXPORT_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 const EXPORTED_SYMBOL_QUERY: &str = include_str!("../queries/exported_symbol.scm");
 static EXPORTED_SYMBOL_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
+const BARE_IMPORT_ATTRIBUTE_QUERY: &str = include_str!("../queries/bare_import_attribute.scm");
+static BARE_IMPORT_ATTRIBUTE_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
 fn cached_query<'a>(lock: &'a OnceLock<Query>, source: &str) -> &'a Query {
     lock.get_or_init(|| {
         Query::new(&tree_sitter_python::LANGUAGE.into(), source).expect("invalid query")
@@ -107,6 +110,49 @@ pub fn is_non_sut_helper(file_path: &str, is_known_production: bool) -> bool {
     }
 
     false
+}
+
+// ---------------------------------------------------------------------------
+// Standalone helpers
+// ---------------------------------------------------------------------------
+
+/// Extract attribute names accessed on a bare-imported module.
+///
+/// For `import httpx; httpx.Client(); httpx.get()`, returns `["Client", "get"]`.
+/// Returns empty vec if no attribute accesses are found (fallback to full match).
+fn extract_bare_import_attributes(
+    source_bytes: &[u8],
+    tree: &tree_sitter::Tree,
+    module_name: &str,
+) -> Vec<String> {
+    let query = cached_query(
+        &BARE_IMPORT_ATTRIBUTE_QUERY_CACHE,
+        BARE_IMPORT_ATTRIBUTE_QUERY,
+    );
+    let module_name_idx = query.capture_index_for_name("module_name").unwrap();
+    let attribute_name_idx = query.capture_index_for_name("attribute_name").unwrap();
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
+
+    let mut attrs: Vec<String> = Vec::new();
+    while let Some(m) = matches.next() {
+        let mut mod_text = "";
+        let mut attr_text = "";
+        for cap in m.captures {
+            if cap.index == module_name_idx {
+                mod_text = cap.node.utf8_text(source_bytes).unwrap_or("");
+            } else if cap.index == attribute_name_idx {
+                attr_text = cap.node.utf8_text(source_bytes).unwrap_or("");
+            }
+        }
+        if mod_text == module_name && !attr_text.is_empty() {
+            attrs.push(attr_text.to_string());
+        }
+    }
+    attrs.sort();
+    attrs.dedup();
+    attrs
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +367,9 @@ impl ObserveExtractor for PythonExtractor {
                     && !specifier.starts_with("../")
                     && !specifier.is_empty()
                 {
-                    specifier_symbols.entry(specifier).or_default();
+                    let attrs =
+                        extract_bare_import_attributes(source_bytes, &tree, &import_name_parts[0]);
+                    specifier_symbols.entry(specifier).or_insert_with(|| attrs);
                 }
                 continue;
             }
@@ -3083,6 +3131,219 @@ def test_user_detail():
             mapping.test_files.contains(&test_path),
             "test_foo.py not in test_files for module.py: {:?}",
             mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-ATTR-01: `import httpx\nhttpx.Client()\n`
+    //             -> specifier="httpx", symbols=["Client"] (single attribute access)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_attr_01_bare_import_single_attribute() {
+        // Given: source with a bare import and a single attribute access
+        let source = "import httpx\nhttpx.Client()\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: contains ("httpx", ["Client"]) -- attribute access extracted as symbol
+        let entry = result.iter().find(|(spec, _)| spec == "httpx");
+        assert!(entry.is_some(), "httpx not found in {:?}", result);
+        let (_, symbols) = entry.unwrap();
+        assert_eq!(
+            symbols,
+            &vec!["Client".to_string()],
+            "expected [\"Client\"] for bare import with attribute access, got {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-ATTR-02: `import httpx\nhttpx.Client()\nhttpx.get()\n`
+    //             -> specifier="httpx", symbols contains "Client" and "get" (multiple attributes)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_attr_02_bare_import_multiple_attributes() {
+        // Given: source with a bare import and multiple attribute accesses
+        let source = "import httpx\nhttpx.Client()\nhttpx.get()\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: contains ("httpx", [...]) with both "Client" and "get"
+        let entry = result.iter().find(|(spec, _)| spec == "httpx");
+        assert!(entry.is_some(), "httpx not found in {:?}", result);
+        let (_, symbols) = entry.unwrap();
+        assert!(
+            symbols.contains(&"Client".to_string()),
+            "Client not in symbols: {:?}",
+            symbols
+        );
+        assert!(
+            symbols.contains(&"get".to_string()),
+            "get not in symbols: {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-ATTR-03: `import httpx\nhttpx.Client()\nhttpx.Client()\n`
+    //             -> specifier="httpx", symbols=["Client"] (deduplication)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_attr_03_bare_import_deduplicated_attributes() {
+        // Given: source with a bare import and duplicate attribute accesses
+        let source = "import httpx\nhttpx.Client()\nhttpx.Client()\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: contains ("httpx", ["Client"]) -- duplicates removed
+        let entry = result.iter().find(|(spec, _)| spec == "httpx");
+        assert!(entry.is_some(), "httpx not found in {:?}", result);
+        let (_, symbols) = entry.unwrap();
+        assert_eq!(
+            symbols,
+            &vec!["Client".to_string()],
+            "expected [\"Client\"] with deduplication, got {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-ATTR-04: `import httpx\n` (no attribute access)
+    //             -> specifier="httpx", symbols=[] (fallback: match all)
+    //
+    // NOTE: This test covers the same input as PY-IMPORT-01 but explicitly
+    //       verifies the "no attribute access → symbols=[] fallback" contract
+    //       introduced in Phase 16. PY-IMPORT-01 verifies the pre-Phase 16
+    //       baseline; this test documents the Phase 16 intentional behaviour.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_attr_04_bare_import_no_attribute_fallback() {
+        // Given: source with a bare import but no attribute access
+        let source = "import httpx\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: contains ("httpx", []) -- no attribute access means match-all fallback
+        let entry = result.iter().find(|(spec, _)| spec == "httpx");
+        assert!(
+            entry.is_some(),
+            "httpx not found in {:?}; bare import without attribute access should be included",
+            result
+        );
+        let (_, symbols) = entry.unwrap();
+        assert!(
+            symbols.is_empty(),
+            "expected empty symbols (fallback) for bare import with no attribute access, got {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-ATTR-05: `from httpx import Client\n`
+    //             -> specifier="httpx", symbols=["Client"]
+    //             (regression: Phase 16 changes must not affect from-import)
+    //
+    // NOTE: This is a regression test verifying that Phase 16 attribute-access
+    //       filtering does not change the behaviour of `from X import Y` paths.
+    //       PY-IMPORT-03 tests the same input as a baseline; this test
+    //       explicitly documents the Phase 16 non-regression requirement.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_attr_05_from_import_regression() {
+        // Given: source with a from-import (must not be affected by Phase 16 changes)
+        let source = "from httpx import Client\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: contains ("httpx", ["Client"]) -- from-import path unchanged
+        let entry = result.iter().find(|(spec, _)| spec == "httpx");
+        assert!(entry.is_some(), "httpx not found in {:?}", result);
+        let (_, symbols) = entry.unwrap();
+        assert!(
+            symbols.contains(&"Client".to_string()),
+            "Client not in symbols: {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-ATTR-06: e2e: `import pkg\npkg.Foo()\n`, barrel `from .mod import Foo`
+    //             and `from .bar import Bar` -> mod.py mapped, bar.py NOT mapped
+    //             (attribute-access filtering narrows barrel resolution)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_attr_06_e2e_attribute_access_narrows_barrel_mapping() {
+        use tempfile::TempDir;
+
+        // Given: tempdir with:
+        //   pkg/__init__.py: re-exports Foo from .mod and Bar from .bar
+        //   pkg/mod.py: defines Foo
+        //   pkg/bar.py: defines Bar
+        //   tests/test_foo.py: uses bare `import pkg` and accesses only `pkg.Foo()`
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+
+        std::fs::write(
+            pkg.join("__init__.py"),
+            "from .mod import Foo\nfrom .bar import Bar\n",
+        )
+        .unwrap();
+        std::fs::write(pkg.join("mod.py"), "def Foo(): pass\n").unwrap();
+        std::fs::write(pkg.join("bar.py"), "def Bar(): pass\n").unwrap();
+
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        // Test file only accesses pkg.Foo, not pkg.Bar
+        let test_content = "import pkg\npkg.Foo()\n";
+        std::fs::write(tests_dir.join("test_foo.py"), test_content).unwrap();
+
+        let mod_path = pkg.join("mod.py").to_string_lossy().into_owned();
+        let bar_path = pkg.join("bar.py").to_string_lossy().into_owned();
+        let test_path = tests_dir.join("test_foo.py").to_string_lossy().into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![mod_path.clone(), bar_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: mod.py is mapped (Foo is accessed via pkg.Foo())
+        let mod_mapping = result.iter().find(|m| m.production_file == mod_path);
+        assert!(
+            mod_mapping.is_some(),
+            "mod.py not mapped; pkg.Foo() should resolve to mod.py via barrel. mappings={:?}",
+            result
+        );
+        assert!(
+            mod_mapping.unwrap().test_files.contains(&test_path),
+            "test_foo.py not in test_files for mod.py: {:?}",
+            mod_mapping.unwrap().test_files
+        );
+
+        // Then: bar.py is NOT mapped (Bar is not accessed -- pkg.Bar() is absent)
+        let bar_mapping = result.iter().find(|m| m.production_file == bar_path);
+        let bar_not_mapped = bar_mapping
+            .map(|m| !m.test_files.contains(&test_path))
+            .unwrap_or(true);
+        assert!(
+            bar_not_mapped,
+            "bar.py should NOT be mapped for test_foo.py (pkg.Bar() is not accessed), but got: {:?}",
+            bar_mapping
         );
     }
 }
