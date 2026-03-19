@@ -65,7 +65,8 @@ Once you've tuned thresholds and added `custom_patterns` for your assertion help
 ## Output Formats
 
 ```bash
-exspec .                      # Terminal (default)
+exspec .                      # ai-prompt (default, with fix guidance)
+exspec --format terminal .    # Terminal (concise, human-readable)
 exspec --format json .        # JSON (for programmatic consumption)
 exspec --format sarif .       # SARIF (GitHub Code Scanning)
 ```
