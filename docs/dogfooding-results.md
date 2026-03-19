@@ -8,8 +8,6 @@ Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
 | Project | Lang | Tests | BLOCK | WARN | INFO | PASS | Primary BLOCK Cause |
 |---------|------|-------|-------|------|------|------|---------------------|
 | exspec (self) | Rust | 10 | 0 | 0 | 7 | 9 | N/A |
-| Keiba | Python | 2497 | 5 | 160 | 2019 | 1325 | assertion-free (no-crash tests) |
-| Kyotei | Python | 195 | 2 | 2 | 204 | 87 | assertion-free |
 | requests | Python | 339 | 10 | 1 | 198 | 177 | helper delegation |
 | fastapi | Python | 2155 | 15 | 210 | 2882 | 1086 | helper delegation, nested fn |
 | django | Python | 1048 | 22 | 9 | 566 | 715 | helper delegation |

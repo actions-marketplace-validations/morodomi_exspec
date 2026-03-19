@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-v0.3.0 development. observe TypeScript: P=100%, R=91% (separate packages), route extraction for 4 frameworks. Lint: 17 active rules, 4 languages, 13 projects / ~43k tests dogfooded. Default output: ai-prompt (with fix guidance).
+v0.3.0 development. observe TypeScript: P=100%, R=91% (separate packages), route extraction for 4 frameworks. Lint: 17 active rules, 4 languages, 11 projects / ~40k tests dogfooded. Default output: ai-prompt (with fix guidance).
 
 ## Progress
 

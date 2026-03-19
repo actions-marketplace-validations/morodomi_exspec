@@ -2,7 +2,7 @@
 
 Static analyzer for test design quality. Verifies that tests function as executable specifications -- fast, language-agnostic, zero LLM cost.
 
-> **Public beta** (v0.1.2). Dogfooded across 13 projects / 4 languages / ~45,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
+> **Public beta** (v0.1.2). Dogfooded across 11 projects / 4 languages / ~40,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
 
 ## Why exspec?
 
@@ -14,7 +14,7 @@ Static analyzer for test design quality. Verifies that tests function as executa
 
 exspec checks whether your tests are well-designed *specifications*, not just code that runs. It enforces 4 properties: **What not How**, **Living Documentation**, **Compositional**, **Single Source of Truth**. See [docs/philosophy.md](docs/philosophy.md) for the full rationale.
 
-Validated against 13 real-world OSS projects (~45,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
+Validated against 11 real-world OSS projects (~40,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
 
 ## Install
 
@@ -210,7 +210,7 @@ See [docs/known-constraints.md](docs/known-constraints.md) for details, workarou
 
 ## Validation
 
-Dogfooded across 13 projects (~43k tests):
+Dogfooded across 11 projects (~40k tests):
 
 | Project | Language | Tests | BLOCK | Primary Cause |
 |---------|----------|-------|-------|---------------|
