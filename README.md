@@ -37,7 +37,35 @@ exspec --lang python .                # Analyze specific language
 exspec --strict .                     # WARN also fails
 ```
 
-Example output:
+Default output (`ai-prompt` format) includes fix guidance for AI agents:
+
+```markdown
+# exspec -- Test Quality Report
+
+## BLOCK (must fix)
+
+### tests/test_example.py:5
+
+**T001**: assertion-free: test has no assertions
+
+> This test does not express a specification -- it only verifies "no crash."
+> Ask: what observable outcome should this function guarantee?
+> Assert the return value, state change, or side effect instead.
+
+## WARN (should fix)
+
+### tests/test_example.py:20
+
+**T002**: mock-overuse: 6 mocks (6 classes), threshold: 5 mocks / 3 classes
+
+> Too many mocks can make the test fragile and coupled to implementation.
+> Consider using fewer mocks and testing through real collaborators where possible.
+> Extract the core logic into a pure function that can be tested without mocks.
+
+Score: BLOCK 1 | WARN 1 | INFO 0 | PASS 8
+```
+
+Use `--format terminal` for concise human-readable output:
 
 ```
 exspec v0.1.2 -- 8 test files, 10 test functions
@@ -155,6 +183,22 @@ exspec --min-severity warn .   # CLI equivalent of [output] min_severity
 ```
 
 exspec exits 1 on BLOCK violations, 0 otherwise. Use `--strict` to also fail on WARN. SARIF output is available for GitHub Code Scanning. See [docs/ci.md](docs/ci.md) for full examples.
+
+## Output Formats
+
+| Format | Default | Description |
+|--------|---------|-------------|
+| `ai-prompt` | Yes | Structured markdown with fix guidance per rule. Designed for AI agents (Claude Code, Copilot, etc.) |
+| `terminal` | | Concise one-line-per-diagnostic. For humans |
+| `json` | | Machine-readable with full metadata |
+| `sarif` | | SARIF v2.1.0 for GitHub Code Scanning |
+
+```bash
+exspec .                        # ai-prompt (default)
+exspec --format terminal .      # human-readable
+exspec --format json .          # machine-readable
+exspec --format sarif .         # GitHub Code Scanning
+```
 
 ## Known Constraints
 

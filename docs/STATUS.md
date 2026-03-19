@@ -37,6 +37,7 @@ v0.3.0 development. observe TypeScript: P=100%, R=91% (separate packages), route
 | 10 - Route extraction (NestJS, FastAPI, Next.js, Django) | **DONE** |
 | 11 - TS observe re-dogfood + GT audit | **DONE** |
 | 12 - Python observe dogfooding + GT | **DONE** |
+| 17 - ai-prompt output format (default) | **DONE** |
 
 ### Phase 12 Python Observe Dogfooding Results (2026-03-19)
 
@@ -118,7 +119,7 @@ Root mode resolves most B2 FN but introduces FP from peripheral imports not yet 
 
 | Format | Status |
 |--------|--------|
+| ai-prompt | Supported (default since Phase 17) |
 | terminal | Supported |
 | json | Supported |
 | sarif | Supported (v2.1.0) |
-| ai-prompt | Tier 3 (Phase 6) |
