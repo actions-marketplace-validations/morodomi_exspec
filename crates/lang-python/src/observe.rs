@@ -27,6 +27,12 @@ static EXPORTED_SYMBOL_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 const BARE_IMPORT_ATTRIBUTE_QUERY: &str = include_str!("../queries/bare_import_attribute.scm");
 static BARE_IMPORT_ATTRIBUTE_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
+const ASSERTION_QUERY: &str = include_str!("../queries/assertion.scm");
+static ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
+const ASSIGNMENT_MAPPING_QUERY: &str = include_str!("../queries/assignment_mapping.scm");
+static ASSIGNMENT_MAPPING_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+
 fn cached_query<'a>(lock: &'a OnceLock<Query>, source: &str) -> &'a Query {
     lock.get_or_init(|| {
         Query::new(&tree_sitter_python::LANGUAGE.into(), source).expect("invalid query")
@@ -595,6 +601,163 @@ fn python_module_to_absolute_specifier(module: &str) -> String {
 // Concrete methods (not in trait)
 // ---------------------------------------------------------------------------
 
+/// Extract the set of import symbol names that appear (directly or via
+/// variable chain) inside assertion nodes.
+///
+/// Algorithm:
+/// 1. Parse source and find all assertion byte ranges via `assertion.scm`.
+/// 2. Walk the AST within each assertion range to collect all `identifier`
+///    leaf nodes → `assertion_identifiers`.
+/// 3. Parse assignment mappings via `assignment_mapping.scm`:
+///    - `@var` → `@class`  (direct: `var = ClassName()`)
+///    - `@var` → `@source` (chain: `var = obj.method()`)
+/// 4. Chain-expand `assertion_identifiers` up to 2 hops, resolving var →
+///    class via the assignment map.
+/// 5. Return the union of all resolved symbols.
+///
+/// Returns an empty `HashSet` when no assertions are found (caller is
+/// responsible for the safe fallback to `all_matched`).
+pub fn extract_assertion_referenced_imports(source: &str) -> HashSet<String> {
+    let mut parser = PythonExtractor::parser();
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return HashSet::new(),
+    };
+    let source_bytes = source.as_bytes();
+
+    // ---- Step 1: collect assertion byte ranges ----
+    let assertion_query = cached_query(&ASSERTION_QUERY_CACHE, ASSERTION_QUERY);
+    let assertion_cap_idx = match assertion_query.capture_index_for_name("assertion") {
+        Some(idx) => idx,
+        None => return HashSet::new(),
+    };
+
+    let mut assertion_ranges: Vec<(usize, usize)> = Vec::new();
+    {
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(assertion_query, tree.root_node(), source_bytes);
+        while let Some(m) = matches.next() {
+            for cap in m.captures {
+                if cap.index == assertion_cap_idx {
+                    let r = cap.node.byte_range();
+                    assertion_ranges.push((r.start, r.end));
+                }
+            }
+        }
+    }
+
+    if assertion_ranges.is_empty() {
+        return HashSet::new();
+    }
+
+    // ---- Step 2: collect identifiers within assertion ranges (AST walk) ----
+    let mut assertion_identifiers: HashSet<String> = HashSet::new();
+    {
+        let root = tree.root_node();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            let nr = node.byte_range();
+            // Only descend into nodes that overlap with at least one assertion range
+            let overlaps = assertion_ranges
+                .iter()
+                .any(|&(s, e)| nr.start < e && nr.end > s);
+            if !overlaps {
+                continue;
+            }
+            if node.kind() == "identifier" {
+                // The identifier itself must be within an assertion range
+                if assertion_ranges
+                    .iter()
+                    .any(|&(s, e)| nr.start >= s && nr.end <= e)
+                {
+                    if let Ok(text) = node.utf8_text(source_bytes) {
+                        if !text.is_empty() {
+                            assertion_identifiers.insert(text.to_string());
+                        }
+                    }
+                }
+            }
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+
+    // ---- Step 3: build assignment map ----
+    // Maps var_name → set of resolved names (class or source object)
+    let assign_query = cached_query(&ASSIGNMENT_MAPPING_QUERY_CACHE, ASSIGNMENT_MAPPING_QUERY);
+    let var_idx = assign_query.capture_index_for_name("var");
+    let class_idx = assign_query.capture_index_for_name("class");
+    let source_idx = assign_query.capture_index_for_name("source");
+
+    // var → Vec<target_symbol>
+    let mut assignment_map: HashMap<String, Vec<String>> = HashMap::new();
+
+    if let (Some(var_cap), Some(class_cap), Some(source_cap)) = (var_idx, class_idx, source_idx) {
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(assign_query, tree.root_node(), source_bytes);
+        while let Some(m) = matches.next() {
+            let mut var_text = String::new();
+            let mut target_text = String::new();
+            for cap in m.captures {
+                if cap.index == var_cap {
+                    var_text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
+                } else if cap.index == class_cap || cap.index == source_cap {
+                    let t = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
+                    if !t.is_empty() {
+                        target_text = t;
+                    }
+                }
+            }
+            if !var_text.is_empty() && !target_text.is_empty() && var_text != target_text {
+                assignment_map
+                    .entry(var_text)
+                    .or_default()
+                    .push(target_text);
+            }
+        }
+    }
+
+    // ---- Step 4: chain-expand up to 2 hops ----
+    let mut resolved: HashSet<String> = assertion_identifiers.clone();
+    for _ in 0..2 {
+        let mut additions: HashSet<String> = HashSet::new();
+        for sym in &resolved {
+            if let Some(targets) = assignment_map.get(sym) {
+                for t in targets {
+                    additions.insert(t.clone());
+                }
+            }
+        }
+        let before = resolved.len();
+        resolved.extend(additions);
+        if resolved.len() == before {
+            break;
+        }
+    }
+
+    resolved
+}
+
+/// Track newly matched production-file indices and the symbols that caused
+/// them.  Called after each `collect_import_matches` invocation to update
+/// `idx_to_symbols` with the diff between `all_matched` before and after.
+fn track_new_matches(
+    all_matched: &HashSet<usize>,
+    before: &HashSet<usize>,
+    symbols: &[String],
+    idx_to_symbols: &mut HashMap<usize, HashSet<String>>,
+) {
+    for &new_idx in all_matched.difference(before) {
+        let entry = idx_to_symbols.entry(new_idx).or_default();
+        for s in symbols {
+            entry.insert(s.clone());
+        }
+    }
+}
+
 impl PythonExtractor {
     /// Layer 1 + Layer 2: Map test files to production files.
     pub fn map_test_files_with_imports(
@@ -681,7 +844,10 @@ impl PythonExtractor {
         for (test_file, source) in test_sources {
             let imports = <Self as ObserveExtractor>::extract_imports(self, source, test_file);
             let from_file = Path::new(test_file);
-            let mut matched_indices = HashSet::<usize>::new();
+            // all_matched: every idx matched by L2 (traditional behavior)
+            let mut all_matched = HashSet::<usize>::new();
+            // idx_to_symbols: tracks which import symbols caused each idx match
+            let mut idx_to_symbols: HashMap<usize, HashSet<String>> = HashMap::new();
 
             for import in &imports {
                 // Handle bare relative imports: `from . import X` (specifier="./")
@@ -712,13 +878,21 @@ impl PythonExtractor {
                             {
                                 continue;
                             }
+                            let sym_slice = &[sym.clone()];
+                            let before = all_matched.clone();
                             exspec_core::observe::collect_import_matches(
                                 self,
                                 &resolved,
-                                &import.symbols,
+                                sym_slice,
                                 &canonical_to_idx,
-                                &mut matched_indices,
+                                &mut all_matched,
                                 &canonical_root,
+                            );
+                            track_new_matches(
+                                &all_matched,
+                                &before,
+                                sym_slice,
+                                &mut idx_to_symbols,
                             );
                         }
                     }
@@ -739,14 +913,16 @@ impl PythonExtractor {
                     {
                         continue;
                     }
+                    let before = all_matched.clone();
                     exspec_core::observe::collect_import_matches(
                         self,
                         &resolved,
                         &import.symbols,
                         &canonical_to_idx,
-                        &mut matched_indices,
+                        &mut all_matched,
                         &canonical_root,
                     );
+                    track_new_matches(&all_matched, &before, &import.symbols, &mut idx_to_symbols);
                 }
             }
 
@@ -774,18 +950,45 @@ impl PythonExtractor {
                     {
                         continue;
                     }
+                    let before = all_matched.clone();
                     exspec_core::observe::collect_import_matches(
                         self,
                         &resolved,
                         symbols,
                         &canonical_to_idx,
-                        &mut matched_indices,
+                        &mut all_matched,
                         &canonical_root,
                     );
+                    track_new_matches(&all_matched, &before, symbols, &mut idx_to_symbols);
                 }
             }
 
-            for idx in matched_indices {
+            // Assertion-referenced import filter (safe fallback)
+            let asserted_imports = extract_assertion_referenced_imports(source);
+            let final_indices: HashSet<usize> = if asserted_imports.is_empty() {
+                // No assertions found -> fallback: use all_matched (PY-AF-06a)
+                all_matched.clone()
+            } else {
+                // Filter to indices whose symbols intersect with asserted_imports
+                let asserted_matched: HashSet<usize> = all_matched
+                    .iter()
+                    .copied()
+                    .filter(|idx| {
+                        idx_to_symbols
+                            .get(idx)
+                            .map(|syms| syms.iter().any(|s| asserted_imports.contains(s)))
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                if asserted_matched.is_empty() {
+                    // Assertions exist but no import symbol intersects -> safe fallback (PY-AF-06b, PY-AF-09)
+                    all_matched.clone()
+                } else {
+                    asserted_matched
+                }
+            };
+
+            for idx in final_indices {
                 if !mappings[idx].test_files.contains(test_file) {
                     mappings[idx].test_files.push(test_file.clone());
                 }
@@ -4086,6 +4289,425 @@ def test_user_detail():
             tp,
             fp,
             actual_pairs
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-01: assignment + assertion tracking
+    //   `client = Client(); assert client.ok` -> Client in asserted_imports
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_01_assert_via_assigned_var() {
+        // Given: source where Client is assigned then asserted
+        let source = r#"
+from pkg.client import Client
+
+def test_something():
+    client = Client()
+    assert client.ok
+"#;
+        // When: extract_assertion_referenced_imports is called
+        let result = extract_assertion_referenced_imports(source);
+
+        // Then: Client is in asserted_imports (assigned var `client` appears in assertion)
+        assert!(
+            result.contains("Client"),
+            "Client should be in asserted_imports; got {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-02: non-asserted assignment is excluded
+    //   `transport = MockTransport()` (not in assert) -> MockTransport NOT in asserted_imports
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_02_setup_only_import_excluded() {
+        // Given: source where MockTransport is assigned but never asserted
+        let source = r#"
+from pkg.client import Client
+from pkg.transport import MockTransport
+
+def test_something():
+    transport = MockTransport()
+    client = Client(transport=transport)
+    assert client.ok
+"#;
+        // When: extract_assertion_referenced_imports is called
+        let result = extract_assertion_referenced_imports(source);
+
+        // Then: MockTransport is NOT in asserted_imports (only used in setup)
+        assert!(
+            !result.contains("MockTransport"),
+            "MockTransport should NOT be in asserted_imports (setup-only); got {:?}",
+            result
+        );
+        // And: Client IS in asserted_imports (via chain: client -> Client)
+        assert!(
+            result.contains("Client"),
+            "Client should be in asserted_imports; got {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-03: direct usage in assertion
+    //   `assert A() == B()` -> both A, B in asserted_imports
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_03_direct_call_in_assertion() {
+        // Given: source where two classes are directly called inside an assert
+        let source = r#"
+from pkg.models import A, B
+
+def test_equality():
+    assert A() == B()
+"#;
+        // When: extract_assertion_referenced_imports is called
+        let result = extract_assertion_referenced_imports(source);
+
+        // Then: both A and B are in asserted_imports
+        assert!(
+            result.contains("A"),
+            "A should be in asserted_imports (used directly in assert); got {:?}",
+            result
+        );
+        assert!(
+            result.contains("B"),
+            "B should be in asserted_imports (used directly in assert); got {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-04: pytest.raises context
+    //   `pytest.raises(HTTPError)` -> HTTPError in asserted_imports
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_04_pytest_raises_captures_exception_class() {
+        // Given: source using pytest.raises with an imported exception class
+        let source = r#"
+import pytest
+from pkg.exceptions import HTTPError
+
+def test_raises():
+    with pytest.raises(HTTPError):
+        raise HTTPError("fail")
+"#;
+        // When: extract_assertion_referenced_imports is called
+        let result = extract_assertion_referenced_imports(source);
+
+        // Then: HTTPError is in asserted_imports (appears in pytest.raises assertion node)
+        assert!(
+            result.contains("HTTPError"),
+            "HTTPError should be in asserted_imports (pytest.raises arg); got {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-05: chain tracking (2-hop)
+    //   `response = client.get(); assert response.ok` -> Client reachable via chain
+    //   client -> Client (1-hop), response -> client (2-hop through method call source)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_05_chain_tracking_two_hops() {
+        // Given: source with a 2-hop chain: response derived from client, client from Client()
+        let source = r#"
+from pkg.client import Client
+
+def test_response():
+    client = Client()
+    response = client.get("http://example.com/")
+    assert response.ok
+"#;
+        // When: extract_assertion_referenced_imports is called
+        let result = extract_assertion_referenced_imports(source);
+
+        // Then: Client is reachable (response -> client -> Client, 2-hop chain)
+        assert!(
+            result.contains("Client"),
+            "Client should be in asserted_imports via 2-hop chain; got {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-06a: no assertions -> empty asserted_imports -> fallback to all_matched
+    //   When assertion.scm detects no assertions, asserted_imports is empty
+    //   and the caller falls back to all_matched.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_06a_no_assertions_returns_empty() {
+        // Given: source with imports but zero assertion statements
+        let source = r#"
+from pkg.client import Client
+from pkg.transport import MockTransport
+
+def test_setup_no_assert():
+    client = Client()
+    transport = MockTransport()
+    # No assert statement at all
+"#;
+        // When: extract_assertion_referenced_imports is called
+        let result = extract_assertion_referenced_imports(source);
+
+        // Then: asserted_imports is EMPTY (no assertions found, so no symbols traced)
+        // The caller (map_test_files_with_imports) is responsible for the fallback.
+        assert!(
+            result.is_empty(),
+            "expected empty asserted_imports when no assertions present; got {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-06b: assertions exist but no asserted import intersects with L2 imports
+    //   -> asserted_imports non-empty but does not overlap with any import symbol
+    //   -> fallback to all_matched (safe side)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_06b_assertion_exists_but_no_import_intersection() {
+        // Given: source where the assertion references a local variable (not an import)
+        let source = r#"
+from pkg.client import Client
+
+def test_local_only():
+    local_value = 42
+    # Assertion references only a local literal, not any imported symbol
+    assert local_value == 42
+"#;
+        // When: extract_assertion_referenced_imports is called
+        let result = extract_assertion_referenced_imports(source);
+
+        // Then: asserted_imports does NOT contain Client
+        // (Client is never referenced inside an assertion node)
+        assert!(
+            !result.contains("Client"),
+            "Client should NOT be in asserted_imports (not referenced in assertion); got {:?}",
+            result
+        );
+        // Note: `result` may be empty or contain other identifiers from the assertion,
+        // but the key property is that the imported symbol Client is absent.
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-07: unittest self.assert* form
+    //   `self.assertEqual(result.value, 42)` -> result's import captured
+    //   result = MyModel() -> MyModel in asserted_imports
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_07_unittest_self_assert() {
+        // Given: unittest-style test using self.assertEqual
+        let source = r#"
+import unittest
+from pkg.models import MyModel
+
+class TestMyModel(unittest.TestCase):
+    def test_value(self):
+        result = MyModel()
+        self.assertEqual(result.value, 42)
+"#;
+        // When: extract_assertion_referenced_imports is called
+        let result = extract_assertion_referenced_imports(source);
+
+        // Then: MyModel is in asserted_imports (result -> MyModel, result in assertEqual)
+        assert!(
+            result.contains("MyModel"),
+            "MyModel should be in asserted_imports via self.assertEqual; got {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-08: E2E integration — primary import kept, incidental filtered
+    //
+    // Fixture: af_pkg/
+    //   pkg/client.py    (Client class)   <- should be mapped
+    //   pkg/transport.py (MockTransport)  <- should NOT be mapped (assertion filter)
+    //   tests/test_client.py imports both, asserts only client.is_ok
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_08_e2e_primary_kept_incidental_filtered() {
+        use std::path::PathBuf;
+        let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/python/observe/af_pkg");
+
+        let test_file = fixture_root
+            .join("tests/test_client.py")
+            .to_string_lossy()
+            .into_owned();
+        let client_prod = fixture_root
+            .join("pkg/client.py")
+            .to_string_lossy()
+            .into_owned();
+        let transport_prod = fixture_root
+            .join("pkg/transport.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let production_files = vec![client_prod.clone(), transport_prod.clone()];
+        let test_source =
+            std::fs::read_to_string(&test_file).expect("fixture test file must exist");
+        let mut test_sources = HashMap::new();
+        test_sources.insert(test_file.clone(), test_source);
+
+        // When: map_test_files_with_imports is called
+        let extractor = PythonExtractor::new();
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, &fixture_root);
+
+        // Then: test_client.py maps to client.py (Client is asserted)
+        let client_mapping = result.iter().find(|m| m.production_file == client_prod);
+        assert!(
+            client_mapping.is_some(),
+            "client.py should be in mappings; got {:?}",
+            result
+                .iter()
+                .map(|m| &m.production_file)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            client_mapping.unwrap().test_files.contains(&test_file),
+            "test_client.py should map to client.py"
+        );
+
+        // And: test_client.py does NOT map to transport.py (MockTransport not asserted)
+        let transport_mapping = result.iter().find(|m| m.production_file == transport_prod);
+        let transport_maps_test = transport_mapping
+            .map(|m| m.test_files.contains(&test_file))
+            .unwrap_or(false);
+        assert!(
+            !transport_maps_test,
+            "test_client.py should NOT map to transport.py (assertion filter); got {:?}",
+            result
+                .iter()
+                .map(|m| (&m.production_file, &m.test_files))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-09: E2E — ALL imports incidental -> fallback, no regression (FN prevented)
+    //
+    // Fixture: af_e2e_fallback/
+    //   pkg/helpers.py (HelperA, HelperB)
+    //   tests/test_helpers.py: imports both, assertion is about `result is None`
+    //   -> asserted_matched would be empty -> fallback to all_matched
+    //   -> helpers.py MUST appear in the mapping (no FN)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_09_e2e_all_incidental_fallback_no_fn() {
+        use std::path::PathBuf;
+        let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/python/observe/af_e2e_fallback");
+
+        let test_file = fixture_root
+            .join("tests/test_helpers.py")
+            .to_string_lossy()
+            .into_owned();
+        let helpers_prod = fixture_root
+            .join("pkg/helpers.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let production_files = vec![helpers_prod.clone()];
+        let test_source =
+            std::fs::read_to_string(&test_file).expect("fixture test file must exist");
+        let mut test_sources = HashMap::new();
+        test_sources.insert(test_file.clone(), test_source);
+
+        // When: map_test_files_with_imports is called
+        let extractor = PythonExtractor::new();
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, &fixture_root);
+
+        // Then: helpers.py IS mapped (fallback activated because asserted_matched is empty)
+        let helpers_mapping = result.iter().find(|m| m.production_file == helpers_prod);
+        assert!(
+            helpers_mapping.is_some(),
+            "helpers.py should be in mappings (fallback); got {:?}",
+            result
+                .iter()
+                .map(|m| &m.production_file)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            helpers_mapping.unwrap().test_files.contains(&test_file),
+            "test_helpers.py should map to helpers.py (fallback, no FN)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-AF-10: E2E — third_party_http_client pattern, FP reduction confirmed
+    //
+    // Fixture: af_e2e_http/
+    //   pkg/http_client.py (HttpClient, HttpResponse) <- primary SUT
+    //   pkg/exceptions.py  (RequestError)             <- incidental (pytest.raises)
+    //   tests/test_http_client.py: asserts response.ok, response.status_code == 201
+    //
+    // HttpClient is reachable via chain (response -> client -> HttpClient).
+    // exceptions.py: RequestError appears inside pytest.raises() which IS an
+    // assertion node, so it will be in asserted_imports.
+    // This test verifies http_client.py is always mapped (no FN on primary SUT).
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_af_10_e2e_http_client_primary_mapped() {
+        use std::path::PathBuf;
+        let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/python/observe/af_e2e_http");
+
+        let test_file = fixture_root
+            .join("tests/test_http_client.py")
+            .to_string_lossy()
+            .into_owned();
+        let http_client_prod = fixture_root
+            .join("pkg/http_client.py")
+            .to_string_lossy()
+            .into_owned();
+        let exceptions_prod = fixture_root
+            .join("pkg/exceptions.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let production_files = vec![http_client_prod.clone(), exceptions_prod.clone()];
+        let test_source =
+            std::fs::read_to_string(&test_file).expect("fixture test file must exist");
+        let mut test_sources = HashMap::new();
+        test_sources.insert(test_file.clone(), test_source);
+
+        // When: map_test_files_with_imports is called
+        let extractor = PythonExtractor::new();
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, &fixture_root);
+
+        // Then: http_client.py IS mapped (primary SUT, must not be a FN)
+        let http_client_mapping = result
+            .iter()
+            .find(|m| m.production_file == http_client_prod);
+        assert!(
+            http_client_mapping.is_some(),
+            "http_client.py should be in mappings; got {:?}",
+            result
+                .iter()
+                .map(|m| &m.production_file)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            http_client_mapping.unwrap().test_files.contains(&test_file),
+            "test_http_client.py should map to http_client.py (primary SUT)"
         );
     }
 }
