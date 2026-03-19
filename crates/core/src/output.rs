@@ -9,6 +9,7 @@ pub enum OutputFormat {
     Terminal,
     Json,
     Sarif,
+    AiPrompt,
 }
 
 /// Count unique violated functions by (file, line) pairs.
@@ -177,6 +178,7 @@ struct RuleMeta {
     id: &'static str,
     name: &'static str,
     short_description: &'static str,
+    guidance: &'static str,
 }
 
 const RULE_REGISTRY: &[RuleMeta] = &[
@@ -184,86 +186,103 @@ const RULE_REGISTRY: &[RuleMeta] = &[
         id: "T001",
         name: "assertion-free",
         short_description: "Test function has no assertions",
+        guidance: "This test does not express a specification -- it only verifies \"no crash.\" Ask: what observable outcome should this function guarantee? Assert the return value, state change, or side effect instead.",
     },
     RuleMeta {
         id: "T002",
         name: "mock-overuse",
         short_description: "Test function uses too many mocks",
+        guidance: "Too many mocks can make the test fragile and coupled to implementation. Consider using fewer mocks and testing through real collaborators where possible. Extract the core logic into a pure function that can be tested without mocks.",
     },
     RuleMeta {
         id: "T003",
         name: "giant-test",
         short_description: "Test function exceeds line count threshold",
+        guidance: "A large test is hard to understand and maintain. Split it into smaller, focused tests -- each verifying one behavior. Use helper functions or parameterized tests to reduce repetition.",
     },
     RuleMeta {
         id: "T004",
         name: "no-parameterized",
         short_description: "Low ratio of parameterized tests",
+        guidance: "Repeated tests with different inputs can be consolidated using parameterized/table-driven tests. This improves coverage while reducing code volume and making the test suite easier to extend.",
     },
     RuleMeta {
         id: "T005",
         name: "pbt-missing",
         short_description: "No property-based testing library imported",
+        guidance: "Property-based testing (PBT) can find edge cases that example-based tests miss. Consider adding a PBT library (e.g., Hypothesis, fast-check, proptest) for functions with wide input domains.",
     },
     RuleMeta {
         id: "T006",
         name: "low-assertion-density",
         short_description: "Low assertion count per test function",
+        guidance: "A test with few assertions may not fully verify the behavior under test. Ensure the test checks all relevant aspects of the output -- return values, state changes, and side effects.",
     },
     RuleMeta {
         id: "T007",
         name: "test-source-ratio",
         short_description: "Test file to source file ratio",
+        guidance: "The test-to-source file ratio is outside the expected range. Consider whether test files are missing for some source modules, or whether test files are over-concentrated.",
     },
     RuleMeta {
         id: "T008",
         name: "no-contract",
         short_description: "No contract testing library used in tests",
+        guidance: "Contract tests verify that API boundaries (HTTP, message queues, etc.) behave as agreed. Consider adding a contract testing library (e.g., Pact) if this project has service-to-service communication.",
     },
     RuleMeta {
         id: "T101",
         name: "how-not-what",
         short_description: "Test verifies implementation rather than behavior",
+        guidance: "This test accesses private/internal members, coupling it to implementation details. Test the public interface instead -- assert on observable outputs rather than internal state.",
     },
     RuleMeta {
         id: "T102",
         name: "fixture-sprawl",
         short_description: "Test depends on too many fixtures",
+        guidance: "This test depends on many fixtures, making it hard to understand what is actually being tested. Reduce fixture dependencies by inlining setup or using builder patterns.",
     },
     RuleMeta {
         id: "T103",
         name: "missing-error-test",
         short_description: "No error/exception test found in file",
+        guidance: "No test verifies error/exception behavior in this file. Add tests for invalid inputs, boundary conditions, and expected failure modes.",
     },
     RuleMeta {
         id: "T105",
         name: "deterministic-no-metamorphic",
         short_description: "All assertions use exact equality, no relational checks",
+        guidance: "All assertions use exact equality (==). Consider adding relational assertions (>, <, contains, matches) to express behavioral properties rather than specific outputs.",
     },
     RuleMeta {
         id: "T106",
         name: "duplicate-literal-assertion",
         short_description: "Same literal appears multiple times in assertions",
+        guidance: "The same literal value appears in multiple assertions, creating a maintenance burden. Extract it into a named constant or verify the underlying relationship instead.",
     },
     RuleMeta {
         id: "T107",
         name: "assertion-roulette",
         short_description: "Multiple assertions without failure messages",
+        guidance: "Multiple assertions without descriptive messages make failures hard to diagnose. Add a failure message to each assertion explaining what was expected and why.",
     },
     RuleMeta {
         id: "T108",
         name: "wait-and-see",
         short_description: "Test uses sleep/delay causing flaky tests",
+        guidance: "Using sleep/delay in tests causes flakiness and slow execution. Use polling with timeouts, event-based synchronization, or dependency injection to control timing.",
     },
     RuleMeta {
         id: "T109",
         name: "undescriptive-test-name",
         short_description: "Test name does not describe behavior",
+        guidance: "The test name does not describe the expected behavior. Rename it to follow the pattern: given_[context]_when_[action]_then_[outcome] or a similar descriptive convention.",
     },
     RuleMeta {
         id: "T110",
         name: "skip-only-test",
         short_description: "Test skips or marks incomplete without assertions",
+        guidance: "This test is skipped or marked incomplete without assertions. Either implement the test or remove the skip marker. Dead test code erodes trust in the suite.",
     },
 ];
 
@@ -331,6 +350,105 @@ pub fn format_sarif(diagnostics: &[Diagnostic]) -> String {
         .build();
 
     serde_json::to_string_pretty(&sarif_doc).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub fn format_ai_prompt(
+    diagnostics: &[Diagnostic],
+    file_count: usize,
+    function_count: usize,
+    metrics: &ProjectMetrics,
+    hints: &[Hint],
+) -> String {
+    let _ = (file_count, metrics, hints);
+
+    let block_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Block)
+        .count();
+    let warn_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warn)
+        .count();
+    let info_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Info)
+        .count();
+    let violated = count_violated_functions(diagnostics);
+    let pass_count = function_count.saturating_sub(violated);
+
+    let mut lines = Vec::new();
+    lines.push("# exspec -- Test Quality Report".to_string());
+    lines.push(String::new());
+
+    // BLOCK section
+    let block_diags: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Block)
+        .collect();
+    if !block_diags.is_empty() {
+        lines.push("## BLOCK (must fix)".to_string());
+        lines.push(String::new());
+        for d in block_diags {
+            let line_str = d.line.map(|l| format!(":{l}")).unwrap_or_default();
+            lines.push(format!("### {}{}", d.file, line_str));
+            lines.push(String::new());
+            lines.push(format!("**{}**: {}", d.rule, d.message));
+            lines.push(String::new());
+            if let Some(meta) = RULE_REGISTRY.iter().find(|m| m.id == d.rule.0) {
+                for guidance_line in meta.guidance.lines() {
+                    lines.push(format!("> {guidance_line}"));
+                }
+                lines.push(String::new());
+            }
+        }
+    }
+
+    // WARN section
+    let warn_diags: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warn)
+        .collect();
+    if !warn_diags.is_empty() {
+        lines.push("## WARN (should fix)".to_string());
+        lines.push(String::new());
+        for d in warn_diags {
+            let line_str = d.line.map(|l| format!(":{l}")).unwrap_or_default();
+            lines.push(format!("### {}{}", d.file, line_str));
+            lines.push(String::new());
+            lines.push(format!("**{}**: {}", d.rule, d.message));
+            lines.push(String::new());
+            if let Some(meta) = RULE_REGISTRY.iter().find(|m| m.id == d.rule.0) {
+                for guidance_line in meta.guidance.lines() {
+                    lines.push(format!("> {guidance_line}"));
+                }
+                lines.push(String::new());
+            }
+        }
+    }
+
+    // INFO section
+    let info_diags: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Info)
+        .collect();
+    if !info_diags.is_empty() {
+        lines.push("## INFO (consider)".to_string());
+        lines.push(String::new());
+        for d in info_diags {
+            let line_str = d.line.map(|l| format!(":{l}")).unwrap_or_default();
+            lines.push(format!(
+                "- {}{} {}: {}",
+                d.file, line_str, d.rule, d.message
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    lines.push(format!(
+        "Score: BLOCK {block_count} | WARN {warn_count} | INFO {info_count} | PASS {pass_count}",
+    ));
+
+    lines.join("\n")
 }
 
 /// Filter diagnostics to only include those at or above the given minimum severity.
@@ -917,6 +1035,166 @@ mod tests {
         assert_eq!(
             parsed["runs"][0]["invocations"][0]["executionSuccessful"],
             true
+        );
+    }
+
+    // --- AI-FMT-01: BLOCK diagnostic with guidance ---
+
+    #[test]
+    fn ai_prompt_block_has_section_and_guidance() {
+        // Given: T001 (assertion-free) の BLOCK diagnostic 1件
+        let diag = block_diag();
+        // When: format_ai_prompt() を呼ぶ
+        let output = format_ai_prompt(&[diag], 1, 1, &ProjectMetrics::default(), &[]);
+        // Then: "## BLOCK" セクション、file:line + rule + message、guidance (blockquote `>`) が含まれる
+        assert!(
+            output.contains("## BLOCK"),
+            "should contain BLOCK section: {output}"
+        );
+        assert!(
+            output.contains("test.py:10"),
+            "should contain file:line: {output}"
+        );
+        assert!(output.contains("T001"), "should contain rule id: {output}");
+        assert!(
+            output.contains("assertion-free"),
+            "should contain rule name in message: {output}"
+        );
+        let has_blockquote = output.lines().any(|l| l.starts_with('>'));
+        assert!(
+            has_blockquote,
+            "should contain guidance blockquote: {output}"
+        );
+    }
+
+    // --- AI-FMT-02: WARN diagnostic with guidance ---
+
+    #[test]
+    fn ai_prompt_warn_has_section_and_guidance() {
+        // Given: T003 (giant-test) の WARN diagnostic 1件
+        let diag = warn_diag();
+        // When: format_ai_prompt() を呼ぶ
+        let output = format_ai_prompt(&[diag], 1, 1, &ProjectMetrics::default(), &[]);
+        // Then: "## WARN" セクション、diagnostic、guidance が含まれる
+        assert!(
+            output.contains("## WARN"),
+            "should contain WARN section: {output}"
+        );
+        assert!(
+            output.contains("test.py:5"),
+            "should contain file:line: {output}"
+        );
+        assert!(output.contains("T003"), "should contain rule id: {output}");
+        let has_blockquote = output.lines().any(|l| l.starts_with('>'));
+        assert!(
+            has_blockquote,
+            "should contain guidance blockquote: {output}"
+        );
+    }
+
+    // --- AI-FMT-03: INFO diagnostic without guidance ---
+
+    #[test]
+    fn ai_prompt_info_has_section_no_guidance() {
+        // Given: T005 (pbt-missing) の INFO diagnostic 1件
+        let diag = info_diag();
+        // When: format_ai_prompt() を呼ぶ
+        let output = format_ai_prompt(&[diag], 1, 1, &ProjectMetrics::default(), &[]);
+        // Then: "## INFO" セクション、`- ` で始まる1行表示、blockquote (`>`) なし
+        assert!(
+            output.contains("## INFO"),
+            "should contain INFO section: {output}"
+        );
+        let has_bullet = output.lines().any(|l| l.starts_with("- "));
+        assert!(
+            has_bullet,
+            "INFO items should use bullet `- ` format: {output}"
+        );
+        let has_blockquote = output.lines().any(|l| l.starts_with('>'));
+        assert!(
+            !has_blockquote,
+            "INFO should NOT contain guidance blockquote: {output}"
+        );
+    }
+
+    // --- AI-FMT-04: Mixed severities grouped correctly ---
+
+    #[test]
+    fn ai_prompt_mixed_severities_ordered_block_warn_info() {
+        // Given: BLOCK + WARN + INFO の3件
+        let diags = [block_diag(), warn_diag(), info_diag()];
+        // When: format_ai_prompt() を呼ぶ
+        let output = format_ai_prompt(&diags, 1, 3, &ProjectMetrics::default(), &[]);
+        // Then: "## BLOCK" < "## WARN" < "## INFO" の順序
+        let block_pos = output.find("## BLOCK").expect("## BLOCK not found");
+        let warn_pos = output.find("## WARN").expect("## WARN not found");
+        let info_pos = output.find("## INFO").expect("## INFO not found");
+        assert!(
+            block_pos < warn_pos,
+            "## BLOCK should appear before ## WARN"
+        );
+        assert!(warn_pos < info_pos, "## WARN should appear before ## INFO");
+    }
+
+    // --- AI-FMT-05: Empty diagnostics ---
+
+    #[test]
+    fn ai_prompt_empty_has_header_and_score_no_sections() {
+        // Given: 空の diagnostics
+        // When: format_ai_prompt() を呼ぶ
+        let output = format_ai_prompt(&[], 0, 0, &ProjectMetrics::default(), &[]);
+        // Then: "# exspec" ヘッダーと "Score:" 行が含まれ、"## BLOCK/WARN/INFO" は含まれない
+        assert!(
+            output.contains("# exspec"),
+            "should contain # exspec header: {output}"
+        );
+        assert!(
+            output.contains("Score:"),
+            "should contain Score: line: {output}"
+        );
+        assert!(
+            !output.contains("## BLOCK"),
+            "empty result should not contain ## BLOCK: {output}"
+        );
+        assert!(
+            !output.contains("## WARN"),
+            "empty result should not contain ## WARN: {output}"
+        );
+        assert!(
+            !output.contains("## INFO"),
+            "empty result should not contain ## INFO: {output}"
+        );
+    }
+
+    // --- AI-FMT-06: All rules have non-empty guidance ---
+
+    #[test]
+    fn all_rules_have_non_empty_guidance() {
+        // Given: RULE_REGISTRY の全エントリ
+        // When: 各 guidance を検査
+        // Then: 全て空文字列でない
+        for meta in RULE_REGISTRY {
+            assert!(
+                !meta.guidance.is_empty(),
+                "rule {} ({}) should have non-empty guidance",
+                meta.id,
+                meta.name
+            );
+        }
+    }
+
+    // --- AI-FMT-08: Score line present ---
+
+    #[test]
+    fn ai_prompt_score_line_reflects_counts() {
+        // Given: BLOCK 1件 + WARN 1件 の diagnostics
+        let diags = [block_diag(), warn_diag()];
+        // When: format_ai_prompt() を呼ぶ
+        let output = format_ai_prompt(&diags, 1, 2, &ProjectMetrics::default(), &[]);
+        // Then: "Score: BLOCK 1 | WARN 1" を含む行が存在
+        assert!(
+            output.contains("Score: BLOCK 1 | WARN 1"),
+            "should contain score summary: {output}"
         );
     }
 }
