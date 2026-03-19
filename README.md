@@ -210,23 +210,20 @@ See [docs/known-constraints.md](docs/known-constraints.md) for details, workarou
 
 ## Validation
 
-Dogfooded across 13 real-world projects:
+Dogfooded across 13 projects (~43k tests):
 
-| Project | Language | Tests | Result |
-|---------|----------|-------|--------|
-| exspec (self) | Rust | 51 | 0 FP |
-| requests | Python | 339 | ~20% FP |
-| fastapi | Python | 2,121 | 21% FP |
-| pydantic | Python | ~2,500 | 43 TP (benchmark), 15 FP (helper/nested) |
-| vitest | TypeScript | 3,120 | Remaining = project-local helpers |
-| nestjs | TypeScript | 2,675 | 0% FP (17 remaining = all TP) |
-| laravel | PHP | 10,790 | Remaining = helper delegation |
-| ripgrep | Rust | ~346 | 330 tests in macros (not detected) |
-| tokio | Rust | 1,582 | 33.8% FP (custom assert macros) |
-| clap | Rust | 1,455 | 41.3% FP (assert_data_eq! macro + helper delegation) |
-| django | Python | 1,047 | 39% FP (helper delegation) |
-| pytest | Python | 2,380 | High FP (helper functions) |
-| symfony | PHP | 17,148 | ~24% FP (addToAssertionCount, skip-only) |
+| Project | Language | Tests | BLOCK | Primary Cause |
+|---------|----------|-------|-------|---------------|
+| exspec (self) | Rust | 10 | 0 | N/A |
+| requests | Python | 339 | 10 | helper delegation |
+| fastapi | Python | 2,155 | 15 | helper delegation |
+| nestjs | TypeScript | 2,679 | 13 | helper delegation |
+| laravel | PHP | 11,044 | 222 | helper delegation |
+| symfony | PHP | 17,204 | 616 | helper delegation |
+| ripgrep | Rust | 16 | 0 | ~330 tests in macros (not detected) |
+| tokio | Rust | 1,594 | 385 | custom assert macros |
+| clap | Rust | 1,455 | 193 | helper delegation |
+| django | Python | 1,048 | 22 | helper delegation |
 
 Full results: [docs/dogfooding-results.md](docs/dogfooding-results.md)
 

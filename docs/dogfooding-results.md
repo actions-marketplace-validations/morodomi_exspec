@@ -1,9 +1,43 @@
 # Dogfooding Results
 
-Date: 2026-03-09
-exspec version: 0.1.0 (commit 5957cd0)
+Latest: 2026-03-19, exspec v0.3.0 (commit 908b531)
+Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
 
-## Summary
+## Summary (v0.3.0)
+
+| Project | Lang | Tests | BLOCK | WARN | INFO | PASS | Primary BLOCK Cause |
+|---------|------|-------|-------|------|------|------|---------------------|
+| exspec (self) | Rust | 10 | 0 | 0 | 7 | 9 | N/A |
+| Keiba | Python | 2497 | 5 | 160 | 2019 | 1325 | assertion-free (no-crash tests) |
+| Kyotei | Python | 195 | 2 | 2 | 204 | 87 | assertion-free |
+| requests | Python | 339 | 10 | 1 | 198 | 177 | helper delegation |
+| fastapi | Python | 2155 | 15 | 210 | 2882 | 1086 | helper delegation, nested fn |
+| django | Python | 1048 | 22 | 9 | 566 | 715 | helper delegation |
+| pytest | Python | 2380 | -- | -- | -- | -- | (clone unavailable, v0.1.0 data below) |
+| nestjs | TypeScript | 2679 | 13 | 26 | 2174 | 1878 | helper delegation, done() callback |
+| laravel | PHP | 11044 | 222 | 179 | 10564 | 3887 | helper delegation |
+| symfony | PHP | 17204 | 616 | 319 | 14653 | 10146 | helper delegation, addToAssertionCount |
+| ripgrep | Rust | 16 | 0 | 2 | 30 | 1 | ~330 tests in `rgtest!` macro not detected |
+| tokio | Rust | 1594 | 385 | 96 | 1875 | 532 | custom assert macros, select! token_tree |
+| clap | Rust | 1455 | 193 | 60 | 908 | 797 | helper delegation |
+
+### v0.1.0 → v0.3.0 BLOCK changes
+
+| Project | v0.1.0 BLOCK | v0.3.0 BLOCK | Delta | Notes |
+|---------|-------------|-------------|-------|-------|
+| requests | 14 | 10 | -4 | Python assertion broadening |
+| fastapi | 19 | 15 | -4 | Python assertion broadening |
+| nestjs | 17 | 13 | -4 | Chai/Sinon vocab expansion |
+| laravel | 222 | 222 | 0 | Remaining = helper delegation |
+| symfony | 759 | 616 | -143 | skip-only exclusion, addToAssertionCount |
+| tokio | 388 | 385 | -3 | Rust assert fn call detection |
+| clap | 528 | 193 | -335 | Custom assertion filter, helper delegation |
+| django | 23 | 22 | -1 | Python assertion broadening |
+
+## Historical Summary (v0.1.0)
+
+<details>
+<summary>v0.1.0 (2026-03-09) dogfooding results</summary>
 
 | Project | Lang | Tests | T001 BLOCK | FP Rate | Primary FP Cause |
 |---------|------|-------|-----------|---------|------------------|
@@ -25,6 +59,8 @@ exspec version: 0.1.0 (commit 5957cd0)
 | django | Python | 1047 | 23 | 39% (9/23) | helper delegation (self.check_output, etc.) |
 | pytest | Python | 2380 | 594 | ~100% (est.) | `obj.assertX()` without underscore (#62), fnmatch_lines() helper |
 | symfony | PHP | 17148 | 759 | ~24% (182/759) | addToAssertionCount() (#63, 91), markTestSkipped() (#64, 91) |
+
+</details>
 
 ### Acceptance Criteria Status
 

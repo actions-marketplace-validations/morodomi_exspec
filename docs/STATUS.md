@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-v0.3.0 development. observe TypeScript: P=100%, R=91% (separate packages), route extraction for 4 frameworks. Lint: 17 active rules, 4 languages, 13 projects / ~45k tests dogfooded.
+v0.3.0 development. observe TypeScript: P=100%, R=91% (separate packages), route extraction for 4 frameworks. Lint: 17 active rules, 4 languages, 13 projects / ~43k tests dogfooded. Default output: ai-prompt (with fix guidance).
 
 ## Progress
 
@@ -111,7 +111,7 @@ Root mode resolves most B2 FN but introduces FP from peripheral imports not yet 
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 946 passing | -- |
+| Tests | 1057 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
