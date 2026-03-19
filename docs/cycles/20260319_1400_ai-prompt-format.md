@@ -1,7 +1,7 @@
 ---
 feature: "Phase 17 — ai-prompt output format with fix guidance"
 cycle: "20260319_1400"
-phase: RED-DONE
+phase: DONE
 complexity: standard
 test_count: 8
 risk_level: low
