@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -225,7 +225,7 @@ impl ObserveExtractor for PythonExtractor {
         }
 
         // Deduplicate: same name + class_name pair may appear from multiple patterns
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         result.retain(|f| seen.insert((f.name.clone(), f.class_name.clone())));
 
         result
@@ -621,17 +621,67 @@ impl PythonExtractor {
             }
         }
 
-        // Record Layer 1 matches per production file index
-        let layer1_tests_per_prod: Vec<std::collections::HashSet<String>> = mappings
+        // Record Layer 1 core matches per production file index
+        let layer1_tests_per_prod: Vec<HashSet<String>> = mappings
             .iter()
             .map(|m| m.test_files.iter().cloned().collect())
+            .collect();
+
+        // Layer 1 extension: stem-only fallback (cross-directory match)
+        // For test files that L1 core did not match, attempt stem-only match against all prod files.
+        // This handles the httpx-like case where tests/ and pkg/ are in different directories.
+        {
+            // Build stem -> list of production indices (stem stripped of leading `_`)
+            let mut stem_to_prod_indices: HashMap<String, Vec<usize>> = HashMap::new();
+            for (idx, prod) in production_files.iter().enumerate() {
+                if let Some(pstem) = self.production_stem(prod) {
+                    stem_to_prod_indices
+                        .entry(pstem.to_owned())
+                        .or_default()
+                        .push(idx);
+                }
+            }
+
+            // Collect set of test files already matched by L1 core (any prod)
+            let l1_core_matched: HashSet<&str> = layer1_tests_per_prod
+                .iter()
+                .flat_map(|s| s.iter().map(|t| t.as_str()))
+                .collect();
+
+            for test_file in &test_file_list {
+                // Skip if L1 core already matched this test file
+                if l1_core_matched.contains(test_file.as_str()) {
+                    continue;
+                }
+                if let Some(tstem) = self.test_stem(test_file) {
+                    if let Some(prod_indices) = stem_to_prod_indices.get(tstem) {
+                        for &idx in prod_indices {
+                            if !mappings[idx].test_files.contains(test_file) {
+                                mappings[idx].test_files.push(test_file.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Snapshot L1 (core + stem-only fallback) matches per prod for strategy update
+        let layer1_extended_tests_per_prod: Vec<HashSet<String>> = mappings
+            .iter()
+            .map(|m| m.test_files.iter().cloned().collect())
+            .collect();
+
+        // Collect set of test files matched by L1 (core + stem-only fallback) for barrel suppression
+        let l1_matched_tests: HashSet<String> = mappings
+            .iter()
+            .flat_map(|m| m.test_files.iter().cloned())
             .collect();
 
         // Layer 2: import tracing
         for (test_file, source) in test_sources {
             let imports = <Self as ObserveExtractor>::extract_imports(self, source, test_file);
             let from_file = Path::new(test_file);
-            let mut matched_indices = std::collections::HashSet::<usize>::new();
+            let mut matched_indices = HashSet::<usize>::new();
 
             for import in &imports {
                 // Handle bare relative imports: `from . import X` (specifier="./")
@@ -656,6 +706,12 @@ impl PythonExtractor {
                             from_file,
                             &canonical_root,
                         ) {
+                            // Barrel suppression: skip barrel-resolved imports for L1-matched tests
+                            if self.is_barrel_file(&resolved)
+                                && l1_matched_tests.contains(test_file.as_str())
+                            {
+                                continue;
+                            }
                             exspec_core::observe::collect_import_matches(
                                 self,
                                 &resolved,
@@ -677,6 +733,12 @@ impl PythonExtractor {
                     from_file,
                     &canonical_root,
                 ) {
+                    // Barrel suppression: skip barrel-resolved imports for L1-matched tests
+                    if self.is_barrel_file(&resolved)
+                        && l1_matched_tests.contains(test_file.as_str())
+                    {
+                        continue;
+                    }
                     exspec_core::observe::collect_import_matches(
                         self,
                         &resolved,
@@ -706,6 +768,12 @@ impl PythonExtractor {
                     )
                 });
                 if let Some(resolved) = resolved {
+                    // Barrel suppression: skip barrel-resolved imports for L1-matched tests
+                    if self.is_barrel_file(&resolved)
+                        && l1_matched_tests.contains(test_file.as_str())
+                    {
+                        continue;
+                    }
                     exspec_core::observe::collect_import_matches(
                         self,
                         &resolved,
@@ -724,10 +792,10 @@ impl PythonExtractor {
             }
         }
 
-        // Update strategy: if a production file had no Layer 1 matches but has Layer 2 matches,
-        // set strategy to ImportTracing
+        // Update strategy: if a production file had no Layer 1 matches (core + stem-only fallback)
+        // but has Layer 2 matches, set strategy to ImportTracing
         for (i, mapping) in mappings.iter_mut().enumerate() {
-            let has_layer1 = !layer1_tests_per_prod[i].is_empty();
+            let has_layer1 = !layer1_extended_tests_per_prod[i].is_empty();
             if !has_layer1 && !mapping.test_files.is_empty() {
                 mapping.strategy = MappingStrategy::ImportTracing;
             }
@@ -1851,8 +1919,9 @@ def endpoint():
         );
 
         // Then: sessions.py is in test_files for test_sessions.py.
-        // Layer 1 does not match because prod dir (src/mypackage) != test dir (tests),
-        // so this is resolved via Layer 2 (ImportTracing) with src/ fallback.
+        // Layer 1 core does not match because prod dir (src/mypackage) != test dir (tests),
+        // but stem-only fallback matches via stem "sessions" (cross-directory).
+        // Strategy remains FileNameConvention (L1 fallback is still L1).
         let mapping = r.mappings.iter().find(|m| m.production_file == r.prod_path);
         assert!(
             mapping.is_some(),
@@ -1865,7 +1934,7 @@ def endpoint():
             "test_sessions.py not in test_files for sessions.py (src/ layout): {:?}",
             mapping.test_files
         );
-        assert_eq!(mapping.strategy, MappingStrategy::ImportTracing);
+        assert_eq!(mapping.strategy, MappingStrategy::FileNameConvention);
     }
 
     // -----------------------------------------------------------------------
@@ -1884,8 +1953,9 @@ def endpoint():
         );
 
         // Then: sessions.py is in test_files for test_sessions.py (non-src layout still works).
-        // Layer 1 does not match because prod dir (mypackage) != test dir (tests),
-        // so this is resolved via Layer 2 (ImportTracing) without src/ fallback.
+        // Layer 1 core does not match because prod dir (mypackage) != test dir (tests),
+        // but stem-only fallback matches via stem "sessions" (cross-directory).
+        // Strategy remains FileNameConvention (L1 fallback is still L1).
         let mapping = r.mappings.iter().find(|m| m.production_file == r.prod_path);
         assert!(
             mapping.is_some(),
@@ -1898,7 +1968,7 @@ def endpoint():
             "test_sessions.py not in test_files for sessions.py (non-src layout): {:?}",
             mapping.test_files
         );
-        assert_eq!(mapping.strategy, MappingStrategy::ImportTracing);
+        assert_eq!(mapping.strategy, MappingStrategy::FileNameConvention);
     }
 
     // -----------------------------------------------------------------------
@@ -2167,7 +2237,7 @@ pub fn extract_routes(source: &str, file_path: &str) -> Vec<Route> {
     let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
 
     let mut routes = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
 
     while let Some(m) = matches.next() {
         let mut obj: Option<String> = None;
@@ -2559,7 +2629,7 @@ pub fn extract_django_routes(source: &str, file_path: &str) -> Vec<Route> {
     let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
 
     let mut routes = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
 
     while let Some(m) = matches.next() {
         let mut func: Option<String> = None;
@@ -3344,6 +3414,678 @@ def test_user_detail():
             bar_not_mapped,
             "bar.py should NOT be mapped for test_foo.py (pkg.Bar() is not accessed), but got: {:?}",
             bar_mapping
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-L1X-01: stem-only fallback: tests/test_client.py -> pkg/_client.py (cross-directory)
+    //
+    // The key scenario: test file is in tests/ but prod is in pkg/.
+    // L1 core uses (dir, stem) pair, so tests/test_client.py (dir=tests/) does NOT
+    // match pkg/_client.py (dir=pkg/) via L1 core.
+    // stem-only fallback should match them via stem "client" regardless of directory.
+    // The test file has NO import statements to avoid L2 from resolving the mapping.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_l1x_01_stem_only_fallback_cross_directory() {
+        use tempfile::TempDir;
+
+        // Given: pkg/_client.py (prod) and tests/test_client.py (test, NO imports)
+        //        L1 core cannot match (different dirs: pkg/ vs tests/)
+        //        L2 cannot match (no import statements)
+        //        stem-only fallback should match via stem "client"
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+
+        // No imports -- forces reliance on stem-only fallback (not L2)
+        let test_content = "def test_client():\n    pass\n";
+        std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
+
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_client.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: test_client.py is mapped to pkg/_client.py via stem-only fallback
+        let mapping = result.iter().find(|m| m.production_file == client_path);
+        assert!(
+            mapping.is_some(),
+            "pkg/_client.py not mapped; stem-only fallback should match across directories. mappings={:?}",
+            result
+        );
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&test_path),
+            "test_client.py not in test_files for pkg/_client.py: {:?}",
+            mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-L1X-02: stem-only: tests/test_decoders.py -> pkg/_decoders.py (_ prefix prod)
+    //
+    // production_stem strips leading _ so "_decoders" -> "decoders".
+    // test_stem strips "test_" prefix so "test_decoders" -> "decoders".
+    // stem-only fallback should match them even though dirs differ.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_l1x_02_stem_only_underscore_prefix_prod() {
+        use tempfile::TempDir;
+
+        // Given: pkg/_decoders.py and tests/test_decoders.py (no imports)
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(pkg.join("_decoders.py"), "def decode(x): return x\n").unwrap();
+
+        // No imports -- forces reliance on stem-only fallback
+        let test_content = "def test_decode():\n    pass\n";
+        std::fs::write(tests_dir.join("test_decoders.py"), test_content).unwrap();
+
+        let decoders_path = pkg.join("_decoders.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_decoders.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![decoders_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: test_decoders.py is mapped to pkg/_decoders.py via stem-only fallback
+        //       (production_stem strips '_' prefix: "_decoders" -> "decoders")
+        let mapping = result.iter().find(|m| m.production_file == decoders_path);
+        assert!(
+            mapping.is_some(),
+            "pkg/_decoders.py not mapped; stem-only fallback should strip _ prefix and match. mappings={:?}",
+            result
+        );
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&test_path),
+            "test_decoders.py not in test_files for pkg/_decoders.py: {:?}",
+            mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-L1X-03: stem-only: tests/test_asgi.py -> pkg/transports/asgi.py (subdirectory)
+    //
+    // Prod is in a subdirectory (pkg/transports/), test is in tests/.
+    // stem "asgi" should match across any directory depth.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_l1x_03_stem_only_subdirectory_prod() {
+        use tempfile::TempDir;
+
+        // Given: pkg/transports/asgi.py and tests/test_asgi.py (no imports)
+        let dir = TempDir::new().unwrap();
+        let transports = dir.path().join("pkg").join("transports");
+        std::fs::create_dir_all(&transports).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(
+            transports.join("asgi.py"),
+            "class ASGITransport:\n    pass\n",
+        )
+        .unwrap();
+
+        // No imports -- forces reliance on stem-only fallback
+        let test_content = "def test_asgi_transport():\n    pass\n";
+        std::fs::write(tests_dir.join("test_asgi.py"), test_content).unwrap();
+
+        let asgi_path = transports.join("asgi.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_asgi.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![asgi_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: test_asgi.py is mapped to pkg/transports/asgi.py
+        //       (stem "asgi" matches across directory depth)
+        let mapping = result.iter().find(|m| m.production_file == asgi_path);
+        assert!(
+            mapping.is_some(),
+            "pkg/transports/asgi.py not mapped; stem 'asgi' should match across directory depth. mappings={:?}",
+            result
+        );
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&test_path),
+            "test_asgi.py not in test_files for pkg/transports/asgi.py: {:?}",
+            mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-L1X-04: stem ambiguity: same stem in multiple prod files -> mapped to all
+    //
+    // When multiple prod files share the same stem, recall takes priority:
+    // all matching prod files should include the test.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_l1x_04_stem_ambiguity_maps_to_all() {
+        use tempfile::TempDir;
+
+        // Given: pkg/client.py, pkg/aio/client.py, and tests/test_client.py (no imports)
+        //        Both have stem "client"; test has stem "client" -> should map to both
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        let pkg_aio = pkg.join("aio");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::create_dir_all(&pkg_aio).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(pkg.join("client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(pkg_aio.join("client.py"), "class AsyncClient:\n    pass\n").unwrap();
+
+        // No imports -- forces reliance on stem-only fallback
+        let test_content = "def test_client():\n    pass\n";
+        std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
+
+        let client_path = pkg.join("client.py").to_string_lossy().into_owned();
+        let aio_client_path = pkg_aio.join("client.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_client.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![client_path.clone(), aio_client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: test_client.py is mapped to BOTH pkg/client.py and pkg/aio/client.py
+        //       (recall priority: all matching stems are included)
+        let client_mapped = result
+            .iter()
+            .find(|m| m.production_file == client_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            client_mapped,
+            "test_client.py should be mapped to pkg/client.py (stem ambiguity -> all). mappings={:?}",
+            result
+        );
+
+        let aio_mapped = result
+            .iter()
+            .find(|m| m.production_file == aio_client_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            aio_mapped,
+            "test_client.py should be mapped to pkg/aio/client.py (stem ambiguity -> all). mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-L1X-05: L1 core match already found -> stem-only fallback does NOT fire
+    //
+    // When L1 core (dir, stem) already matches, stem-only fallback should be
+    // suppressed for that test to avoid adding cross-directory duplicates.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_l1x_05_l1_core_match_suppresses_fallback() {
+        use tempfile::TempDir;
+
+        // Given: tests/client.py (L1 core match: dir=tests/, stem=client)
+        //        pkg/client.py (would match via stem-only fallback if L1 core is absent)
+        //        tests/test_client.py (no imports)
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(tests_dir.join("client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(pkg.join("client.py"), "class Client:\n    pass\n").unwrap();
+
+        // No imports -- avoids L2 influence; only L1 core and stem-only fallback apply
+        let test_content = "def test_client():\n    pass\n";
+        std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
+
+        let tests_client_path = tests_dir.join("client.py").to_string_lossy().into_owned();
+        let pkg_client_path = pkg.join("client.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_client.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![tests_client_path.clone(), pkg_client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: test_client.py is mapped to tests/client.py only (L1 core match)
+        let tests_client_mapped = result
+            .iter()
+            .find(|m| m.production_file == tests_client_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            tests_client_mapped,
+            "test_client.py should be mapped to tests/client.py via L1 core. mappings={:?}",
+            result
+        );
+
+        // Then: fallback does NOT add pkg/client.py (L1 core match suppresses fallback)
+        let pkg_not_mapped = result
+            .iter()
+            .find(|m| m.production_file == pkg_client_path)
+            .map(|m| !m.test_files.contains(&test_path))
+            .unwrap_or(true);
+        assert!(
+            pkg_not_mapped,
+            "pkg/client.py should NOT be mapped (L1 core match suppresses stem-only fallback). mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-SUP-01: barrel suppression: L1 stem-only matched test does not get barrel fan-out
+    //
+    // The httpx FP scenario:
+    // - tests/test_client.py has NO specific imports (bare `import pkg` + no attribute access)
+    // - Without barrel suppression: `import pkg` -> barrel -> _client.py + _utils.py (FP!)
+    // - With stem-only L1 match + barrel suppression:
+    //   test_client.py -> L1 stem-only -> _client.py only (barrel _utils.py suppressed)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_sup_01_barrel_suppression_l1_matched_no_barrel_fan_out() {
+        use tempfile::TempDir;
+
+        // Given: pkg/_client.py, pkg/_utils.py, pkg/__init__.py (barrel)
+        //        tests/test_client.py: `import pkg` (bare import, NO attribute access)
+        //        L1 stem-only fallback: test_client.py -> pkg/_client.py (stem "client")
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(pkg.join("_utils.py"), "def format_url(u): return u\n").unwrap();
+        std::fs::write(
+            pkg.join("__init__.py"),
+            "from ._client import Client\nfrom ._utils import format_url\n",
+        )
+        .unwrap();
+
+        // bare `import pkg` with NO attribute access -> symbols=[] -> barrel fan-out to all
+        // Without barrel suppression: _client.py AND _utils.py both mapped (FP for _utils)
+        // With barrel suppression (L1 matched): only _client.py mapped
+        let test_content = "import pkg\n\ndef test_client():\n    pass\n";
+        std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
+
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let utils_path = pkg.join("_utils.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_client.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![client_path.clone(), utils_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: _client.py IS mapped (L1 stem-only match)
+        let client_mapped = result
+            .iter()
+            .find(|m| m.production_file == client_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            client_mapped,
+            "pkg/_client.py should be mapped via L1 stem-only. mappings={:?}",
+            result
+        );
+
+        // Then: _utils.py is NOT mapped (barrel fan-out suppressed because L1 stem-only matched)
+        let utils_not_mapped = result
+            .iter()
+            .find(|m| m.production_file == utils_path)
+            .map(|m| !m.test_files.contains(&test_path))
+            .unwrap_or(true);
+        assert!(
+            utils_not_mapped,
+            "pkg/_utils.py should NOT be mapped (barrel suppression for L1-matched test_client.py). mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-SUP-02: barrel suppression: L1 stem-only matched test still gets direct imports
+    //
+    // Direct imports (from pkg._utils import format_url) bypass barrel resolution.
+    // Even if L1 stem-only matches _client.py, direct imports to _utils.py are added.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_sup_02_barrel_suppression_direct_import_still_added() {
+        use tempfile::TempDir;
+
+        // Given: pkg/_client.py, pkg/_utils.py, pkg/__init__.py (barrel)
+        //        tests/test_client.py:
+        //          - `import pkg` (bare import, no attribute access -> would fan-out to barrel)
+        //          - `from pkg._utils import format_url` (direct import)
+        //        L1 stem-only: test_client.py -> _client.py
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(pkg.join("_utils.py"), "def format_url(u): return u\n").unwrap();
+        std::fs::write(
+            pkg.join("__init__.py"),
+            "from ._client import Client\nfrom ._utils import format_url\n",
+        )
+        .unwrap();
+
+        // Direct import to _utils -- this is NOT via barrel, so suppression does not apply
+        let test_content =
+            "import pkg\nfrom pkg._utils import format_url\n\ndef test_client():\n    assert format_url('http://x')\n";
+        std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
+
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let utils_path = pkg.join("_utils.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_client.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![client_path.clone(), utils_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: _utils.py IS mapped (direct import bypasses barrel suppression)
+        let utils_mapped = result
+            .iter()
+            .find(|m| m.production_file == utils_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            utils_mapped,
+            "pkg/_utils.py should be mapped via direct import (not barrel). mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-SUP-03: barrel suppression: L1-unmatched test gets barrel fan-out as usual
+    //
+    // A test with NO matching stem in prod files should still get barrel fan-out.
+    // Barrel suppression only applies to L1 stem-only matched tests.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_sup_03_barrel_suppression_l1_unmatched_gets_barrel() {
+        use tempfile::TempDir;
+
+        // Given: pkg/_client.py, pkg/_utils.py, pkg/__init__.py (barrel)
+        //        tests/test_exported_members.py: `import pkg` (bare import, no attr access)
+        //        stem "exported_members" has NO matching production file (L1 miss)
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(pkg.join("_utils.py"), "def format_url(u): return u\n").unwrap();
+        std::fs::write(
+            pkg.join("__init__.py"),
+            "from ._client import Client\nfrom ._utils import format_url\n",
+        )
+        .unwrap();
+
+        // bare `import pkg` with NO attribute access -> should fan-out via barrel (L1 miss)
+        let test_content = "import pkg\n\ndef test_exported_members():\n    pass\n";
+        std::fs::write(tests_dir.join("test_exported_members.py"), test_content).unwrap();
+
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let utils_path = pkg.join("_utils.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_exported_members.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![client_path.clone(), utils_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: barrel fan-out proceeds for L1-unmatched test
+        //       BOTH _client.py and _utils.py should be mapped (barrel re-exports both)
+        let client_mapped = result
+            .iter()
+            .find(|m| m.production_file == client_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        let utils_mapped = result
+            .iter()
+            .find(|m| m.production_file == utils_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+
+        assert!(
+            client_mapped && utils_mapped,
+            "L1-unmatched test should fan-out via barrel to both _client.py and _utils.py. client_mapped={}, utils_mapped={}, mappings={:?}",
+            client_mapped,
+            utils_mapped,
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-SUP-04: E2E: httpx-like fixture demonstrates FP reduction (P >= 80%)
+    //
+    // Simulates the core httpx FP scenario:
+    // - Multiple prod files under pkg/ with underscore prefix
+    // - tests/ directory (different from pkg/)
+    // - Some tests import pkg bare (no attribute access) -> currently fans-out to all
+    // - stem-only fallback + barrel suppression should limit fan-out
+    //
+    // Note: P>=80% is the intermediate goal; Ship criteria is P>=98% (CONSTITUTION).
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_sup_04_e2e_httpx_like_precision_improvement() {
+        use tempfile::TempDir;
+        use HashSet;
+
+        // Given: httpx-like structure
+        //   pkg/_client.py, pkg/_decoders.py, pkg/_utils.py
+        //   pkg/__init__.py: barrel re-exporting Client, decode, format_url
+        //   tests/test_client.py: bare `import pkg` NO attribute access (stem -> _client.py)
+        //   tests/test_decoders.py: bare `import pkg` NO attribute access (stem -> _decoders.py)
+        //   tests/test_utils.py: bare `import pkg` NO attribute access (stem -> _utils.py)
+        //   tests/test_exported_members.py: bare `import pkg` NO attr access (L1 miss -> barrel OK)
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(pkg.join("_decoders.py"), "def decode(x): return x\n").unwrap();
+        std::fs::write(pkg.join("_utils.py"), "def format_url(u): return u\n").unwrap();
+        std::fs::write(
+            pkg.join("__init__.py"),
+            "from ._client import Client\nfrom ._decoders import decode\nfrom ._utils import format_url\n",
+        )
+        .unwrap();
+
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let decoders_path = pkg.join("_decoders.py").to_string_lossy().into_owned();
+        let utils_path = pkg.join("_utils.py").to_string_lossy().into_owned();
+        let production_files = vec![
+            client_path.clone(),
+            decoders_path.clone(),
+            utils_path.clone(),
+        ];
+
+        // All test files use bare `import pkg` with NO attribute access
+        // -> without suppression: all fan-out to all 3 prod files (P=33%)
+        // -> with stem-only + barrel suppression: each maps to 1 (P=100% for L1-matched)
+        let test_client_content = "import pkg\n\ndef test_client():\n    pass\n";
+        let test_decoders_content = "import pkg\n\ndef test_decode():\n    pass\n";
+        let test_utils_content = "import pkg\n\ndef test_format_url():\n    pass\n";
+        let test_exported_content = "import pkg\n\ndef test_exported_members():\n    pass\n";
+
+        let test_client_path = tests_dir
+            .join("test_client.py")
+            .to_string_lossy()
+            .into_owned();
+        let test_decoders_path = tests_dir
+            .join("test_decoders.py")
+            .to_string_lossy()
+            .into_owned();
+        let test_utils_path = tests_dir
+            .join("test_utils.py")
+            .to_string_lossy()
+            .into_owned();
+        let test_exported_path = tests_dir
+            .join("test_exported_members.py")
+            .to_string_lossy()
+            .into_owned();
+
+        std::fs::write(&test_client_path, test_client_content).unwrap();
+        std::fs::write(&test_decoders_path, test_decoders_content).unwrap();
+        std::fs::write(&test_utils_path, test_utils_content).unwrap();
+        std::fs::write(&test_exported_path, test_exported_content).unwrap();
+
+        let test_sources: HashMap<String, String> = [
+            (test_client_path.clone(), test_client_content.to_string()),
+            (
+                test_decoders_path.clone(),
+                test_decoders_content.to_string(),
+            ),
+            (test_utils_path.clone(), test_utils_content.to_string()),
+            (
+                test_exported_path.clone(),
+                test_exported_content.to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let extractor = PythonExtractor::new();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Ground truth (expected TP pairs):
+        // test_client.py -> _client.py  (L1 stem-only)
+        // test_decoders.py -> _decoders.py  (L1 stem-only)
+        // test_utils.py -> _utils.py  (L1 stem-only)
+        // test_exported_members.py -> _client.py, _decoders.py, _utils.py  (barrel, L1 miss)
+        let ground_truth_set: HashSet<(String, String)> = [
+            (test_client_path.clone(), client_path.clone()),
+            (test_decoders_path.clone(), decoders_path.clone()),
+            (test_utils_path.clone(), utils_path.clone()),
+            (test_exported_path.clone(), client_path.clone()),
+            (test_exported_path.clone(), decoders_path.clone()),
+            (test_exported_path.clone(), utils_path.clone()),
+        ]
+        .into_iter()
+        .collect();
+
+        let actual_pairs: HashSet<(String, String)> = result
+            .iter()
+            .flat_map(|m| {
+                m.test_files
+                    .iter()
+                    .map(|t| (t.clone(), m.production_file.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let tp = actual_pairs.intersection(&ground_truth_set).count();
+        let fp = actual_pairs.difference(&ground_truth_set).count();
+
+        // Precision = TP / (TP + FP)
+        let precision = if tp + fp == 0 {
+            0.0
+        } else {
+            tp as f64 / (tp + fp) as f64
+        };
+
+        // Then: precision >= 80% (intermediate goal)
+        // Without stem-only + barrel suppression: all 4 tests fan-out to 3 prod files
+        // = 12 pairs, but GT has 6 -> P = 6/12 = 50% (FAIL)
+        // With suppression: 3 stem-matched tests -> 1 each + exported_members -> 3 = 6 pairs -> P = 100%
+        assert!(
+            precision >= 0.80,
+            "Precision {:.1}% < 80% target. TP={}, FP={}, actual_pairs={:?}",
+            precision * 100.0,
+            tp,
+            fp,
+            actual_pairs
         );
     }
 }
