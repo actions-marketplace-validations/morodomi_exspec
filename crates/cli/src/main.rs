@@ -11,7 +11,8 @@ use exspec_core::observe_report::{
     ObserveFileEntry, ObserveReport, ObserveRouteEntry, ObserveSummary,
 };
 use exspec_core::output::{
-    compute_exit_code, filter_by_severity, format_json, format_sarif, format_terminal, SummaryStats,
+    compute_exit_code, filter_by_severity, format_ai_prompt, format_json, format_sarif,
+    format_terminal, SummaryStats,
 };
 use exspec_core::rules::{
     evaluate_file_rules, evaluate_project_rules, evaluate_rules, Config, Severity,
@@ -40,7 +41,7 @@ pub struct LintArgs {
     pub path: String,
 
     /// Output format
-    #[arg(long, default_value = "terminal")]
+    #[arg(long, default_value = "ai-prompt")]
     pub format: String,
 
     /// Language filter (python, typescript, php, rust)
@@ -245,7 +246,7 @@ fn load_config(config_path: &str) -> Config {
 }
 
 const SUPPORTED_LANGUAGES: &[&str] = &["python", "typescript", "php", "rust"];
-const SUPPORTED_FORMATS: &[&str] = &["terminal", "json", "sarif"];
+const SUPPORTED_FORMATS: &[&str] = &["terminal", "json", "sarif", "ai-prompt"];
 
 fn validate_format(format: &str) -> Result<(), String> {
     if !SUPPORTED_FORMATS.contains(&format) {
@@ -635,7 +636,14 @@ fn run_lint(lint: LintArgs) {
             )
         }
         "sarif" => format_sarif(&display_diagnostics),
-        _ => format_terminal(
+        "terminal" => format_terminal(
+            &display_diagnostics,
+            test_file_count,
+            all_functions.len(),
+            &metrics,
+            &hints,
+        ),
+        _ => format_ai_prompt(
             &display_diagnostics,
             test_file_count,
             all_functions.len(),
@@ -1904,10 +1912,30 @@ mod tests {
         assert!(err.contains("sarif"), "should list supported: {err}");
     }
 
+    // --- AI-FMT-07: CLI default format is "ai-prompt" ---
+
     #[test]
-    fn validate_format_ai_prompt_error() {
-        let err = validate_format("ai-prompt").unwrap_err();
-        assert!(err.contains("ai-prompt"));
+    fn validate_format_ai_prompt_ok() {
+        // Given: format = "ai-prompt"
+        // When: validate_format("ai-prompt") を呼ぶ
+        // Then: Ok(()) が返る
+        assert!(
+            validate_format("ai-prompt").is_ok(),
+            "ai-prompt should be a valid format"
+        );
+    }
+
+    #[test]
+    fn cli_default_format_is_ai_prompt() {
+        // Given: --format オプションなし
+        // When: CLI を parse_lint で解析
+        // Then: format フィールドのデフォルトが "ai-prompt"
+        let lint = parse_lint(&["exspec", "."]);
+        assert_eq!(
+            lint.format, "ai-prompt",
+            "default format should be ai-prompt, got: {}",
+            lint.format
+        );
     }
 
     // --- E2E: SARIF output ---
