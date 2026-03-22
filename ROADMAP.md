@@ -13,6 +13,20 @@
 
 ## Completed Recently
 
+### Phase 21: Python observe re-dogfood + FP fix (2026-03-22)
+
+Goal: Formal re-dogfood of Python observe after Phase 13-20 improvements. Measure P/R/F1, fix remaining FPs to meet ship criteria.
+
+**Results**: httpx P=98.2%, R=96.8%, F1=97.5%. Ship criteria PASS (P>=98%, R>=90%).
+
+**Why**: Phase 12 measured P=66.7%, R=6.2%. Phase 13-20 improvements (L1 prefix strip, src/ layout, barrel import, assertion filter, helper exclusion) were estimated to bring P~94%, but only hand-counted. Formal re-dogfood needed for ship criteria validation.
+
+**Code fix**: `is_non_sut_helper()` extended to exclude `mock*.py` (test fixtures), `__version__.py` (metadata), `_types.py` (type definitions) from production files. These cause barrel fan-out FP.
+
+**GT re-audit**: 23 secondary targets added to httpx ground truth. Original GT focused on primary targets with sparse secondary coverage.
+
+**Decision**: 1 known FP remains (`_models.py <- test_timeouts.py`, setup-only import with 0 assertions). Accepted: fixing requires barrel sym-tracking which caused 3 FN regression in testing. P=98.2% meets target.
+
 ### Phase 12: Python observe dogfooding + GT (2026-03-19)
 
 Goal: Dogfood Python observe on httpx (30 test files) and Requests (9 test files). Measure P/R/F1 against hand-audited ground truth.
@@ -49,12 +63,10 @@ Goal: Extract API route definitions from framework decorators/config. NestJS, Fa
 
 | Priority | Task | Trigger |
 |----------|------|---------|
-| P0 | Python observe L1 fix: `_` prefix stripping in filename match | 13 httpx FN |
-| P0 | Python observe: `src/` layout detection | Requests 0% recall |
-| P1 | Python observe L2: barrel import resolution (`__init__.py` chain) | 28 httpx FN |
-| P1 | Python observe L1: cross-directory stem matching | 10 httpx FN |
 | P1 | Multi-path CLI for observe (B2 cross-package resolution) | 13 FN in NestJS, all B2 |
+| P1 | Python observe stable promotion (`[experimental]` removal) | Phase 21 ship criteria PASS |
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
+| P2 | Barrel sym-tracking for setup-only import FP | 1 remaining httpx FP (`_models.py <- test_timeouts.py`) |
 
 ## Backlog
 

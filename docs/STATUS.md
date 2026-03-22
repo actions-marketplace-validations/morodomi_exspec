@@ -38,6 +38,20 @@ v0.3.0 development. observe TypeScript: P=100%, R=91% (separate packages), route
 | 11 - TS observe re-dogfood + GT audit | **DONE** |
 | 12 - Python observe dogfooding + GT | **DONE** |
 | 17 - ai-prompt output format (default) | **DONE** |
+| 20 - Python observe test helper exclusion | **DONE** |
+| 21 - Python observe re-dogfood + FP fix | **DONE** |
+
+### Phase 21 Python Observe Re-dogfood Results (2026-03-22)
+
+| Metric | httpx | Requests (spot-check) | Target |
+|--------|-------|-----------------------|--------|
+| Precision (pair) | **98.2%** (55/56) | ~100% | >= 98% |
+| Recall (test file) | **96.8%** (30/31) | 100% | >= 90% |
+| F1 | **97.5%** | -- | -- |
+
+**Ship criteria: PASS** (both P>=98% and R>=90%).
+
+Code fix: `is_non_sut_helper()` extended to exclude `mock*.py`, `__version__.py`, `_types.py` from production files. GT re-audited: 23 secondary targets added. 1 known FP remaining (`_models.py <- test_timeouts.py`, no assertion on model).
 
 ### Phase 12 Python Observe Dogfooding Results (2026-03-19)
 

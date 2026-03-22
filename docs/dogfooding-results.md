@@ -944,18 +944,41 @@ cargo build --release
 
 ### httpx (encode/httpx @ b5addb64)
 
-#### Phase 20 後 (test helper exclusion)
+#### Phase 21 (re-dogfood + FP fix + GT re-audit)
+
+| Metric | Phase 20 (estimated) | Phase 21 (measured) |
+|--------|---------------------|---------------------|
+| Production files detected | 29 | 29 |
+| Test files detected | 31 | 31 |
+| Mapped production files | 21 | 18 |
+| Test file coverage (Recall) | 96.8% (30/31) | **96.8%** (30/31) |
+| Mapping pairs | ~64 | 56 |
+| Precision (pair, vs GT) | ~94% (estimated) | **98.2%** (55/56) |
+| TP | -- | 55 |
+| FP | ~4 (estimated) | 1 |
+| FN (primary) | -- | 3 |
+| F1 | -- | **97.5%** |
+
+**Result: Ship criteria PASS (P>=98%, R>=90%).**
+
+Code fixes: `is_non_sut_helper()` excludes `mock*.py` (6 FP), `__version__.py` (2 FP), `_types.py` (2 FP).
+GT re-audit: 23 secondary_targets added. 1 remaining FP: `_models.py <- test_timeouts.py` (0 assertions on model).
+
+<details>
+<summary>Phase 20 results (historical, estimated)</summary>
 
 | Metric | Phase 18/19 | Phase 20 |
 |--------|-------------|----------|
 | Production files detected | 29 | 29 |
 | Test files detected | 31 | 31 |
 | Mapped production files | 22 | 21 |
-| Test file coverage (Recall) | 96.8% (30/31) | **96.8%** (30/31) |
+| Test file coverage (Recall) | 96.8% (30/31) | 96.8% (30/31) |
 | Mapping pairs | ~66 | ~64 |
-| Estimated Precision | ~92% | **~94%** |
+| Estimated Precision | ~92% | ~94% |
 
-**Result: Recall PASS, Precision improved but still below 98% target.**
+Note: Phase 20 precision was hand-estimated, not pair-based measurement.
+
+</details>
 
 Phase 20 で `tests/common.py` の FP が解消。残る FP は barrel import 経由の incidental mappings のみ。
 
@@ -1042,10 +1065,12 @@ FP sources: `tests/compat.py` (2), `tests/testserver/server.py` (2), `tests/util
 
 ### Python Observe Summary
 
-| Metric | httpx | Requests | Target |
-|--------|-------|----------|--------|
-| Precision | ~94% | ~100% | >= 98% |
-| Recall (test file coverage) | 96.8% | 100% | >= 90% |
+| Metric | httpx | Requests (spot-check) | Target |
+|--------|-------|-----------------------|--------|
+| Precision (pair) | **98.2%** | ~100% | >= 98% |
+| Recall (test file) | **96.8%** | 100% | >= 90% |
+| F1 | **97.5%** | -- | -- |
+| Status | **PASS** | PASS | -- |
 
 **Requests: both targets met. httpx: Recall met, Precision close (94% vs 98% target).**
 
