@@ -1256,6 +1256,18 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // PY-HELPER-11: test/helpers.py -> helper (test/ singular directory)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_helper_11_test_singular_dir_helper() {
+        // Given: file is test/helpers.py (singular "test" directory, not "tests")
+        // When: is_non_sut_helper is called
+        // Then: returns true (segment check matches both "tests" and "test")
+        let extractor = PythonExtractor::new();
+        assert!(extractor.is_non_sut_helper("test/helpers.py", true));
+    }
+
+    // -----------------------------------------------------------------------
     // PY-BARREL-01: __init__.py -> is_barrel_file = true
     // -----------------------------------------------------------------------
     #[test]
