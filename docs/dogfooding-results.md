@@ -940,9 +940,46 @@ cargo build --release
 ## Python Observe Dogfooding (2026-03-19)
 
 **Feature**: `exspec observe --lang python` — test-to-code mapping via static AST analysis
-**Ship criteria**: first-pass P>=90%, R>=80% (experimental label)
+**Ship criteria**: Precision >= 98%, Recall >= 90% (test file coverage)
 
 ### httpx (encode/httpx @ b5addb64)
+
+#### Phase 18/19 後 (stem-only fallback + barrel suppression + assertion filter)
+
+| Metric | Before (pre-Phase 18) | After (Phase 18/19) |
+|--------|----------------------|---------------------|
+| Production files detected | 23 | 29 |
+| Test files detected | 30 | 31 |
+| Mapped production files | 3 | 22 |
+| Test file coverage (Recall) | 6.2% (2/32) | **96.8%** (30/31) |
+| Mapping pairs | 3 | ~66 |
+| Estimated Precision | 66.7% | **~92%** |
+
+**Result: Recall PASS, Precision FAIL** — R exceeds 90% target, P below 98% target.
+
+##### Strategy Breakdown
+
+| Strategy | Prod Files | Pairs | Notes |
+|----------|-----------|-------|-------|
+| filename | 13 | ~30 | `_` prefix stripping + cross-dir stem match working |
+| import | 9 | ~36 | Barrel import resolution through `__init__.py` working |
+
+##### Remaining FP Sources (~5 pairs)
+
+| FP Type | Pairs | Example |
+|---------|-------|---------|
+| Incidental barrel import (`__version__`) | 2 | `__version__.py` ← test_event_hooks (uses `httpx.__version__` in assertion strings, not testing __version__) |
+| Utility type imports (`_types`) | 2 | `_types.py` ← test_async_client (type annotations only) |
+| Test helper as production (`tests/common.py`) | 1 | Test utility classified as production file |
+
+##### Unmapped Test File
+
+- `tests/test_exported_members.py` — no matching production file (tests module-level `__all__`)
+
+#### Pre-Phase 18 Results (historical)
+
+<details>
+<summary>Original measurement (P=66.7%, R=6.2%)</summary>
 
 | Metric | Value |
 |--------|-------|
@@ -955,47 +992,61 @@ cargo build --release
 | **Recall** | **6.2%** |
 | **F1** | **11.4%** |
 
-**Result: FAIL** — both P and R below first-pass criteria.
+Root causes: `_` prefix not stripped, barrel imports not resolved, cross-directory matching failed.
 
-#### Root Cause Analysis
-
-| Issue | Impact | FN Count |
-|-------|--------|----------|
-| L1: `_` prefix not matched (`test_decoders` vs `_decoders`) | filename convention fails | 13 |
-| L2: barrel import (`import httpx`) not resolved through `__init__.py` | import tracing misses barrel chain | 28 |
-| L1: cross-directory (`tests/client/test_client` vs `httpx/_client`) | subdirectory test files not matched | 10 |
-| FP: `tests/common.py` mapped as production file | test helper misclassified | 1 |
-
-**Key Insight**: httpx uses `import httpx` (barrel) in 93% of test files. Without barrel import resolution, only direct imports (`from httpx._urlparse import ...`) are detected. The `_` prefix convention is common in Python but observe's L1 matching doesn't strip it.
-
-#### Stratum Breakdown
-
-| Evidence | GT Pairs | TP | FN | Recall |
-|----------|----------|----|----|--------|
-| direct_import | 2 | 2 | 0 | 100.0% |
-| filename_match | 14 | 1 | 13 | 7.1% |
-| symbol_assertion | 31 | 1 | 30 | 3.2% |
+</details>
 
 ### Requests (psf/requests, latest main)
 
-| Metric | Value |
-|--------|-------|
-| Test files | 9 |
-| Production files | 18 (in `src/requests/`) |
-| Observed mappings | 3 (all test helpers, 0 production) |
+#### Phase 18/19 後
 
-**Result: FAIL** — `src/` layout completely invisible to observe.
+| Metric | Before (pre-Phase 18) | After (Phase 18/19) |
+|--------|----------------------|---------------------|
+| Production files detected | 0 (in `src/`) | 27 |
+| Test files detected | 9 | 9 |
+| Mapped production files | 0 | 18 |
+| Test file coverage (Recall) | 0% | **100%** (9/9) |
+| Mapping pairs | 0 | ~26 |
+| Estimated Precision | N/A | **~81%** |
+
+**Result: Recall PASS, Precision FAIL** — `src/` layout now fully detected. Precision impacted by test helpers.
+
+##### Strategy Breakdown
+
+| Strategy | Prod Files | Pairs | Notes |
+|----------|-----------|-------|-------|
+| filename | 6 | ~8 | `adapters`, `help`, `hooks`, `packages`, `structures`, `utils` |
+| import | 12 | ~18 | Barrel resolution through `__init__.py` + assertion filter |
+
+##### Remaining FP Sources (~5 pairs)
+
+| FP Type | Pairs | Example |
+|---------|-------|---------|
+| Test helper as production (`tests/compat.py`) | 2 | Test compatibility helper imported by test files |
+| Test helper as production (`tests/testserver/server.py`) | 2 | Test server imported by test_testserver, test_lowlevel |
+| Test helper as production (`tests/utils.py`) | 1 | Filename match with test_utils.py |
+
+<details>
+<summary>Pre-Phase 18 results (historical)</summary>
 
 - observe found 0 production files in `src/requests/`
 - Only detected `tests/compat.py`, `tests/utils.py`, `tests/testserver/server.py` as production files
-- Root cause: observe doesn't traverse `src/` layout as production root
+- Root cause: observe didn't traverse `src/` layout as production root
 
-### Improvement Plan (separate cycle)
+</details>
+
+### Python Observe Summary
+
+| Metric | httpx | Requests | Target |
+|--------|-------|----------|--------|
+| Precision | ~92% | ~81% | >= 98% |
+| Recall (test file coverage) | 96.8% | 100% | >= 90% |
+
+**Overall: Recall target met. Precision needs improvement.**
+
+### Remaining Improvement Plan
 
 | Priority | Fix | Expected Impact |
 |----------|-----|-----------------|
-| P0 | L1: strip `_` prefix in filename convention matching | +13 httpx FN recovered |
-| P0 | L2: barrel import resolution (`__init__.py` → re-exported modules) | +28 httpx FN recovered |
-| P1 | L1: cross-directory stem matching (ignore test subdirectory) | +10 httpx FN recovered |
-| P1 | `src/` layout detection as production root | Requests entirely fixed |
-| P2 | Test helper exclusion (files in test dirs that aren't test files) | -1 httpx FP |
+| P0 | Test helper exclusion (files in test dirs that aren't test files) | -1 httpx FP, -5 Requests FP |
+| P1 | Assertion-only import filtering (exclude `__version__`, `_types` when not asserted against directly) | -4 httpx FP |
