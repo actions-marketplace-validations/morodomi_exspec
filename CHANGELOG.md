@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.4.0 (2026-03-22)
+
+Python observe reaches stable (ship criteria P>=98%, R>=90%), new default output format, and route extraction for 4 frameworks.
+
+### Features
+
+- **Python observe stable**: Ship criteria achieved (P=98.2%, R=96.8% on httpx). L1 prefix stripping, L2 barrel import resolution, assertion-referenced import filter, test helper exclusion, and non-SUT helper filtering (mock/version/types).
+- **`ai-prompt` default output**: New `--format ai-prompt` output with actionable fix guidance, now the default format. Previous default was `terminal`.
+- **Route extraction**: NestJS decorators, FastAPI route decorators, Next.js App Router `route.ts`, Django URL conf patterns.
+- **Python observe L2 improvements**: Barrel wildcard re-export resolution, bare `import` statement resolution, attribute-access filtering for precision, stem-only fallback with barrel suppression.
+
+### Bug Fixes
+
+- **Python observe FP reduction**: `is_non_sut_helper()` now excludes `mock*.py` (test fixtures), `__version__.py` (metadata), `_types.py` (type definitions) from production file candidates, eliminating barrel fan-out false positives.
+- **Python `_` prefix in L1**: `production_stem()` strips leading `_` for filename matching (`_decoders.py` matches `test_decoders.py`).
+- **Python `src/` layout**: L2 import resolution detects `src/<package>/` project structure.
+
+### Internal
+
+- Ground truth re-audited for httpx: 23 secondary targets added.
+- 1087 tests (up from 918 in v0.3.0).
+
+## v0.3.0 (2026-03-18)
+
+Multi-language observe (Python, Rust, PHP), route extraction framework, and Python observe initial implementation.
+
+### Features
+
+- **Multi-language observe**: `ObserveExtractor` trait enables test-to-code mapping for Python, Rust, and PHP (all `[experimental]`). TypeScript remains stable.
+- **Python observe**: Dotted import resolution, `__init__.py` barrel detection. First-pass: P=66.7%, R=6.2% on httpx (improved in v0.4.0).
+- **Rust observe**: `use crate::`/`use cratename::` resolution, workspace member aggregation, `pub mod` barrel.
+- **PHP observe**: PSR-4 namespace resolution.
+
 ## v0.2.0 (2026-03-17)
 
 New `exspec observe` subcommand for static test-to-code mapping, lint reliability improvements, and workspace consolidation.

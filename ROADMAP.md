@@ -41,7 +41,7 @@ Goal: Dogfood Python observe on httpx (30 test files) and Requests (9 test files
 3. L1 cross-directory: `tests/client/test_client` vs `httpx/_client` — 10 FN
 4. `src/` layout: Requests' `src/requests/` not detected as production root — total miss
 
-**Decision**: Python observe stays `[experimental]`. P0 fixes (L1 `_` prefix, `src/` layout detection) and P1 fixes (L2 barrel resolution, cross-directory matching) required in separate cycle before re-evaluation.
+**Decision**: Python observe was `[experimental]` at Phase 12. Phase 13-21 fixed all P0/P1 issues. Phase 21 re-dogfood confirmed ship criteria PASS (P=98.2%, R=96.8%). Promoted to stable in v0.4.0.
 
 **Ground truth**: `docs/observe-ground-truth-python-httpx.md`
 
@@ -64,7 +64,7 @@ Goal: Extract API route definitions from framework decorators/config. NestJS, Fa
 | Priority | Task | Trigger |
 |----------|------|---------|
 | P1 | Multi-path CLI for observe (B2 cross-package resolution) | 13 FN in NestJS, all B2 |
-| P1 | Python observe stable promotion (`[experimental]` removal) | Phase 21 ship criteria PASS |
+| -- | ~~Python observe stable promotion~~ | Done in v0.4.0 |
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
 | P2 | Barrel sym-tracking for setup-only import FP | 1 remaining httpx FP (`_models.py <- test_timeouts.py`) |
 
@@ -97,7 +97,7 @@ Goal: Extract API route definitions from framework decorators/config. NestJS, Fa
 - **ObserveExtractor trait** -- language-agnostic interface in `crates/core/`, each lang crate implements it
 - **Two-layer algorithm is portable** -- Layer 1 (filename convention) + Layer 2 (import tracing) applies to all 4 languages
 - **Language order**: Python (strongest conventions) -> Rust (inline test advantage) -> PHP (PSR-4 complexity)
-- **Success bar**: Precision >= 90%, Recall >= 80% per language (lower than TypeScript's 98%/90% due to first-pass nature). observe の低精度出力は lint の FP よりユーザー影響が大きい（「テストされていない」という誤情報）。first-pass 言語は出力に `[experimental]` マーカーを付与し、精度が ship criteria (P>=98%, R>=90%) を超えた言語から stable に昇格する
+- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (Phase 11) and Python (Phase 21) are stable. Rust and PHP remain experimental (no formal dogfooding yet)
 - **Phase 9 completion**: CONSTITUTION.md Section 8 (Scope Boundaries) の observe 欄を更新する。CONSTITUTION 変更は Human approval 必須 (Section 5)
 
 ### B4 barrel fix rejection (Phase 11)
