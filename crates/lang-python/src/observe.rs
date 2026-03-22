@@ -85,7 +85,18 @@ pub fn production_stem(path: &str) -> Option<&str> {
 
 /// Determine if a file is a non-SUT helper (should be excluded from mapping).
 pub fn is_non_sut_helper(file_path: &str, is_known_production: bool) -> bool {
-    // If the file is already known to be a production file, it's not a helper.
+    // Phase 20: Path-segment check BEFORE is_known_production bypass.
+    // Files inside tests/ or test/ directories that are NOT test files
+    // are always helpers, even if they appear in production_files list.
+    // (Same pattern as TypeScript observe.)
+    let in_test_dir = file_path
+        .split('/')
+        .any(|seg| seg == "tests" || seg == "test");
+
+    if in_test_dir {
+        return true;
+    }
+
     if is_known_production {
         return false;
     }
@@ -103,15 +114,15 @@ pub fn is_non_sut_helper(file_path: &str, is_known_production: bool) -> bool {
         return true;
     }
 
-    // Files directly inside tests/ or test/ or __pycache__/ that are NOT test files.
-    let parent_is_test_dir = Path::new(file_path)
+    // __pycache__/ files are helpers
+    let parent_is_pycache = Path::new(file_path)
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|f| f.to_str())
-        .map(|s| s == "tests" || s == "test" || s == "__pycache__")
+        .map(|s| s == "__pycache__")
         .unwrap_or(false);
 
-    if parent_is_test_dir && !file_name.starts_with("test_") && !file_name.ends_with("_test.py") {
+    if parent_is_pycache {
         return true;
     }
 
@@ -768,9 +779,38 @@ impl PythonExtractor {
     ) -> Vec<FileMapping> {
         let test_file_list: Vec<String> = test_sources.keys().cloned().collect();
 
+        // Phase 20: Filter out test-directory helper files from production_files before
+        // passing to Layer 1. Files inside tests/ or test/ path segments (relative to
+        // scan_root) are helpers (e.g. tests/helpers.py, tests/testserver/server.py)
+        // even when discover_files classifies them as production files.
+        // We strip the scan_root prefix to get the relative path for segment checking,
+        // avoiding false positives when the absolute path itself contains "tests" segments
+        // (e.g. /path/to/project/tests/fixtures/observe/e2e_pkg/views.py).
+        let canonical_root_for_filter = scan_root.canonicalize().ok();
+        let filtered_production_files: Vec<String> = production_files
+            .iter()
+            .filter(|p| {
+                let check_path = if let Some(ref root) = canonical_root_for_filter {
+                    if let Ok(canonical_p) = Path::new(p).canonicalize() {
+                        if let Ok(rel) = canonical_p.strip_prefix(root) {
+                            rel.to_string_lossy().into_owned()
+                        } else {
+                            p.to_string()
+                        }
+                    } else {
+                        p.to_string()
+                    }
+                } else {
+                    p.to_string()
+                };
+                !is_non_sut_helper(&check_path, false)
+            })
+            .cloned()
+            .collect();
+
         // Layer 1: filename convention
         let mut mappings =
-            exspec_core::observe::map_test_files(self, production_files, &test_file_list);
+            exspec_core::observe::map_test_files(self, &filtered_production_files, &test_file_list);
 
         // Build canonical path -> production index lookup
         let canonical_root = match scan_root.canonicalize() {
@@ -778,7 +818,7 @@ impl PythonExtractor {
             Err(_) => return mappings,
         };
         let mut canonical_to_idx: HashMap<String, usize> = HashMap::new();
-        for (idx, prod) in production_files.iter().enumerate() {
+        for (idx, prod) in filtered_production_files.iter().enumerate() {
             if let Ok(canonical) = Path::new(prod).canonicalize() {
                 canonical_to_idx.insert(canonical.to_string_lossy().into_owned(), idx);
             }
@@ -796,7 +836,7 @@ impl PythonExtractor {
         {
             // Build stem -> list of production indices (stem stripped of leading `_`)
             let mut stem_to_prod_indices: HashMap<String, Vec<usize>> = HashMap::new();
-            for (idx, prod) in production_files.iter().enumerate() {
+            for (idx, prod) in filtered_production_files.iter().enumerate() {
                 if let Some(pstem) = self.production_stem(prod) {
                     stem_to_prod_indices
                         .entry(pstem.to_owned())
@@ -1153,6 +1193,66 @@ mod tests {
         // Then: returns false
         let extractor = PythonExtractor::new();
         assert!(!extractor.is_non_sut_helper("src/models.py", false));
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-HELPER-06: tests/common.py -> helper even when is_known_production=true
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_helper_06_tests_common_helper_despite_known_production() {
+        // Given: file is tests/common.py with is_known_production=true
+        // When: is_non_sut_helper is called
+        // Then: returns true (path segment check overrides is_known_production)
+        let extractor = PythonExtractor::new();
+        assert!(extractor.is_non_sut_helper("tests/common.py", true));
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-HELPER-07: tests/testserver/server.py -> helper (subdirectory of tests/)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_helper_07_tests_subdirectory_helper() {
+        // Given: file is tests/testserver/server.py (inside tests/ dir but not a test file)
+        // When: is_non_sut_helper is called
+        // Then: returns true (path segment check catches subdirectories)
+        let extractor = PythonExtractor::new();
+        assert!(extractor.is_non_sut_helper("tests/testserver/server.py", true));
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-HELPER-08: tests/compat.py -> helper (is_known_production=false)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_helper_08_tests_compat_helper() {
+        // Given: file is tests/compat.py (inside tests/ dir, not a test file)
+        // When: is_non_sut_helper is called
+        // Then: returns true
+        let extractor = PythonExtractor::new();
+        assert!(extractor.is_non_sut_helper("tests/compat.py", false));
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-HELPER-09: tests/fixtures/data.py -> helper (deep nesting inside tests/)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_helper_09_deep_nested_test_dir_helper() {
+        // Given: file is tests/fixtures/data.py (deeply nested inside tests/)
+        // When: is_non_sut_helper is called
+        // Then: returns true (path segment check catches any depth under tests/)
+        let extractor = PythonExtractor::new();
+        assert!(extractor.is_non_sut_helper("tests/fixtures/data.py", false));
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-HELPER-10: src/tests.py -> NOT helper (filename not dir segment)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_helper_10_tests_in_filename_not_helper() {
+        // Given: file is src/tests.py ("tests" is in filename, not a directory segment)
+        // When: is_non_sut_helper is called
+        // Then: returns false (path segment check must not match filename)
+        let extractor = PythonExtractor::new();
+        assert!(!extractor.is_non_sut_helper("src/tests.py", false));
     }
 
     // -----------------------------------------------------------------------
@@ -2003,12 +2103,13 @@ def endpoint():
     // -----------------------------------------------------------------------
     #[test]
     fn py_abs_03_relative_import_still_resolves() {
-        // Given: `from .models import X` in tests/test_something.py,
-        //        tests/models.py exists relative to test file
+        // Given: `from .models import X` in pkg/test_something.py,
+        //        pkg/models.py exists relative to test file
+        // Note: production file must NOT be inside tests/ dir (Phase 20: tests/ files are helpers)
         let r = run_import_test(
-            "tests/models.py",
+            "pkg/models.py",
             "class X:\n    pass\n",
-            "tests/test_something.py",
+            "pkg/test_something.py",
             "from .models import X\n\ndef test_x():\n    pass\n",
             &[],
         );
@@ -2017,13 +2118,13 @@ def endpoint():
         let mapping = r.mappings.iter().find(|m| m.production_file == r.prod_path);
         assert!(
             mapping.is_some(),
-            "tests/models.py not found in mappings: {:?}",
+            "pkg/models.py not found in mappings: {:?}",
             r.mappings
         );
         let mapping = mapping.unwrap();
         assert!(
             mapping.test_files.contains(&r.test_path),
-            "test_something.py not in test_files for tests/models.py: {:?}",
+            "test_something.py not in test_files for pkg/models.py: {:?}",
             mapping.test_files
         );
     }
@@ -2203,13 +2304,13 @@ def endpoint():
     }
 
     // -----------------------------------------------------------------------
-    // PY-ABS-05: mixed absolute + relative imports in same test file -> both resolved
+    // PY-ABS-05: absolute import in test file maps to production file outside tests/
     // -----------------------------------------------------------------------
     #[test]
     fn py_abs_05_mixed_absolute_and_relative_imports() {
-        // Given: a test file with both `from models.cars import Car` (absolute)
-        //        and `from .helpers import setup` (relative),
-        //        models/cars.py and tests/helpers.py both exist at scan_root
+        // Given: a test file with `from models.cars import Car` (absolute),
+        //        models/cars.py exists at scan_root,
+        //        tests/helpers.py also exists but is a test helper (Phase 20: excluded)
         let tmp = tempfile::tempdir().unwrap();
         let models_dir = tmp.path().join("models");
         let tests_dir = tmp.path().join("tests");
@@ -2255,18 +2356,12 @@ def endpoint():
             cars_m.test_files
         );
 
-        // Then: tests/helpers.py is mapped via relative import (Layer 2)
+        // Then: tests/helpers.py should NOT appear in mappings (Phase 20: tests/ dir files are helpers)
         let helpers_mapping = result.iter().find(|m| m.production_file == helpers_prod);
         assert!(
-            helpers_mapping.is_some(),
-            "tests/helpers.py not found in mappings: {:?}",
-            result
-        );
-        let helpers_m = helpers_mapping.unwrap();
-        assert!(
-            helpers_m.test_files.contains(&test_path),
-            "test_mixed.py not mapped to tests/helpers.py via relative import: {:?}",
-            helpers_m.test_files
+            helpers_mapping.is_none(),
+            "tests/helpers.py should be excluded as test helper (Phase 20), but found in mappings: {:?}",
+            helpers_mapping
         );
     }
 
@@ -3869,36 +3964,34 @@ def test_user_detail():
     //
     // When L1 core (dir, stem) already matches, stem-only fallback should be
     // suppressed for that test to avoid adding cross-directory duplicates.
+    // Note: production file uses svc/ (not tests/) since Phase 20 excludes tests/ files.
     // -----------------------------------------------------------------------
     #[test]
     fn py_l1x_05_l1_core_match_suppresses_fallback() {
         use tempfile::TempDir;
 
-        // Given: tests/client.py (L1 core match: dir=tests/, stem=client)
+        // Given: svc/client.py (L1 core match: dir=svc/, stem=client)
         //        pkg/client.py (would match via stem-only fallback if L1 core is absent)
-        //        tests/test_client.py (no imports)
+        //        svc/test_client.py (no imports)
         let dir = TempDir::new().unwrap();
         let pkg = dir.path().join("pkg");
+        let svc = dir.path().join("svc");
         std::fs::create_dir_all(&pkg).unwrap();
-        let tests_dir = dir.path().join("tests");
-        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::create_dir_all(&svc).unwrap();
 
-        std::fs::write(tests_dir.join("client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(svc.join("client.py"), "class Client:\n    pass\n").unwrap();
         std::fs::write(pkg.join("client.py"), "class Client:\n    pass\n").unwrap();
 
         // No imports -- avoids L2 influence; only L1 core and stem-only fallback apply
         let test_content = "def test_client():\n    pass\n";
-        std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
+        std::fs::write(svc.join("test_client.py"), test_content).unwrap();
 
-        let tests_client_path = tests_dir.join("client.py").to_string_lossy().into_owned();
+        let svc_client_path = svc.join("client.py").to_string_lossy().into_owned();
         let pkg_client_path = pkg.join("client.py").to_string_lossy().into_owned();
-        let test_path = tests_dir
-            .join("test_client.py")
-            .to_string_lossy()
-            .into_owned();
+        let test_path = svc.join("test_client.py").to_string_lossy().into_owned();
 
         let extractor = PythonExtractor::new();
-        let production_files = vec![tests_client_path.clone(), pkg_client_path.clone()];
+        let production_files = vec![svc_client_path.clone(), pkg_client_path.clone()];
         let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
             .into_iter()
             .collect();
@@ -3907,15 +4000,15 @@ def test_user_detail():
         let result =
             extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
 
-        // Then: test_client.py is mapped to tests/client.py only (L1 core match)
-        let tests_client_mapped = result
+        // Then: test_client.py is mapped to svc/client.py only (L1 core match)
+        let svc_client_mapped = result
             .iter()
-            .find(|m| m.production_file == tests_client_path)
+            .find(|m| m.production_file == svc_client_path)
             .map(|m| m.test_files.contains(&test_path))
             .unwrap_or(false);
         assert!(
-            tests_client_mapped,
-            "test_client.py should be mapped to tests/client.py via L1 core. mappings={:?}",
+            svc_client_mapped,
+            "test_client.py should be mapped to svc/client.py via L1 core. mappings={:?}",
             result
         );
 
@@ -4708,6 +4801,88 @@ class TestMyModel(unittest.TestCase):
         assert!(
             http_client_mapping.unwrap().test_files.contains(&test_file),
             "test_http_client.py should map to http_client.py (primary SUT)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-E2E-HELPER: test helper excluded from mappings
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_e2e_helper_excluded_from_mappings() {
+        // Given: tests/helpers.py is a test helper imported by tests/test_client.py
+        //        pkg/client.py is the production SUT
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Write fixture files
+        let files: &[(&str, &str)] = &[
+            ("pkg/__init__.py", ""),
+            ("pkg/client.py", "class Client:\n    def connect(self):\n        return True\n"),
+            ("tests/__init__.py", ""),
+            ("tests/helpers.py", "def mock_client():\n    return \"mock\"\n"),
+            (
+                "tests/test_client.py",
+                "from pkg.client import Client\nfrom tests.helpers import mock_client\n\ndef test_connect():\n    client = Client()\n    assert client.connect()\n\ndef test_with_mock():\n    mc = mock_client()\n    assert mc == \"mock\"\n",
+            ),
+        ];
+        for (rel, content) in files {
+            let path = root.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&path, content).unwrap();
+        }
+
+        let extractor = PythonExtractor::new();
+
+        // production_files: pkg/client.py and tests/helpers.py
+        // (discover_files would put helpers.py in production_files since it's not test_*.py)
+        let client_abs = root.join("pkg/client.py").to_string_lossy().into_owned();
+        let helpers_abs = root.join("tests/helpers.py").to_string_lossy().into_owned();
+        let production_files = vec![client_abs.clone(), helpers_abs.clone()];
+
+        let test_abs = root
+            .join("tests/test_client.py")
+            .to_string_lossy()
+            .into_owned();
+        let test_content = "from pkg.client import Client\nfrom tests.helpers import mock_client\n\ndef test_connect():\n    client = Client()\n    assert client.connect()\n\ndef test_with_mock():\n    mc = mock_client()\n    assert mc == \"mock\"\n";
+        let test_sources: HashMap<String, String> = [(test_abs.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let mappings =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, root);
+
+        // Then: tests/helpers.py should NOT appear as a production_file in any mapping
+        for m in &mappings {
+            assert!(
+                !m.production_file.contains("helpers.py"),
+                "helpers.py should be excluded as test helper, but found in mapping: {:?}",
+                m
+            );
+        }
+
+        // Then: pkg/client.py SHOULD be mapped to test_client.py
+        let client_mapping = mappings
+            .iter()
+            .find(|m| m.production_file.contains("client.py"));
+        assert!(
+            client_mapping.is_some(),
+            "pkg/client.py should be mapped; got {:?}",
+            mappings
+                .iter()
+                .map(|m| &m.production_file)
+                .collect::<Vec<_>>()
+        );
+        let client_mapping = client_mapping.unwrap();
+        assert!(
+            client_mapping
+                .test_files
+                .iter()
+                .any(|t| t.contains("test_client.py")),
+            "pkg/client.py should map to test_client.py; got {:?}",
+            client_mapping.test_files
         );
     }
 }
