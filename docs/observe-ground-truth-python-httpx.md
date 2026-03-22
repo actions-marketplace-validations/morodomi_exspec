@@ -3,7 +3,7 @@
 Repository: encode/httpx
 Commit: b5addb64
 Auditor: Human + generate_python_gt.py (auto) + manual correction
-Date: 2026-03-19
+Date: 2026-03-19 (initial), 2026-03-22 (Phase 21 re-audit: secondary_targets expanded)
 
 ## Methodology
 
@@ -109,7 +109,7 @@ Date: 2026-03-19
     },
     "tests/test_timeouts.py": {
       "primary_targets": ["httpx/_config.py"],
-      "secondary_targets": ["httpx/_client.py"],
+      "secondary_targets": ["httpx/_client.py", "httpx/_exceptions.py"],
       "evidence": {
         "httpx/_config.py": ["symbol_assertion"]
       }
@@ -130,7 +130,7 @@ Date: 2026-03-19
     },
     "tests/client/test_async_client.py": {
       "primary_targets": ["httpx/_client.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_exceptions.py", "httpx/_models.py", "httpx/_transports/base.py"],
       "evidence": {
         "httpx/_client.py": ["symbol_assertion"]
       }
@@ -159,49 +159,49 @@ Date: 2026-03-19
     },
     "tests/client/test_event_hooks.py": {
       "primary_targets": ["httpx/_client.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_exceptions.py", "httpx/_models.py"],
       "evidence": {
         "httpx/_client.py": ["symbol_assertion"]
       }
     },
     "tests/client/test_headers.py": {
       "primary_targets": ["httpx/_models.py"],
-      "secondary_targets": ["httpx/_client.py"],
+      "secondary_targets": ["httpx/_client.py", "httpx/_urls.py"],
       "evidence": {
         "httpx/_models.py": ["symbol_assertion"]
       }
     },
     "tests/client/test_properties.py": {
       "primary_targets": ["httpx/_client.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_config.py", "httpx/_models.py", "httpx/_urls.py"],
       "evidence": {
         "httpx/_client.py": ["symbol_assertion"]
       }
     },
     "tests/client/test_proxies.py": {
       "primary_targets": ["httpx/_client.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_transports/default.py", "httpx/_urls.py"],
       "evidence": {
         "httpx/_client.py": ["symbol_assertion"]
       }
     },
     "tests/client/test_queryparams.py": {
       "primary_targets": ["httpx/_models.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_client.py", "httpx/_urls.py"],
       "evidence": {
         "httpx/_models.py": ["symbol_assertion"]
       }
     },
     "tests/client/test_redirects.py": {
       "primary_targets": ["httpx/_client.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_exceptions.py", "httpx/_models.py", "httpx/_status_codes.py", "httpx/_urls.py"],
       "evidence": {
         "httpx/_client.py": ["symbol_assertion"]
       }
     },
     "tests/models/test_cookies.py": {
       "primary_targets": ["httpx/_models.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_exceptions.py"],
       "evidence": {
         "httpx/_models.py": ["symbol_assertion"]
       }
@@ -215,28 +215,28 @@ Date: 2026-03-19
     },
     "tests/models/test_queryparams.py": {
       "primary_targets": ["httpx/_models.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_urls.py"],
       "evidence": {
         "httpx/_models.py": ["symbol_assertion"]
       }
     },
     "tests/models/test_requests.py": {
       "primary_targets": ["httpx/_models.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_exceptions.py"],
       "evidence": {
         "httpx/_models.py": ["symbol_assertion"]
       }
     },
     "tests/models/test_responses.py": {
       "primary_targets": ["httpx/_models.py"],
-      "secondary_targets": [],
+      "secondary_targets": ["httpx/_exceptions.py"],
       "evidence": {
         "httpx/_models.py": ["symbol_assertion"]
       }
     },
     "tests/models/test_url.py": {
       "primary_targets": ["httpx/_urls.py"],
-      "secondary_targets": ["httpx/_urlparse.py"],
+      "secondary_targets": ["httpx/_urlparse.py", "httpx/_exceptions.py"],
       "evidence": {
         "httpx/_urls.py": ["symbol_assertion"]
       }

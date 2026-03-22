@@ -97,6 +97,32 @@ pub fn is_non_sut_helper(file_path: &str, is_known_production: bool) -> bool {
         return true;
     }
 
+    // Phase 21: Metadata/fixture/type-only files are always non-SUT helpers,
+    // even if they appear in production_files list.
+    // These files are frequently re-exported via barrels and cause FP fan-out.
+    let stem_only = Path::new(file_path)
+        .file_stem()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+
+    // __version__.py: package metadata, not a SUT
+    if stem_only == "__version__" {
+        return true;
+    }
+
+    // _types.py / __types__.py: pure type-definition files
+    {
+        let normalized = stem_only.trim_matches('_');
+        if normalized == "types" || normalized.ends_with("_types") {
+            return true;
+        }
+    }
+
+    // mock.py / mock_*.py: test fixture/infrastructure
+    if stem_only == "mock" || stem_only.starts_with("mock_") {
+        return true;
+    }
+
     if is_known_production {
         return false;
     }
@@ -4895,6 +4921,170 @@ class TestMyModel(unittest.TestCase):
                 .any(|t| t.contains("test_client.py")),
             "pkg/client.py should map to test_client.py; got {:?}",
             client_mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-FP-01: MockTransport fixture re-exported via barrel should NOT be mapped.
+    //
+    // is_non_sut_helper excludes mock*.py files from production_files.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_fp_01_mock_transport_fixture_not_mapped() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let pkg = root.join("pkg");
+        let transports = pkg.join("_transports");
+        let tests_dir = root.join("tests");
+        std::fs::create_dir_all(&transports).unwrap();
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(
+            transports.join("mock.py"),
+            "class MockTransport:\n    pass\n",
+        )
+        .unwrap();
+        std::fs::write(
+            transports.join("__init__.py"),
+            "from .mock import MockTransport\n",
+        )
+        .unwrap();
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(
+            pkg.join("__init__.py"),
+            "from ._transports import *\nfrom ._client import Client\n",
+        )
+        .unwrap();
+
+        let test_content = "import pkg\n\ndef test_hooks():\n    client = pkg.Client(transport=pkg.MockTransport())\n    assert client is not None\n";
+        std::fs::write(tests_dir.join("test_hooks.py"), test_content).unwrap();
+
+        let mock_path = transports.join("mock.py").to_string_lossy().into_owned();
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_hooks.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![mock_path.clone(), client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        let result = extractor.map_test_files_with_imports(&production_files, &test_sources, root);
+
+        let mock_mapping = result.iter().find(|m| m.production_file == mock_path);
+        assert!(
+            mock_mapping.is_none() || mock_mapping.unwrap().test_files.is_empty(),
+            "mock.py should NOT be mapped (fixture); mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-FP-02: __version__.py incidental should NOT be mapped.
+    //
+    // is_non_sut_helper excludes __version__.py from production_files.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_fp_02_version_py_incidental_not_mapped() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let pkg = root.join("pkg");
+        let tests_dir = root.join("tests");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(pkg.join("__version__.py"), "__version__ = \"1.0.0\"\n").unwrap();
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(
+            pkg.join("__init__.py"),
+            "from .__version__ import __version__\nfrom ._client import Client\n",
+        )
+        .unwrap();
+
+        let test_content = "import pkg\n\ndef test_headers():\n    expected = f\"python-pkg/{pkg.__version__}\"\n    assert expected == \"python-pkg/1.0.0\"\n";
+        std::fs::write(tests_dir.join("test_headers.py"), test_content).unwrap();
+
+        let version_path = pkg.join("__version__.py").to_string_lossy().into_owned();
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_headers.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![version_path.clone(), client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        let result = extractor.map_test_files_with_imports(&production_files, &test_sources, root);
+
+        let version_mapping = result.iter().find(|m| m.production_file == version_path);
+        assert!(
+            version_mapping.is_none() || version_mapping.unwrap().test_files.is_empty(),
+            "__version__.py should NOT be mapped (metadata); mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-FP-03: _types.py type-annotation-only should NOT be mapped.
+    //
+    // is_non_sut_helper excludes _types.py from production_files.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_fp_03_types_py_annotation_not_mapped() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let pkg = root.join("pkg");
+        let tests_dir = root.join("tests");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(
+            pkg.join("_types.py"),
+            "from typing import Union\nQueryParamTypes = Union[str, dict]\n",
+        )
+        .unwrap();
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(
+            pkg.join("__init__.py"),
+            "from ._types import *\nfrom ._client import Client\n",
+        )
+        .unwrap();
+
+        let test_content = "import pkg\n\ndef test_client():\n    client = pkg.Client()\n    assert client is not None\n";
+        std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
+
+        let types_path = pkg.join("_types.py").to_string_lossy().into_owned();
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_client.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![types_path.clone(), client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        let result = extractor.map_test_files_with_imports(&production_files, &test_sources, root);
+
+        let types_mapping = result.iter().find(|m| m.production_file == types_path);
+        assert!(
+            types_mapping.is_none() || types_mapping.unwrap().test_files.is_empty(),
+            "_types.py should NOT be mapped (type definitions); mappings={:?}",
+            result
         );
     }
 }
