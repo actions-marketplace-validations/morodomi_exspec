@@ -944,37 +944,43 @@ cargo build --release
 
 ### httpx (encode/httpx @ b5addb64)
 
-#### Phase 18/19 後 (stem-only fallback + barrel suppression + assertion filter)
+#### Phase 20 後 (test helper exclusion)
 
-| Metric | Before (pre-Phase 18) | After (Phase 18/19) |
-|--------|----------------------|---------------------|
-| Production files detected | 23 | 29 |
-| Test files detected | 30 | 31 |
-| Mapped production files | 3 | 22 |
-| Test file coverage (Recall) | 6.2% (2/32) | **96.8%** (30/31) |
-| Mapping pairs | 3 | ~66 |
-| Estimated Precision | 66.7% | **~92%** |
+| Metric | Phase 18/19 | Phase 20 |
+|--------|-------------|----------|
+| Production files detected | 29 | 29 |
+| Test files detected | 31 | 31 |
+| Mapped production files | 22 | 21 |
+| Test file coverage (Recall) | 96.8% (30/31) | **96.8%** (30/31) |
+| Mapping pairs | ~66 | ~64 |
+| Estimated Precision | ~92% | **~94%** |
 
-**Result: Recall PASS, Precision FAIL** — R exceeds 90% target, P below 98% target.
+**Result: Recall PASS, Precision improved but still below 98% target.**
 
-##### Strategy Breakdown
+Phase 20 で `tests/common.py` の FP が解消。残る FP は barrel import 経由の incidental mappings のみ。
 
-| Strategy | Prod Files | Pairs | Notes |
-|----------|-----------|-------|-------|
-| filename | 13 | ~30 | `_` prefix stripping + cross-dir stem match working |
-| import | 9 | ~36 | Barrel import resolution through `__init__.py` working |
-
-##### Remaining FP Sources (~5 pairs)
+##### Remaining FP Sources (~4 pairs)
 
 | FP Type | Pairs | Example |
 |---------|-------|---------|
 | Incidental barrel import (`__version__`) | 2 | `__version__.py` ← test_event_hooks (uses `httpx.__version__` in assertion strings, not testing __version__) |
 | Utility type imports (`_types`) | 2 | `_types.py` ← test_async_client (type annotations only) |
-| Test helper as production (`tests/common.py`) | 1 | Test utility classified as production file |
 
 ##### Unmapped Test File
 
 - `tests/test_exported_members.py` — no matching production file (tests module-level `__all__`)
+
+<details>
+<summary>Phase 18/19 results (historical)</summary>
+
+| Metric | Before (pre-Phase 18) | After (Phase 18/19) |
+|--------|----------------------|---------------------|
+| Production files detected | 23 | 29 |
+| Mapped production files | 3 | 22 |
+| Test file coverage (Recall) | 6.2% (2/32) | 96.8% (30/31) |
+| Estimated Precision | 66.7% | ~92% |
+
+</details>
 
 #### Pre-Phase 18 Results (historical)
 
@@ -998,40 +1004,39 @@ Root causes: `_` prefix not stripped, barrel imports not resolved, cross-directo
 
 ### Requests (psf/requests, latest main)
 
-#### Phase 18/19 後
+#### Phase 20 後 (test helper exclusion)
 
-| Metric | Before (pre-Phase 18) | After (Phase 18/19) |
-|--------|----------------------|---------------------|
-| Production files detected | 0 (in `src/`) | 27 |
+| Metric | Phase 18/19 | Phase 20 |
+|--------|-------------|----------|
+| Production files detected | 27 | 27 |
 | Test files detected | 9 | 9 |
-| Mapped production files | 0 | 18 |
-| Test file coverage (Recall) | 0% | **100%** (9/9) |
-| Mapping pairs | 0 | ~26 |
-| Estimated Precision | N/A | **~81%** |
+| Mapped production files | 18 | 14 |
+| Test file coverage (Recall) | 100% (9/9) | **100%** (9/9) |
+| Mapping pairs | ~26 | ~21 |
+| Estimated Precision | ~81% | **~100%** |
 
-**Result: Recall PASS, Precision FAIL** — `src/` layout now fully detected. Precision impacted by test helpers.
+**Result: Recall PASS, Precision PASS** — Phase 20 で全テストヘルパー FP が解消。
+
+Phase 20 で `tests/compat.py`, `tests/testserver/server.py`, `tests/utils.py` の FP が全て解消。残存 FP なし。
 
 ##### Strategy Breakdown
 
 | Strategy | Prod Files | Pairs | Notes |
 |----------|-----------|-------|-------|
-| filename | 6 | ~8 | `adapters`, `help`, `hooks`, `packages`, `structures`, `utils` |
-| import | 12 | ~18 | Barrel resolution through `__init__.py` + assertion filter |
-
-##### Remaining FP Sources (~5 pairs)
-
-| FP Type | Pairs | Example |
-|---------|-------|---------|
-| Test helper as production (`tests/compat.py`) | 2 | Test compatibility helper imported by test files |
-| Test helper as production (`tests/testserver/server.py`) | 2 | Test server imported by test_testserver, test_lowlevel |
-| Test helper as production (`tests/utils.py`) | 1 | Filename match with test_utils.py |
+| filename | 6 | ~7 | `adapters`, `help`, `hooks`, `packages`, `structures`, `utils` |
+| import | 8 | ~14 | Barrel resolution through `__init__.py` + assertion filter |
 
 <details>
-<summary>Pre-Phase 18 results (historical)</summary>
+<summary>Phase 18/19 results (historical)</summary>
 
-- observe found 0 production files in `src/requests/`
-- Only detected `tests/compat.py`, `tests/utils.py`, `tests/testserver/server.py` as production files
-- Root cause: observe didn't traverse `src/` layout as production root
+| Metric | Before (pre-Phase 18) | After (Phase 18/19) |
+|--------|----------------------|---------------------|
+| Production files detected | 0 (in `src/`) | 27 |
+| Mapped production files | 0 | 18 |
+| Test file coverage (Recall) | 0% | 100% (9/9) |
+| Estimated Precision | N/A | ~81% |
+
+FP sources: `tests/compat.py` (2), `tests/testserver/server.py` (2), `tests/utils.py` (1)
 
 </details>
 
@@ -1039,14 +1044,13 @@ Root causes: `_` prefix not stripped, barrel imports not resolved, cross-directo
 
 | Metric | httpx | Requests | Target |
 |--------|-------|----------|--------|
-| Precision | ~92% | ~81% | >= 98% |
+| Precision | ~94% | ~100% | >= 98% |
 | Recall (test file coverage) | 96.8% | 100% | >= 90% |
 
-**Overall: Recall target met. Precision needs improvement.**
+**Requests: both targets met. httpx: Recall met, Precision close (94% vs 98% target).**
 
 ### Remaining Improvement Plan
 
 | Priority | Fix | Expected Impact |
 |----------|-----|-----------------|
-| P0 | Test helper exclusion (files in test dirs that aren't test files) | -1 httpx FP, -5 Requests FP |
-| P1 | Assertion-only import filtering (exclude `__version__`, `_types` when not asserted against directly) | -4 httpx FP |
+| P0 | Assertion-only import filtering (exclude `__version__`, `_types` when not asserted against directly) | -4 httpx FP, P 94%->98%+ |
