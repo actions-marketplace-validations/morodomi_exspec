@@ -5087,4 +5087,39 @@ class TestMyModel(unittest.TestCase):
             result
         );
     }
+
+    // -----------------------------------------------------------------------
+    // PY-RESOLVE-PRIORITY-01: file wins over package when both exist
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_resolve_priority_01_file_wins_over_package() {
+        // Given: tempdir with both foo/bar/baz.py and foo/bar/baz/__init__.py
+        let tmp = tempfile::tempdir().unwrap();
+        let baz_dir = tmp.path().join("foo").join("bar").join("baz");
+        std::fs::create_dir_all(&baz_dir).unwrap();
+        let baz_file = tmp.path().join("foo").join("bar").join("baz.py");
+        std::fs::write(&baz_file, "class Baz: pass\n").unwrap();
+        let baz_init = baz_dir.join("__init__.py");
+        std::fs::write(&baz_init, "from .impl import Baz\n").unwrap();
+
+        let canonical_root = tmp.path().canonicalize().unwrap();
+        let base = tmp.path().join("foo").join("bar").join("baz");
+        let extractor = PythonExtractor::new();
+
+        // When: resolve_absolute_base_to_file is called
+        let result =
+            exspec_core::observe::resolve_absolute_base_to_file(&extractor, &base, &canonical_root);
+
+        // Then: resolves to baz.py (file), not baz/__init__.py (package)
+        assert!(result.is_some(), "expected resolution, got None");
+        let resolved = result.unwrap();
+        assert!(
+            resolved.ends_with("baz.py"),
+            "expected baz.py (file wins over package), got: {resolved}"
+        );
+        assert!(
+            !resolved.contains("__init__"),
+            "should NOT resolve to __init__.py, got: {resolved}"
+        );
+    }
 }

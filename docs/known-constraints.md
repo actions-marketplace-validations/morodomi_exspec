@@ -73,6 +73,25 @@ Python observe's Layer 2 (import tracing) supports the standard `src/` layout (`
 - Only `src/` at depth 1 is supported. Non-standard layouts like `source/`, `lib/`, or nested `src/src/` are not detected.
 - The fallback is tried after the direct resolution, so if both `package/module.py` and `src/package/module.py` exist, the direct resolution wins.
 
+## Python observe: shadow variable in attribute-access query
+
+Python observe's `bare_import_attribute.scm` query matches `obj.attr` expressions where `obj` is a bare import name. This is used to trace attribute-access-based imports like `requests.get()` back to the `requests` module.
+
+**Limitation**: The query cannot distinguish module-level names from local variables that shadow the module name:
+
+```python
+import requests
+
+def test_it():
+    requests = config.requests  # shadows the module
+    requests.get("/api")        # incorrectly captured as module attribute access
+```
+
+**Mitigation**: The false positive rate is low in practice because:
+1. Only identifiers that appear in a `import X` or `from X import ...` statement are tracked
+2. Variable shadowing of module names is rare in test code
+3. Even when shadowed, the mapping usually points to the correct production module
+
 ## Callback / wrapper patterns
 
 Tests that pass assertions through callbacks (e.g. `done()` in Mocha-style async tests) or return assertion wrappers may not be recognized:
