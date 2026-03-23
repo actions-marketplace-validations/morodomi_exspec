@@ -872,8 +872,8 @@ impl PythonExtractor {
             .collect();
 
         // Layer 1 extension: stem-only fallback (cross-directory match)
-        // For test files that L1 core did not match, attempt stem-only match against all prod files.
-        // This handles the httpx-like case where tests/ and pkg/ are in different directories.
+        // For test files that L1 core did not match, attempt stem-only match against prod files.
+        // Stem collision guard: if multiple prod files share the same stem, defer to L2 import tracing.
         {
             // Build stem -> list of production indices (stem stripped of leading `_`)
             let mut stem_to_prod_indices: HashMap<String, Vec<usize>> = HashMap::new();
@@ -899,6 +899,9 @@ impl PythonExtractor {
                 }
                 if let Some(tstem) = self.test_stem(test_file) {
                     if let Some(prod_indices) = stem_to_prod_indices.get(tstem) {
+                        if prod_indices.len() > 1 {
+                            continue; // stem collision: defer to L2 import tracing
+                        }
                         for &idx in prod_indices {
                             if !mappings[idx].test_files.contains(test_file) {
                                 mappings[idx].test_files.push(test_file.clone());
@@ -4098,17 +4101,18 @@ def test_user_detail():
     }
 
     // -----------------------------------------------------------------------
-    // PY-L1X-04: stem ambiguity: same stem in multiple prod files -> mapped to all
+    // PY-L1X-04: stem collision -- no imports -> L1 stem-only fallback defers to L2
     //
-    // When multiple prod files share the same stem, recall takes priority:
-    // all matching prod files should include the test.
+    // When multiple prod files share the same stem and the test has no imports,
+    // the collision guard prevents L1 stem-only from mapping to any of them.
+    // Precision takes priority over recall in this case.
     // -----------------------------------------------------------------------
     #[test]
-    fn py_l1x_04_stem_ambiguity_maps_to_all() {
+    fn py_l1x_04_stem_collision_defers_to_l2() {
         use tempfile::TempDir;
 
         // Given: pkg/client.py, pkg/aio/client.py, and tests/test_client.py (no imports)
-        //        Both have stem "client"; test has stem "client" -> should map to both
+        //        Both have stem "client"; test has stem "client" but no import -> collision guard fires
         let dir = TempDir::new().unwrap();
         let pkg = dir.path().join("pkg");
         let pkg_aio = pkg.join("aio");
@@ -4120,7 +4124,7 @@ def test_user_detail():
         std::fs::write(pkg.join("client.py"), "class Client:\n    pass\n").unwrap();
         std::fs::write(pkg_aio.join("client.py"), "class AsyncClient:\n    pass\n").unwrap();
 
-        // No imports -- forces reliance on stem-only fallback
+        // No imports -- collision guard should prevent stem-only fallback from mapping
         let test_content = "def test_client():\n    pass\n";
         std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
 
@@ -4141,16 +4145,15 @@ def test_user_detail():
         let result =
             extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
 
-        // Then: test_client.py is mapped to BOTH pkg/client.py and pkg/aio/client.py
-        //       (recall priority: all matching stems are included)
+        // Then: test_client.py is NOT mapped to pkg/client.py (collision guard defers to L2)
         let client_mapped = result
             .iter()
             .find(|m| m.production_file == client_path)
             .map(|m| m.test_files.contains(&test_path))
             .unwrap_or(false);
         assert!(
-            client_mapped,
-            "test_client.py should be mapped to pkg/client.py (stem ambiguity -> all). mappings={:?}",
+            !client_mapped,
+            "test_client.py should NOT be mapped to pkg/client.py (stem collision -> defer to L2). mappings={:?}",
             result
         );
 
@@ -4160,8 +4163,8 @@ def test_user_detail():
             .map(|m| m.test_files.contains(&test_path))
             .unwrap_or(false);
         assert!(
-            aio_mapped,
-            "test_client.py should be mapped to pkg/aio/client.py (stem ambiguity -> all). mappings={:?}",
+            !aio_mapped,
+            "test_client.py should NOT be mapped to pkg/aio/client.py (stem collision -> defer to L2). mappings={:?}",
             result
         );
     }
@@ -4228,6 +4231,159 @@ def test_user_detail():
         assert!(
             pkg_not_mapped,
             "pkg/client.py should NOT be mapped (L1 core match suppresses stem-only fallback). mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-L1X-06: stem collision + L2 import -> maps to the correct file via ImportTracing
+    //
+    // When multiple prod files share the same stem, stem-only fallback defers to L2.
+    // If the test has a direct import, L2 resolves it to the correct file.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_l1x_06_stem_collision_with_l2_import_resolves_correctly() {
+        use std::collections::HashMap;
+        use tempfile::TempDir;
+
+        // Given: pkg/client.py, pkg/aio/client.py (same stem "client")
+        //        tests/test_client.py has "from pkg.client import Client" (direct import)
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        let pkg_aio = pkg.join("aio");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::create_dir_all(&pkg_aio).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(pkg.join("client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(pkg_aio.join("client.py"), "class AsyncClient:\n    pass\n").unwrap();
+
+        // Direct import to pkg.client -> L2 resolves to pkg/client.py
+        let test_content =
+            "from pkg.client import Client\n\ndef test_client():\n    assert Client()\n";
+        std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
+
+        let client_path = pkg.join("client.py").to_string_lossy().into_owned();
+        let aio_client_path = pkg_aio.join("client.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_client.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![client_path.clone(), aio_client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: test_client.py is mapped to pkg/client.py only (L2 ImportTracing)
+        let client_mapping = result.iter().find(|m| m.production_file == client_path);
+        assert!(
+            client_mapping.is_some(),
+            "pkg/client.py not found in mappings: {:?}",
+            result
+        );
+        let client_mapping = client_mapping.unwrap();
+        assert!(
+            client_mapping.test_files.contains(&test_path),
+            "test_client.py should be mapped to pkg/client.py via L2. mappings={:?}",
+            result
+        );
+        assert_eq!(
+            client_mapping.strategy,
+            MappingStrategy::ImportTracing,
+            "strategy should be ImportTracing (L2), got {:?}",
+            client_mapping.strategy
+        );
+
+        // Then: pkg/aio/client.py is NOT mapped (collision guard + L2 resolves to pkg/client.py)
+        let aio_mapped = result
+            .iter()
+            .find(|m| m.production_file == aio_client_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            !aio_mapped,
+            "test_client.py should NOT be mapped to pkg/aio/client.py. mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-L1X-07: stem collision + barrel import -> L2 barrel resolves to correct file
+    //
+    // When multiple prod files share the same stem, and the test imports via barrel,
+    // L2 barrel tracing resolves to the correct file (not all files with that stem).
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_l1x_07_stem_collision_with_barrel_import_resolves_correctly() {
+        use std::collections::HashMap;
+        use tempfile::TempDir;
+
+        // Given: pkg/__init__.py (barrel: "from .client import Client")
+        //        pkg/client.py, pkg/aio/client.py (same stem "client")
+        //        tests/test_client.py has "from pkg import Client" (barrel import)
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        let pkg_aio = pkg.join("aio");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::create_dir_all(&pkg_aio).unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        // Barrel re-exports Client from pkg/client.py (not pkg/aio/client.py)
+        std::fs::write(pkg.join("__init__.py"), "from .client import Client\n").unwrap();
+        std::fs::write(pkg.join("client.py"), "class Client:\n    pass\n").unwrap();
+        std::fs::write(pkg_aio.join("client.py"), "class AsyncClient:\n    pass\n").unwrap();
+
+        // Import via barrel -> L2 barrel tracing should resolve to pkg/client.py
+        let test_content = "from pkg import Client\n\ndef test_client():\n    assert Client()\n";
+        std::fs::write(tests_dir.join("test_client.py"), test_content).unwrap();
+
+        let client_path = pkg.join("client.py").to_string_lossy().into_owned();
+        let aio_client_path = pkg_aio.join("client.py").to_string_lossy().into_owned();
+        let test_path = tests_dir
+            .join("test_client.py")
+            .to_string_lossy()
+            .into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![client_path.clone(), aio_client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: collision guard prevents L1 stem-only from mapping to both files
+        //       L2 barrel import resolves to pkg/client.py (via __init__.py re-export)
+        let client_mapped = result
+            .iter()
+            .find(|m| m.production_file == client_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            client_mapped,
+            "test_client.py should be mapped to pkg/client.py via barrel L2. mappings={:?}",
+            result
+        );
+
+        // Then: pkg/aio/client.py is NOT mapped (barrel only re-exports pkg.client)
+        let aio_mapped = result
+            .iter()
+            .find(|m| m.production_file == aio_client_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            !aio_mapped,
+            "test_client.py should NOT be mapped to pkg/aio/client.py. mappings={:?}",
             result
         );
     }
