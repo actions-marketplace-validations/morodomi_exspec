@@ -981,6 +981,15 @@ impl PythonExtractor {
                                 sym_slice,
                                 &mut idx_to_symbols,
                             );
+                            // Direct (non-barrel) bare relative import → assertion filter bypass
+                            // Note: barrel files are skipped above for L1-matched tests only.
+                            // For non-L1-matched tests, barrel imports may reach here, but
+                            // !is_barrel_file prevents them from being added to direct_import_indices.
+                            if !self.is_barrel_file(&resolved) {
+                                for &idx in all_matched.difference(&before) {
+                                    direct_import_indices.insert(idx);
+                                }
+                            }
                         }
                     }
                     continue;
@@ -1010,6 +1019,13 @@ impl PythonExtractor {
                         &canonical_root,
                     );
                     track_new_matches(&all_matched, &before, &import.symbols, &mut idx_to_symbols);
+                    // Direct (non-barrel) non-bare relative import → assertion filter bypass
+                    let is_direct = !self.is_barrel_file(&resolved);
+                    if is_direct {
+                        for &idx in all_matched.difference(&before) {
+                            direct_import_indices.insert(idx);
+                        }
+                    }
                 }
             }
 
@@ -5623,6 +5639,137 @@ class TestMyModel(unittest.TestCase):
         assert!(
             helpers_mapped,
             "pkg/_internal/_helpers.py should be mapped via nested direct import. mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-SUBMOD-05: non-bare relative direct import bypass
+    //
+    // `from ._config import Config` is a non-bare relative direct import.
+    // Even though `Config` does not appear in assertions (only `Client` is
+    // asserted, which comes from the barrel), _config.py SHOULD be mapped
+    // because direct_import_indices bypass the assertion filter.
+    // (Fixed in #146: relative import branches now populate direct_import_indices)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_submod_05_non_bare_relative_direct_import_bypass() {
+        use std::collections::HashMap;
+        use tempfile::TempDir;
+
+        // Given: pkg/_config.py (non-barrel production file, has Config)
+        //        pkg/_client.py (non-barrel production file, has Client)
+        //        pkg/__init__.py (barrel: re-exports Client from ._client)
+        //        pkg/test_app.py (stem "app", no L1 match to _config or _client):
+        //          import pkg                    <- barrel import
+        //          from ._config import Config   <- non-bare relative direct import
+        //          def test_something():
+        //              assert pkg.Client()       <- assertion uses Client (from _client),
+        //                                           NOT Config (from _config)
+        //
+        // Key: test file is named "test_app.py" (stem "app") so L1 stem matching
+        //      does NOT match _config.py (stem "config") or _client.py (stem "client").
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+
+        std::fs::write(pkg.join("_config.py"), "class Config:\n    pass\n").unwrap();
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+        // __init__.py re-exports Client (NOT Config)
+        std::fs::write(pkg.join("__init__.py"), "from ._client import Client\n").unwrap();
+
+        let test_content = "import pkg\nfrom ._config import Config\n\ndef test_something():\n    assert pkg.Client()\n";
+        std::fs::write(pkg.join("test_app.py"), test_content).unwrap();
+
+        let config_path = pkg.join("_config.py").to_string_lossy().into_owned();
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let test_path = pkg.join("test_app.py").to_string_lossy().into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![config_path.clone(), client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: _config.py IS mapped (non-bare relative direct import bypasses assertion filter)
+        let config_mapped = result
+            .iter()
+            .find(|m| m.production_file == config_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            config_mapped,
+            "pkg/_config.py should be mapped via non-bare relative direct import (assertion filter bypass). mappings={:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-SUBMOD-06: bare relative direct import bypass
+    //
+    // `from . import utils` is a bare relative direct import.
+    // Even though `utils` does not appear in assertions (only `Client` is
+    // asserted, which comes from the barrel), utils.py SHOULD be mapped
+    // because direct_import_indices bypass the assertion filter.
+    // (Fixed in #146: relative import branches now populate direct_import_indices)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_submod_06_bare_relative_direct_import_bypass() {
+        use std::collections::HashMap;
+        use tempfile::TempDir;
+
+        // Given: pkg/utils.py (non-barrel production file, has helper)
+        //        pkg/_client.py (non-barrel production file, has Client)
+        //        pkg/__init__.py (barrel: re-exports Client from ._client)
+        //        pkg/test_app.py (stem "app", no L1 match to utils or _client):
+        //          import pkg              <- barrel import
+        //          from . import utils     <- bare relative direct import
+        //          def test_something():
+        //              assert pkg.Client() <- assertion uses Client (from _client),
+        //                                    NOT utils.helper
+        //
+        // Key: test file is named "test_app.py" (stem "app") so L1 stem matching
+        //      does NOT match utils.py (stem "utils") or _client.py (stem "client").
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+
+        std::fs::write(pkg.join("utils.py"), "def helper(): return True\n").unwrap();
+        std::fs::write(pkg.join("_client.py"), "class Client:\n    pass\n").unwrap();
+        // __init__.py re-exports Client (NOT utils)
+        std::fs::write(pkg.join("__init__.py"), "from ._client import Client\n").unwrap();
+
+        let test_content =
+            "import pkg\nfrom . import utils\n\ndef test_something():\n    assert pkg.Client()\n";
+        std::fs::write(pkg.join("test_app.py"), test_content).unwrap();
+
+        let utils_path = pkg.join("utils.py").to_string_lossy().into_owned();
+        let client_path = pkg.join("_client.py").to_string_lossy().into_owned();
+        let test_path = pkg.join("test_app.py").to_string_lossy().into_owned();
+
+        let extractor = PythonExtractor::new();
+        let production_files = vec![utils_path.clone(), client_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_content.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+
+        // Then: utils.py IS mapped (bare relative direct import bypasses assertion filter)
+        let utils_mapped = result
+            .iter()
+            .find(|m| m.production_file == utils_path)
+            .map(|m| m.test_files.contains(&test_path))
+            .unwrap_or(false);
+        assert!(
+            utils_mapped,
+            "pkg/utils.py should be mapped via bare relative direct import (assertion filter bypass). mappings={:?}",
             result
         );
     }
