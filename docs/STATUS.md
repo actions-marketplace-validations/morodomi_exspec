@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-v0.4.x development. Phase 22 DONE: Rust custom assert macro auto-detection. Actual impact: tokio BLOCK 385→257 (-128), clap BLOCK 193→71 (-122). Next: Phase 23 helper delegation (1-hop assertion tracing).
+v0.4.1 release prep. Phase 24 DONE: Django tests.py recognition (+343 tests visible). v0.4.1 cleanup: should_panic exact match (tokio -10, clap -28 BLOCK), PHP query alignment, docs, test coverage.
 
 observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Route extraction for 4 frameworks. Lint: 17 active rules, 4 languages, 11 projects / ~40k tests dogfooded. Default output: ai-prompt (with fix guidance).
 
@@ -127,7 +127,7 @@ Root mode resolves most B2 FN but introduces FP from peripheral imports not yet 
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 1087 passing | -- |
+| Tests | 1112 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
