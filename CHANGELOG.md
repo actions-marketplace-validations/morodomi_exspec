@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.4.2 (2026-03-23)
+
+Python observe precision/recall improvements and Rust/PHP observe dogfooding baselines.
+
+### Features
+
+- **Python stem collision guard**: When multiple production files share the same stem (e.g., `models.py` in different directories), stem-only fallback now defers to L2 import tracing instead of mapping to all matches. Improves precision for projects with common filenames. (#126)
+- **Python sub-module direct import bypass**: Assertion filter now bypasses for direct sub-module imports (`from pkg._urlparse import normalize`), preventing false negatives when tests import non-barrel production files. (#119, #145)
+- **Relative direct import support**: Assertion filter bypass extended to relative import branches (`from ._config import Config`, `from . import utils`). Previously only absolute imports were covered. (#146)
+
+### Dogfooding
+
+- Rust observe re-dogfooding: tokio 51->71 mapped (+20), clap 20->22 mapped (+2).
+- PHP observe re-dogfooding: laravel 968->973 mapped (+5).
+- Rust/PHP observe remain experimental (GT audit pending #149).
+
+### Internal
+
+- 1119 tests (up from 1101 in v0.4.1).
+
 ## v0.4.1 (2026-03-23)
 
 Rust lint improvements, Django tests.py support, and internal cleanup.
