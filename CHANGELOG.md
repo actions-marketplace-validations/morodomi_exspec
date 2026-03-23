@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.1 (2026-03-23)
+
+Rust lint improvements, Django tests.py support, and internal cleanup.
+
+### Features
+
+- **Django `tests.py` recognition**: Python observe now recognizes Django's `tests.py` naming convention. 1669 Django test files were previously invisible. `test_stem` returns parent directory name, `production_stem` excludes `tests.py`. (#95)
+- **Rust same-file helper tracing**: Detect assertions inside helper functions called from test functions within the same file. Phase 23a of helper delegation. (#140)
+- **Rust custom assert macro auto-detection**: `assert_*!` macro invocations (e.g., `assert_pending!`, `assert_ready!`) are automatically recognized as assertions. tokio BLOCK 385->247 (-138), clap BLOCK 193->43 (-150). (#138)
+
+### Bug Fixes
+
+- **Rust `should_panic` exact match**: Tightened `#[should_panic]` detection from substring match to exact tree-sitter identifier walk. Attributes like `#[my_should_panic_wrapper]` no longer falsely match. tokio -10, clap -28 BLOCK. (#29)
+
+### Internal
+
+- PHP `error_test.scm` aligned to `assertion.scm` matching convention (inner `name` node). Round-trip test added. (#30)
+- Document shadow variable limitation in `known-constraints.md`. (#122)
+- Test: `resolve_absolute_base_to_file` file-vs-package priority. (#97)
+- Test: bare import attribute-access narrowing and dotted fallback. (#121)
+- ROADMAP.md updated: Phase 22-24 completed, v0.4.1 scope.
+- 1101 tests (up from 1087 in v0.4.0).
+
 ## v0.4.0 (2026-03-22)
 
 Python observe reaches stable (ship criteria P>=98%, R>=90%), new default output format, and route extraction for 4 frameworks.
