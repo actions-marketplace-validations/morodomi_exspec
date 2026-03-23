@@ -1,7 +1,29 @@
 # Dogfooding Results
 
-Latest: 2026-03-23, exspec v0.4.2 (observe improvements + Rust/PHP dogfooding)
+Latest: 2026-03-24, exspec v0.4.3-dev (same-file helper tracing all 4 languages)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
+
+## Summary (v0.4.3-dev, same-file helper tracing)
+
+| Project | Lang | Tests | BLOCK | WARN | INFO | PASS | vs v0.4.1 BLOCK | Delta |
+|---------|------|-------|-------|------|------|------|----------------|-------|
+| requests | Python | 386 | 10 | 1 | 198 | 177 | 10 | 0 |
+| django | Python | 1835 | 37 | 17 | 842 | 939 | 32 | +5 (test growth) |
+| tokio | Rust | 2902 | 247 | 80 | 2075 | 500 | 247 | 0 |
+| clap | Rust | 1943 | 43 | 53 | 956 | 891 | 43 | 0 |
+| nestjs | TypeScript | 4090 | 11 | 25 | 2174 | 1880 | 13 | **-2** |
+| laravel | PHP | 14895 | 222 | 179 | 10593 | 3901 | 222 | 0 |
+| symfony | PHP | 25752 | 617 | 319 | 14662 | 10154 | 616 | +1 (test growth) |
+
+### Same-file helper tracing impact analysis (2026-03-24)
+
+**Result: Near-zero BLOCK reduction.** Same-file free-function helpers are rare in real-world projects. Helper delegation FP is dominated by:
+- Python: `self.check_output()`, `self.check_html()` — class method calls (cross-file)
+- PHP: `$this->fails()`, `$response->assertStatus()` — method calls (cross-file)
+- TypeScript: helper functions in describe blocks — only nestjs showed -2 reduction
+- Rust: `common::assert_matches()` — cross-file module (Phase 23a already handled same-file)
+
+**#153 Go/No-Go: DEFERRED.** All languages show BLOCK FP rate <= 5%. Cross-file helper delegation deferred to v0.4.4.
 
 ## Summary (v0.4.1)
 
