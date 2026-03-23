@@ -1,7 +1,8 @@
-; assert!, assert_eq!, assert_ne!, prop_assert! macros
+; assert*!, debug_assert*!, prop_assert*! macros (prefix match — auto-detects custom assert macros)
+; (_|$) ensures "assert_pending!" matches but "assertion!" does not.
 (macro_invocation
   macro: (identifier) @_name
-  (#match? @_name "^(assert|assert_eq|assert_ne|debug_assert|debug_assert_eq|debug_assert_ne|prop_assert|prop_assert_eq|prop_assert_ne)$")) @assertion
+  (#match? @_name "^(assert(_|$)|debug_assert(_|$)|prop_assert(_|$))")) @assertion
 
 ; Rust-specific policy refinement:
 ; treat free-function assert_*() helpers as assertion oracles.

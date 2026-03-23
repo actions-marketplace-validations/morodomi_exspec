@@ -1262,4 +1262,85 @@ mod tests {
             funcs[0].analysis.assertion_count
         );
     }
+
+    // --- Phase 22: custom assert macro auto-detection ---
+
+    #[test]
+    fn tc01_assert_pending_macro_counted_as_assertion() {
+        // TC-01: assert_pending!(val) should be counted as assertion
+        let source = fixture("t001_pass_custom_assert_macro.rs");
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_custom_assert_macro.rs");
+        let func = funcs
+            .iter()
+            .find(|f| f.name == "test_with_assert_pending")
+            .expect("test_with_assert_pending not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "assert_pending! should be counted as assertion, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn tc02_assert_ready_ok_macro_counted_as_assertion() {
+        // TC-02: assert_ready_ok!(future) should be counted as assertion
+        let source = fixture("t001_pass_custom_assert_macro.rs");
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_custom_assert_macro.rs");
+        let func = funcs
+            .iter()
+            .find(|f| f.name == "test_with_assert_ready_ok")
+            .expect("test_with_assert_ready_ok not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "assert_ready_ok! should be counted as assertion, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn tc03_assert_data_eq_macro_counted_as_assertion() {
+        // TC-03: assert_data_eq!(actual, expected) should be counted as assertion
+        let source = fixture("t001_pass_custom_assert_macro.rs");
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "t001_pass_custom_assert_macro.rs");
+        let func = funcs
+            .iter()
+            .find(|f| f.name == "test_with_assert_data_eq")
+            .expect("test_with_assert_data_eq not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "assert_data_eq! should be counted as assertion, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn tc04_standard_assert_macros_still_detected_regression() {
+        // TC-04: assert!, assert_eq!, debug_assert!, prop_assert_eq! continue to be detected
+        let source = "#[test]\nfn test_standard_asserts() {\n    assert!(true);\n    assert_eq!(1, 1);\n    assert_ne!(1, 2);\n    debug_assert!(true);\n    prop_assert_eq!(1, 1);\n}\n";
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "regression_standard.rs");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(
+            funcs[0].analysis.assertion_count, 5,
+            "assert!, assert_eq!, assert_ne!, debug_assert!, prop_assert_eq! should all be counted, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn tc05_assertion_macro_not_counted_as_assertion() {
+        // TC-05: assertion!() should NOT be counted — prefix guard rejects non-assert macros
+        let source = "#[test]\nfn test_with_assertion_macro() {\n    assertion!(x == 5);\n}\n";
+        let extractor = RustExtractor::new();
+        let funcs = extractor.extract_test_functions(&source, "assertion_macro.rs");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(
+            funcs[0].analysis.assertion_count, 0,
+            "assertion!() should NOT be counted as assertion, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
 }

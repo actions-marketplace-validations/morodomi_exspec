@@ -202,7 +202,7 @@ exspec --format sarif .         # GitHub Code Scanning
 
 ## Known Constraints
 
-- **Rust macro-generated tests**: Invisible to tree-sitter. Custom assertion macros need `custom_patterns`
+- **Rust macro-generated tests**: Invisible to tree-sitter. `assert_*!` macros are auto-detected; other custom macros need `custom_patterns`
 - **TypeScript T107**: Intentionally disabled (high false positive rate in dogfooding)
 - **Helper delegation**: Project-local assertion helpers need `custom_patterns` config
 

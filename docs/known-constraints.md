@@ -7,18 +7,16 @@ exspec uses tree-sitter for static AST analysis. This is fast and language-agnos
 tree-sitter parses macro bodies as opaque `token_tree` nodes. This affects Rust in two ways:
 
 1. **Test functions inside macros are not detected.** If your test harness generates tests via macros (e.g. `rgtest!` in ripgrep), exspec will not see them at all.
-2. **Custom assertion macros are invisible.** Macros like `assert_pending!`, `assert_ready!`, `assert_data_eq!` are not recognized as assertions.
+2. **Custom assertion macros**: Macros whose name starts with `assert` (e.g. `assert_pending!`, `assert_ready!`, `assert_data_eq!`) are **auto-detected** as assertions (since v0.4.1). Other custom macros (e.g. `check!`, `verify!`) still need `custom_patterns`.
 
-**Workaround**: Use `[assertions] custom_patterns` for assertion macros:
+**Workaround** (for non-`assert_*` macros): Use `[assertions] custom_patterns`:
 
 ```toml
 [assertions]
-custom_patterns = ["assert_pending!", "assert_ready!", "assert_data_eq!"]
+custom_patterns = ["check!", "verify!"]
 ```
 
 This does not help with macro-generated test functions -- those are fundamentally invisible to tree-sitter.
-
-**Dogfooding data**: In tokio (~1,582 tests), 131 of 388 BLOCK violations (33.8%) were false positives caused by custom assertion macros. In clap (~1,455 tests), 115 of 528 BLOCK violations came from `assert_data_eq!`.
 
 ## TypeScript T107 (assertion-roulette)
 
