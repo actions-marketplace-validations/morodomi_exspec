@@ -9,28 +9,22 @@
 
 ## Now
 
-### v0.4.1 release: small wins + cleanup
+### Phase 23b: Helper delegation (1-hop cross-file assertion tracing)
 
-Goal: Ship 5 small improvements and release v0.4.1.
+Goal: Detect assertions inside project-local helper functions called from test functions across files. Trace 1 hop from test → imported helper → assertion.
 
-| Issue | Task | Type |
-|-------|------|------|
-| #122 | Document shadow variable limitation in attribute-access query | docs |
-| #97 | Add test for multi-level package + same-name module resolve | test |
-| #121 | Dotted bare import attribute-access fallback test | test + fix |
-| #29 | Rust should_panic: tighten substring match to exact identifier | internal |
-| #30 | PHP: align matching style between assertion.scm and error_test.scm | internal |
+**Why**: Helper delegation is the #1 remaining FP source across all languages (laravel 222, symfony 616, tokio 247, clap 43). Phase 23a (same-file, Rust-only) shipped in v0.4.0. Phase 23b extends to cross-file for all 4 languages.
 
-**Why**: These are all XS-S effort items that improve test coverage, documentation, and internal consistency. Shipping them clears the backlog of quick wins before tackling larger features.
+**Approach**: Reuse observe's import/function resolution infrastructure. For each assertion-free test function, check if any called function (1-hop imported) contains assertions. opt-in via config to avoid performance regression.
 
 ## Next
 
 | Priority | Task | Trigger |
 |----------|------|---------|
-| P1 | Phase 23b: Helper delegation (1-hop cross-file assertion tracing) | #1 FP source across all languages |
 | P2 | Multi-path CLI for observe (B2 cross-package resolution) | 13 FN in NestJS, all B2 |
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
-| P2 | Barrel sym-tracking for setup-only import FP | 1 remaining httpx FP |
+| P2 | #119 Python sub-module direct import resolution | Python observe recall |
+| P2 | #85 namespace re-export | TypeScript observe recall |
 
 ## Completed Recently
 
@@ -142,5 +136,6 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 | 22 | Rust custom assert macro auto-detection (-250 BLOCK) | v0.4.0 |
 | 23a | Same-file helper delegation tracing for Rust | v0.4.0 |
 | 24 | Python observe: Django tests.py naming convention | v0.4.1 |
+| -- | v0.4.1 cleanup: should_panic exact match, PHP query align, docs, tests | v0.4.1 |
 
 Detail for completed phases is archived in git history. Key decisions are preserved in "Key Design Decisions" above.
