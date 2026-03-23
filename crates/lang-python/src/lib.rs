@@ -4,8 +4,9 @@ use std::sync::OnceLock;
 
 use exspec_core::extractor::{FileAnalysis, LanguageExtractor, TestAnalysis, TestFunction};
 use exspec_core::query_utils::{
-    collect_mock_class_names, count_captures, count_captures_within_context,
-    count_duplicate_literals, extract_suppression_from_previous_line, has_any_match,
+    apply_same_file_helper_tracing, collect_mock_class_names, count_captures,
+    count_captures_within_context, count_duplicate_literals,
+    extract_suppression_from_previous_line, has_any_match,
 };
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
@@ -23,6 +24,7 @@ const ERROR_TEST_QUERY: &str = include_str!("../queries/error_test.scm");
 const RELATIONAL_ASSERTION_QUERY: &str = include_str!("../queries/relational_assertion.scm");
 const WAIT_AND_SEE_QUERY: &str = include_str!("../queries/wait_and_see.scm");
 const SKIP_TEST_QUERY: &str = include_str!("../queries/skip_test.scm");
+const HELPER_TRACE_QUERY: &str = include_str!("../queries/helper_trace.scm");
 
 fn python_language() -> tree_sitter::Language {
     tree_sitter_python::LANGUAGE.into()
@@ -45,6 +47,7 @@ static ERROR_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static RELATIONAL_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static WAIT_AND_SEE_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static SKIP_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static HELPER_TRACE_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct PythonExtractor;
 
@@ -387,7 +390,7 @@ impl LanguageExtractor for PythonExtractor {
         let has_relational_assertion =
             has_any_match(relational_query, "relational", root, source_bytes);
 
-        FileAnalysis {
+        let mut file_analysis = FileAnalysis {
             file: file_path.to_string(),
             functions,
             has_pbt_import,
@@ -395,7 +398,23 @@ impl LanguageExtractor for PythonExtractor {
             has_error_test,
             has_relational_assertion,
             parameterized_count,
-        }
+        };
+
+        // Apply same-file helper tracing (Phase 23b — Python port)
+        // helper_trace.scm contains both @call_name and @def_name/@def_body captures
+        // in a single query. Same object is passed as both call_query and def_query by design.
+        let helper_trace_query = cached_query(&HELPER_TRACE_QUERY_CACHE, HELPER_TRACE_QUERY);
+        let assertion_query_for_trace = cached_query(&ASSERTION_QUERY_CACHE, ASSERTION_QUERY);
+        apply_same_file_helper_tracing(
+            &mut file_analysis,
+            &tree,
+            source_bytes,
+            helper_trace_query,
+            helper_trace_query,
+            assertion_query_for_trace,
+        );
+
+        file_analysis
     }
 }
 
@@ -1963,6 +1982,137 @@ mod tests {
         assert!(
             !names.contains(&"test_async_helper"),
             "nested async test should be excluded: {names:?}"
+        );
+    }
+
+    // --- Same-file helper tracing (Phase 23b, TC-01 ~ TC-07) ---
+
+    #[test]
+    fn helper_tracing_tc01_calls_helper_with_assert() {
+        // TC-01: test that calls a helper with assertion → assertion_count >= 1 after tracing
+        let source = fixture("t001_pass_helper_tracing.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.py");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_calls_helper_with_assert")
+            .expect("test_calls_helper_with_assert not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "TC-01: helper with assertion traced → assertion_count >= 1, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc02_calls_helper_without_assert() {
+        // TC-02: test that calls a helper WITHOUT assertion → assertion_count stays 0
+        let source = fixture("t001_pass_helper_tracing.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.py");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_calls_helper_without_assert")
+            .expect("test_calls_helper_without_assert not found");
+        assert_eq!(
+            func.analysis.assertion_count, 0,
+            "TC-02: helper without assertion → assertion_count == 0, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc03_has_own_assert_plus_helper() {
+        // TC-03: test with own assert + calls helper → assertion_count >= 1 (direct assertion)
+        let source = fixture("t001_pass_helper_tracing.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.py");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_has_own_assert_plus_helper")
+            .expect("test_has_own_assert_plus_helper not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "TC-03: own assertion present → assertion_count >= 1, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc04_calls_undefined_function() {
+        // TC-04: calling a function not defined in the file → no crash, assertion_count stays 0
+        let source = fixture("t001_pass_helper_tracing.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.py");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_calls_undefined_function")
+            .expect("test_calls_undefined_function not found");
+        assert_eq!(
+            func.analysis.assertion_count, 0,
+            "TC-04: undefined function call → no crash, assertion_count == 0, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc05_two_hop_tracing() {
+        // TC-05: 2-hop helper (intermediate → check_result) — only 1-hop traced.
+        // intermediate() itself has NO assertion → assertion_count stays 0
+        let source = fixture("t001_pass_helper_tracing.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.py");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_two_hop_tracing")
+            .expect("test_two_hop_tracing not found");
+        assert_eq!(
+            func.analysis.assertion_count, 0,
+            "TC-05: 2-hop helper not traced → assertion_count == 0, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc06_with_assertion_early_return() {
+        // TC-06: test with own assertion → helper tracing early returns, assertion_count unchanged
+        let source = fixture("t001_pass_helper_tracing.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.py");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_with_assertion_early_return")
+            .expect("test_with_assertion_early_return not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "TC-06: own assertion present → assertion_count >= 1, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc07_multiple_calls_same_helper() {
+        // TC-07: test that calls same helper multiple times
+        // Should deduplicate and count helper assertions once, not once per call.
+        // check_result has exactly 1 assert → dedup → assertion_count == 1
+        let source = fixture("t001_pass_helper_tracing.py");
+        let extractor = PythonExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.py");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_multiple_calls_same_helper")
+            .expect("test_multiple_calls_same_helper not found");
+        assert_eq!(
+            func.analysis.assertion_count, 1,
+            "TC-07: multiple calls to same helper → deduplicated, assertion_count == 1, got {}",
+            func.analysis.assertion_count
         );
     }
 }
