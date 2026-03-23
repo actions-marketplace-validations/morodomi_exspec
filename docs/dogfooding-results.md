@@ -1,27 +1,37 @@
 # Dogfooding Results
 
-Latest: 2026-03-23, exspec v0.4.x (Phase 22: Rust custom assert macro auto-detection)
+Latest: 2026-03-23, exspec v0.4.1 (Phase 24 + v0.4.1 cleanup)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
 
-## Summary (v0.4.x, Phase 22)
+## Summary (v0.4.1)
 
 | Project | Lang | Tests | BLOCK | WARN | INFO | PASS | Primary BLOCK Cause |
 |---------|------|-------|-------|------|------|------|---------------------|
 | exspec (self) | Rust | 10 | 0 | 0 | 7 | 9 | N/A |
 | requests | Python | 339 | 10 | 1 | 198 | 177 | helper delegation |
 | fastapi | Python | 2155 | 15 | 210 | 2882 | 1086 | helper delegation, nested fn |
-| django | Python | 1048 | 22 | 9 | 566 | 715 | helper delegation |
+| django | Python | **1391** | **32** | 16 | 830 | 912 | helper delegation |
 | pytest | Python | 2380 | -- | -- | -- | -- | (clone unavailable, v0.1.0 data below) |
 | nestjs | TypeScript | 2679 | 13 | 26 | 2174 | 1878 | helper delegation, done() callback |
-| laravel | PHP | 11044 | 222 | 179 | 10564 | 3887 | helper delegation |
-| symfony | PHP | 17204 | 616 | 319 | 14653 | 10146 | helper delegation, addToAssertionCount |
+| laravel | PHP | 11069 | 222 | 179 | 10584 | 3900 | helper delegation |
+| symfony | PHP | 17211 | 616 | 319 | 14654 | 10152 | helper delegation, addToAssertionCount |
 | ripgrep | Rust | 16 | 0 | 2 | 30 | 1 | ~330 tests in `rgtest!` macro not detected |
-| tokio | Rust | 1594 | **257** | 80 | 2069 | 494 | select! token_tree, smoke tests |
-| clap | Rust | 1455 | **71** | 53 | 956 | 863 | helper delegation, smoke tests |
+| tokio | Rust | 1594 | **247** | 80 | 2075 | 500 | select! token_tree, smoke tests |
+| clap | Rust | 1455 | **43** | 53 | 956 | 891 | helper delegation, smoke tests |
 
-### v0.3.0 → v0.4.x BLOCK changes (Phase 22)
+### v0.4.0 → v0.4.1 BLOCK changes
 
-| Project | v0.3.0 BLOCK | v0.4.x BLOCK | Delta | Notes |
+| Project | v0.4.0 BLOCK | v0.4.1 BLOCK | Delta | Notes |
+|---------|-------------|-------------|-------|-------|
+| django | 22 | 32 | **+10** | +343 tests detected (tests.py recognition). BLOCK increase = newly visible assertion-free tests |
+| tokio | 257 | 247 | **-10** | should_panic exact identifier match (#29) |
+| clap | 71 | 43 | **-28** | should_panic exact identifier match (#29) |
+
+Phase 24 impact: Django tests.py recognition: **+343 tests** now visible (1048→1391). v0.4.1 cleanup: **-38 BLOCK** across 2 Rust projects from should_panic exact match.
+
+### v0.3.0 → v0.4.0 BLOCK changes (Phase 22)
+
+| Project | v0.3.0 BLOCK | v0.4.0 BLOCK | Delta | Notes |
 |---------|-------------|-------------|-------|-------|
 | tokio | 385 | 257 | **-128** | `assert_*!` macro auto-detection |
 | clap | 193 | 71 | **-122** | `assert_*!` macro auto-detection |
