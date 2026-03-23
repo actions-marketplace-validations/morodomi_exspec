@@ -9,18 +9,34 @@
 
 ## Now
 
-### v0.4.3: observe precision improvement + helper delegation
+### v0.4.3: lint BLOCK FP reduction + observe precision
 
-Goal: Reduce observe false positives and lint BLOCK FP via helper delegation.
+Goal: Reduce BLOCK FP from helper delegation via same-file tracing (3 language ports), improve observe precision, and begin Rust/PHP observe ship criteria audit.
 
 | Issue | Task | Type | Impact |
 |-------|------|------|--------|
-| #131 | L1 exclusive mode (opt-in: L1 match suppresses L2) | precision | httpx L2 FP ~25 elimination |
-| #129 | L2 fan-out filter (high-frequency mapping suppression) | precision | Cross-project utility FP reduction |
-| #93 | PHP PSR-4 multi-segment namespace resolution | recall | Depends on v0.4.2 dogfood results |
-| -- | Phase 23b: 1-hop cross-file helper delegation | lint | #1 BLOCK FP source (laravel 222, symfony 616) |
+| #150 | Same-file helper tracing: Python | lint | django 32 BLOCK, requests 10 BLOCK FP reduction |
+| #151 | Same-file helper tracing: TypeScript | lint | nestjs 13 BLOCK FP reduction |
+| #152 | Same-file helper tracing: PHP | lint | laravel 222, symfony 616 BLOCK FP reduction |
+| #153 | Cross-file 1-hop helper delegation (all languages) | lint | Conditional: Go/No-Go after same-file dogfooding |
+| #144 | Relative direct import assertion filter bypass | observe | Python observe FN fix |
+| #131 | L1 exclusive mode (opt-in: L1 match suppresses L2) | observe precision | httpx L2 FP ~25 elimination |
+| #129 | L2 fan-out filter (high-frequency mapping suppression) | observe precision | Cross-project utility FP reduction |
+| #149 | Rust/PHP observe formal GT audit | observe ship | Ship criteria validation for experimental languages |
 
-**Why**: v0.4.2 dogfooding will reveal Rust/PHP precision gaps. #131/#129 are language-agnostic precision improvements. Phase 23b is the biggest remaining lint BLOCK reduction opportunity.
+**Why**: v0.4.2 dogfooding confirmed helper delegation remains the dominant BLOCK FP across all languages. Phase 23a (same-file, Rust-only) proved the approach; 23b extends to all 4 languages (#150/#151/#152 same-file, #153 cross-file). #144 is a v0.4.2 residual observe fix. #131/#129 are low-cost precision improvements. #149 is needed to graduate Rust/PHP observe from "experimental" to "stable".
+
+**Execution order**: #150/#151/#152 (parallel, independent) → dogfooding (BLOCK残差計測) → #153 Go/No-Go判定 → #144/#131/#129 (independent observe tasks) → #149 (GT audit, last).
+
+**Decision: #153 conditional scope** -- same-file tracing 3言語ポート (#150/#151/#152) 完了後に dogfooding で BLOCK 残差を計測。Go/No-Go基準: 残差BLOCK FP率 > 5% (= same-file解決後もhelper delegation FPが有意) の言語に限り cross-file を実装。全言語で残差 <= 5% なら #153 は v0.4.4 以降に defer。判定は言語別 (all-or-nothing ではない)。
+
+**Decision: #93 deferred to backlog** -- v0.4.2 PHP dogfooding showed laravel at 973/1951 mapped (50%) with 100% precision. Multi-segment namespace impact is marginal. Note: PHP observe の50% recall はproduction file coverageであり、test file coverageは89%。production coverage が低いのは「テストのないファイル」が多い構造的要因であり、#93 のmulti-segment解決では改善しない可能性が高い。GT audit (#149) で実際のrecall gapを特定後に再評価。#93 が再スコープに入る条件: GT audit で multi-segment が原因の FN が 10件以上発見された場合。
+
+**Clarification: #144 vs #146** -- #146 (CLOSED) は absolute direct import の `direct_import_indices` 追記。#144 (OPEN) は relative import ブランチでの同等修正。同じ assertion filter bypass 機能の absolute/relative 非対称性を解消する別 Issue。
+
+**Note: Solo-dev constraint and #150/#151/#152 parallel** -- これら3タスクは Phase 23a (Rust) の mechanical port であり、各タスクの実装コストは小さい (helper_trace.scm作成 + OnceLock統合 + fixture)。"large features" ではなく同一アプローチの言語別適用であるため、並列実行は Solo-dev constraint に抵触しない。
+
+**Decision: #149 scope** -- GT audit の結果は ship criteria (P>=98%, R>=90%) に対する判定のみ。PASS なら stable 昇格、FAIL なら追加実装が必要。#93 の再評価はaudit結果の副産物であり、#149 自体のスコープには含めない。
 
 ## Backlog
 
@@ -30,9 +46,9 @@ Goal: Reduce observe false positives and lint BLOCK FP via helper delegation.
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
 | P2 | #127 Python barrel suppression per-(test, prod) scope | Precision refinement |
 | P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
+| P2 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit (#149) で再評価 |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
 | P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
-| P2 | #149 Rust/PHP observe formal GT audit | Ship criteria validation |
 
 ## Completed Recently
 
@@ -83,7 +99,7 @@ Goal: Automatically recognize `assert_*!` macro invocations as assertions.
 
 Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91%). Python observe: L1 fixes, barrel import, assertion filter, helper exclusion. Test helper exclusion.
 
-## Backlog
+## Future
 
 | Priority | Task | Trigger |
 |----------|------|---------|
@@ -110,7 +126,7 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 
 - **ObserveExtractor trait** -- language-agnostic interface in `crates/core/`, each lang crate implements it
 - **Two-layer algorithm is portable** -- Layer 1 (filename convention) + Layer 2 (import tracing) applies to all 4 languages
-- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (Phase 11) and Python (Phase 21) are stable. Rust and PHP remain experimental (no formal dogfooding yet)
+- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable. Rust and PHP remain experimental (baselines established in v0.4.2, GT audit pending #149)
 
 ### B4 barrel fix rejection (Phase 11)
 
@@ -136,11 +152,12 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 - INFO: opinionated, may be intentional
 - Phase 8a results: T101/T102/T108 demoted WARN->INFO, T106 disabled (93% FP)
 
-### Helper delegation (Phase 8a-4, Phase 23a)
+### Helper delegation (Phase 8a-4, Phase 23a, Phase 23b)
 
 - User-owned config + runtime guidance. No framework-specific knowledge in exspec core
 - Phase 23a: same-file helper tracing for Rust (auto-detect assertions in called functions within the same file)
-- Phase 23b (next): 1-hop cross-file tracing for all languages
+- Phase 23b: same-file tracing 3言語ポート (v0.4.3 confirmed) + cross-file 1-hop (conditional, Go/No-Go after same-file dogfooding)
+- Dogfooding data: helper delegation is #1 BLOCK FP across all languages (laravel 222, symfony 616, clap 43, requests 10, django 32)
 
 ## Completed Phases
 
@@ -160,5 +177,6 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 | 23a | Same-file helper delegation tracing for Rust | v0.4.0 |
 | 24 | Python observe: Django tests.py naming convention | v0.4.1 |
 | -- | v0.4.1 cleanup: should_panic exact match, PHP query align, docs, tests | v0.4.1 |
+| -- | observe recall/precision: #85 TS re-export, #119/#126/#146 Python, Rust/PHP dogfood baselines | v0.4.2 |
 
 Detail for completed phases is archived in git history. Key decisions are preserved in "Key Design Decisions" above.
