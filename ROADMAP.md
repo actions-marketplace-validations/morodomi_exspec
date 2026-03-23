@@ -15,10 +15,10 @@ Goal: Reduce BLOCK FP from helper delegation via same-file tracing (3 language p
 
 | Issue | Task | Type | Impact |
 |-------|------|------|--------|
-| #150 | Same-file helper tracing: Python | lint | django 32 BLOCK, requests 10 BLOCK FP reduction |
-| #151 | Same-file helper tracing: TypeScript | lint | nestjs 13 BLOCK FP reduction |
-| #152 | Same-file helper tracing: PHP | lint | laravel 222, symfony 616 BLOCK FP reduction |
-| #153 | Cross-file 1-hop helper delegation (all languages) | lint | Conditional: Go/No-Go after same-file dogfooding |
+| #150 | Same-file helper tracing: Python | lint | **DONE** (PR #155). Dogfooding: 0 BLOCK change |
+| #151 | Same-file helper tracing: TypeScript | lint | **DONE** (PR #156). Dogfooding: nestjs -2 BLOCK |
+| #152 | Same-file helper tracing: PHP | lint | **DONE** (PR #157). Dogfooding: 0 BLOCK change |
+| #153 | Cross-file 1-hop helper delegation | lint | **DEFERRED to v0.4.4** (all languages FP <= 5%) |
 | #144 | Relative direct import assertion filter bypass | observe | Python observe FN fix |
 | #131 | L1 exclusive mode (opt-in: L1 match suppresses L2) | observe precision | httpx L2 FP ~25 elimination |
 | #129 | L2 fan-out filter (high-frequency mapping suppression) | observe precision | Cross-project utility FP reduction |
@@ -26,9 +26,9 @@ Goal: Reduce BLOCK FP from helper delegation via same-file tracing (3 language p
 
 **Why**: v0.4.2 dogfooding confirmed helper delegation remains the dominant BLOCK FP across all languages. Phase 23a (same-file, Rust-only) proved the approach; 23b extends to all 4 languages (#150/#151/#152 same-file, #153 cross-file). #144 is a v0.4.2 residual observe fix. #131/#129 are low-cost precision improvements. #149 is needed to graduate Rust/PHP observe from "experimental" to "stable".
 
-**Execution order**: #150/#151/#152 (parallel, independent) → dogfooding (BLOCK残差計測) → #153 Go/No-Go判定 → #144/#131/#129 (independent observe tasks) → #149 (GT audit, last).
+**Execution order**: ~~#150/#151/#152~~ (DONE) → ~~dogfooding~~ (DONE) → ~~#153 Go/No-Go~~ (DEFERRED) → #144/#131/#129 (next) → #149 (last).
 
-**Decision: #153 conditional scope** -- same-file tracing 3言語ポート (#150/#151/#152) 完了後に dogfooding で BLOCK 残差を計測。Go/No-Go基準: 残差BLOCK FP率 > 5% (= same-file解決後もhelper delegation FPが有意) の言語に限り cross-file を実装。全言語で残差 <= 5% なら #153 は v0.4.4 以降に defer。判定は言語別 (all-or-nothing ではない)。
+**Decision: #153 DEFERRED to v0.4.4** -- same-file tracing dogfooding 結果 (2026-03-24): 全言語で BLOCK FP率 <= 5%。same-file helper は実プロジェクトではほぼ使われておらず、helper delegation FP の大半は `self.method()` / `$this->method()` (cross-file class method) パターン。cross-file は v0.4.4 で再評価。dogfooding 数値: requests 10→10, django 32→37, tokio 247→247, clap 43→43, nestjs 13→11, laravel 222→222, symfony 616→617。
 
 **Decision: #93 deferred to backlog** -- v0.4.2 PHP dogfooding showed laravel at 973/1951 mapped (50%) with 100% precision. Multi-segment namespace impact is marginal. Note: PHP observe の50% recall はproduction file coverageであり、test file coverageは89%。production coverage が低いのは「テストのないファイル」が多い構造的要因であり、#93 のmulti-segment解決では改善しない可能性が高い。GT audit (#149) で実際のrecall gapを特定後に再評価。#93 が再スコープに入る条件: GT audit で multi-segment が原因の FN が 10件以上発見された場合。
 
@@ -47,6 +47,7 @@ Goal: Reduce BLOCK FP from helper delegation via same-file tracing (3 language p
 | P2 | #127 Python barrel suppression per-(test, prod) scope | Precision refinement |
 | P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
 | P2 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit (#149) で再評価 |
+| P2 | #153 Cross-file 1-hop helper delegation | v0.4.4 再評価。same-file dogfooding で FP <= 5% |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
 | P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
 
