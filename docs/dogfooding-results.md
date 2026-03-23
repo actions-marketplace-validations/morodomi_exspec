@@ -1,9 +1,9 @@
 # Dogfooding Results
 
-Latest: 2026-03-19, exspec v0.3.0 (commit 908b531)
+Latest: 2026-03-23, exspec v0.4.x (Phase 22: Rust custom assert macro auto-detection)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
 
-## Summary (v0.3.0)
+## Summary (v0.4.x, Phase 22)
 
 | Project | Lang | Tests | BLOCK | WARN | INFO | PASS | Primary BLOCK Cause |
 |---------|------|-------|-------|------|------|------|---------------------|
@@ -16,8 +16,17 @@ Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
 | laravel | PHP | 11044 | 222 | 179 | 10564 | 3887 | helper delegation |
 | symfony | PHP | 17204 | 616 | 319 | 14653 | 10146 | helper delegation, addToAssertionCount |
 | ripgrep | Rust | 16 | 0 | 2 | 30 | 1 | ~330 tests in `rgtest!` macro not detected |
-| tokio | Rust | 1594 | 385 | 96 | 1875 | 532 | custom assert macros, select! token_tree |
-| clap | Rust | 1455 | 193 | 60 | 908 | 797 | helper delegation |
+| tokio | Rust | 1594 | **257** | 80 | 2069 | 494 | select! token_tree, smoke tests |
+| clap | Rust | 1455 | **71** | 53 | 956 | 863 | helper delegation, smoke tests |
+
+### v0.3.0 → v0.4.x BLOCK changes (Phase 22)
+
+| Project | v0.3.0 BLOCK | v0.4.x BLOCK | Delta | Notes |
+|---------|-------------|-------------|-------|-------|
+| tokio | 385 | 257 | **-128** | `assert_*!` macro auto-detection |
+| clap | 193 | 71 | **-122** | `assert_*!` macro auto-detection |
+
+Phase 22 impact: **-250 BLOCK** across 2 Rust projects. Custom assertion macros (`assert_pending!`, `assert_ready!`, `assert_data_eq!`, etc.) now auto-detected via prefix matching.
 
 ### v0.1.0 → v0.3.0 BLOCK changes
 

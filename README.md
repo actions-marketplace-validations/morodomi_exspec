@@ -221,8 +221,8 @@ Dogfooded across 11 projects (~40k tests):
 | laravel | PHP | 11,044 | 222 | helper delegation |
 | symfony | PHP | 17,204 | 616 | helper delegation |
 | ripgrep | Rust | 16 | 0 | ~330 tests in macros (not detected) |
-| tokio | Rust | 1,594 | 385 | custom assert macros |
-| clap | Rust | 1,455 | 193 | helper delegation |
+| tokio | Rust | 1,594 | 257 | select! token_tree |
+| clap | Rust | 1,455 | 71 | helper delegation |
 | django | Python | 1,048 | 22 | helper delegation |
 
 Full results: [docs/dogfooding-results.md](docs/dogfooding-results.md)
