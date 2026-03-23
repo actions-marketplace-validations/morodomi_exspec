@@ -1,6 +1,6 @@
 # Dogfooding Results
 
-Latest: 2026-03-23, exspec v0.4.1 (Phase 24 + v0.4.1 cleanup)
+Latest: 2026-03-23, exspec v0.4.2 (observe improvements + Rust/PHP dogfooding)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
 
 ## Summary (v0.4.1)
@@ -919,6 +919,32 @@ ROADMAP target: Precision >= 90%, Recall >= 80%.
 
 1. **Fixture directory filtering**: Add `Fixtures/` to `is_non_sut_helper()` to exclude test fixture files from production classification
 2. **Composer.json PSR-4 autoload parsing**: Currently uses `common_prefixes` heuristic (`src/`, `app/`, `lib/`). Parsing `composer.json` autoload config would improve accuracy for non-standard layouts
+
+## Rust/PHP Observe Re-dogfooding (2026-03-23, v0.4.2)
+
+**exspec version**: v0.4.2-pre (post-#126, #146)
+
+### Summary
+
+| Project | Lang | Prod | Test | Mapped | Unmapped | Pairs | vs v0.3.0 |
+|---------|------|------|------|--------|----------|-------|-----------|
+| tokio | Rust | 495 | 272 | 71 (14.3%) | 424 | 112 | +20 mapped (51→71) |
+| clap | Rust | 195 | 134 | 22 (11.3%) | 173 | 22 | +2 mapped (20→22) |
+| laravel | PHP | 1951 | 912 | 973 (49.9%) | 978 | 3790 | +5 mapped (968→973) |
+
+### Key Changes from v0.3.0
+
+1. **tokio**: 51→71 mapped (+20). Workspace member aggregation improvements from v0.4.0/v0.4.1 resolve more `use crate::` imports.
+2. **clap**: 20→22 mapped (+2). Minor improvement from workspace handling.
+3. **laravel**: 968→973 mapped (+5). Marginal improvement from PSR-4 resolution refinements.
+
+### Precision Spot-Check
+
+GT audit not performed. First-pass numbers only. GT audit deferred to separate issue.
+
+### Ship Criteria
+
+Rust and PHP observe remain **experimental** (no formal GT audit). TS (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable.
 
 ## Reproduction
 

@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-v0.4.1 release prep. Phase 24 DONE: Django tests.py recognition (+343 tests visible). v0.4.1 cleanup: should_panic exact match (tokio -10, clap -28 BLOCK), PHP query alignment, docs, test coverage.
+v0.4.2 release. observe recall/precision improvements (#85/#119/#126/#146) + Rust/PHP dogfooding baselines.
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Route extraction for 4 frameworks. Lint: 17 active rules, 4 languages, 11 projects / ~40k tests dogfooded. Default output: ai-prompt (with fix guidance).
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust/PHP: experimental (first baselines, GT audit pending #149). Lint: 17 active rules, 4 languages, 11 projects / ~40k tests dogfooded. Default output: ai-prompt.
 
 ## Progress
 
@@ -127,7 +127,7 @@ Root mode resolves most B2 FN but introduces FP from peripheral imports not yet 
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 1112 passing | -- |
+| Tests | 1119 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 

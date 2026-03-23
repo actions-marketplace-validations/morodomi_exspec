@@ -9,20 +9,6 @@
 
 ## Now
 
-### v0.4.2: observe recall improvement + Rust/PHP dogfooding
-
-Goal: Improve observe recall for stable languages (TS, Python), establish ship criteria for experimental languages (Rust, PHP).
-
-| Issue | Task | Type | Impact |
-|-------|------|------|--------|
-| #85 | TS namespace re-export (.scm addition) | recall | NestJS barrel FN improvement |
-| #119 | Python sub-module direct import resolution | recall | httpx 3 unmapped FN recovery |
-| #126 | Python stem-only fallback stem collision guard | precision | False match prevention |
-| -- | Rust observe formal dogfooding (tokio, clap) | dogfood | P/R measurement, ship criteria |
-| -- | PHP observe formal dogfooding (laravel) | dogfood | P/R measurement, ship criteria |
-
-**Why**: TS and Python observe are stable (P>=98%, R>=90%), but #85 and #119 address known FN gaps. Rust and PHP observe have never been formally dogfooded — we need P/R baselines before investing in precision improvements.
-
 ### v0.4.3: observe precision improvement + helper delegation
 
 Goal: Reduce observe false positives and lint BLOCK FP via helper delegation.
@@ -46,8 +32,24 @@ Goal: Reduce observe false positives and lint BLOCK FP via helper delegation.
 | P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
 | P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
+| P2 | #149 Rust/PHP observe formal GT audit | Ship criteria validation |
 
 ## Completed Recently
+
+### v0.4.2: observe recall/precision improvement + Rust/PHP dogfooding (2026-03-23)
+
+Goal: Improve observe recall for stable languages (TS, Python), establish baselines for experimental languages (Rust, PHP).
+
+| Issue | Task | Status |
+|-------|------|--------|
+| #85 | TS namespace re-export | DONE |
+| #119 | Python sub-module direct import resolution | DONE |
+| #126 | Python stem-only fallback stem collision guard | DONE |
+| #146 | Relative direct import assertion filter bypass | DONE |
+| -- | Rust observe dogfooding (tokio +20, clap +2 mapped) | DONE |
+| -- | PHP observe dogfooding (laravel +5 mapped) | DONE |
+
+**Why**: TS and Python observe were stable (P>=98%, R>=90%), but #85 and #119 addressed known FN gaps. #126/#146 improved precision and assertion filter coverage. Rust/PHP dogfooding established first baselines (GT audit deferred to #149).
 
 ### Phase 24: Python observe Django tests.py support (2026-03-23)
 
