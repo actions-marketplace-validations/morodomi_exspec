@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use streaming_iterator::StreamingIterator;
-use tree_sitter::{Node, Query, QueryCursor};
+use tree_sitter::{Node, Query, QueryCursor, Tree};
 
 use crate::rules::RuleId;
 use crate::suppress::parse_suppression;
@@ -231,6 +231,137 @@ pub fn apply_custom_assertion_fallback(
         let body_lines = &lines[start..end];
         let count = count_custom_assertion_lines(body_lines, patterns);
         func.analysis.assertion_count += count;
+    }
+}
+
+/// Apply same-file helper tracing to augment assertion_count for functions with 0 assertions.
+///
+/// For each test function with assertion_count == 0, traces 1-hop function calls within the
+/// same file. If a called function's body contains assertions, those assertions are counted
+/// and added to the test function's assertion_count.
+///
+/// - Only 1-hop: calls from test → helper (not helper → helper)
+/// - Only functions with assertion_count == 0 are processed (early return for performance)
+/// - Missing/undefined called functions are silently ignored (no crash)
+///
+/// `call_query`: tree-sitter query with @call_name capture
+/// `def_query`: tree-sitter query with @def_name and @def_body captures
+/// `assertion_query`: language assertion query with @assertion capture
+pub fn apply_same_file_helper_tracing(
+    analysis: &mut crate::extractor::FileAnalysis,
+    tree: &Tree,
+    source: &[u8],
+    call_query: &Query,
+    def_query: &Query,
+    assertion_query: &Query,
+) {
+    // Early return: no assertion-free functions → nothing to trace
+    if !analysis
+        .functions
+        .iter()
+        .any(|f| f.analysis.assertion_count == 0)
+    {
+        return;
+    }
+
+    let root = tree.root_node();
+
+    // Step 1: Build helper definition map: name → body byte range
+    let def_name_idx = match def_query.capture_index_for_name("def_name") {
+        Some(i) => i,
+        None => return,
+    };
+    let def_body_idx = match def_query.capture_index_for_name("def_body") {
+        Some(i) => i,
+        None => return,
+    };
+
+    let mut helper_bodies: HashMap<String, (usize, usize)> = HashMap::new();
+    {
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(def_query, root, source);
+        while let Some(m) = matches.next() {
+            let mut name: Option<String> = None;
+            let mut body_range: Option<(usize, usize)> = None;
+            for cap in m.captures {
+                if cap.index == def_name_idx {
+                    name = cap.node.utf8_text(source).ok().map(|s| s.to_string());
+                } else if cap.index == def_body_idx {
+                    body_range = Some((cap.node.start_byte(), cap.node.end_byte()));
+                }
+            }
+            if let (Some(n), Some(r)) = (name, body_range) {
+                helper_bodies.insert(n, r);
+            }
+        }
+    }
+
+    if helper_bodies.is_empty() {
+        return;
+    }
+
+    // Step 2: Build line-to-byte-offset map
+    let line_starts: Vec<usize> =
+        std::iter::once(0)
+            .chain(source.iter().enumerate().filter_map(|(i, &b)| {
+                if b == b'\n' {
+                    Some(i + 1)
+                } else {
+                    None
+                }
+            }))
+            .collect();
+
+    // Step 3: For each assertion-free test function, trace helper calls
+    let call_name_idx = match call_query.capture_index_for_name("call_name") {
+        Some(i) => i,
+        None => return,
+    };
+
+    for func in &mut analysis.functions {
+        if func.analysis.assertion_count > 0 {
+            continue;
+        }
+
+        // Calculate byte range from 1-based line numbers
+        let start_byte = line_starts
+            .get(func.line.saturating_sub(1))
+            .copied()
+            .unwrap_or(0);
+        let end_byte = line_starts
+            .get(func.end_line.min(line_starts.len()))
+            .copied()
+            .unwrap_or(source.len());
+
+        // Collect called function names within this test function's byte range
+        let mut called_names: BTreeSet<String> = BTreeSet::new();
+        {
+            let mut call_cursor = QueryCursor::new();
+            call_cursor.set_byte_range(start_byte..end_byte);
+            let mut call_matches = call_cursor.matches(call_query, root, source);
+            while let Some(m) = call_matches.next() {
+                for cap in m.captures {
+                    if cap.index == call_name_idx {
+                        if let Ok(name) = cap.node.utf8_text(source) {
+                            called_names.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // For each unique called name, look up its body and count assertions
+        let mut traced_count = 0usize;
+        for name in &called_names {
+            if let Some(&(body_start, body_end)) = helper_bodies.get(name.as_str()) {
+                // Find the body node from the tree by byte range
+                if let Some(body_node) = root.descendant_for_byte_range(body_start, body_end) {
+                    traced_count += count_captures(assertion_query, "assertion", body_node, source);
+                }
+            }
+        }
+
+        func.analysis.assertion_count += traced_count;
     }
 }
 
