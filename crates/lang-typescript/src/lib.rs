@@ -5,8 +5,9 @@ use std::sync::OnceLock;
 
 use exspec_core::extractor::{FileAnalysis, LanguageExtractor, TestAnalysis, TestFunction};
 use exspec_core::query_utils::{
-    collect_mock_class_names, count_captures, count_captures_within_context,
-    count_duplicate_literals, extract_suppression_from_previous_line, has_any_match,
+    apply_same_file_helper_tracing, collect_mock_class_names, count_captures,
+    count_captures_within_context, count_duplicate_literals,
+    extract_suppression_from_previous_line, has_any_match,
 };
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
@@ -23,6 +24,7 @@ const PRIVATE_IN_ASSERTION_QUERY: &str = include_str!("../queries/private_in_ass
 const ERROR_TEST_QUERY: &str = include_str!("../queries/error_test.scm");
 const RELATIONAL_ASSERTION_QUERY: &str = include_str!("../queries/relational_assertion.scm");
 const WAIT_AND_SEE_QUERY: &str = include_str!("../queries/wait_and_see.scm");
+const HELPER_TRACE_QUERY: &str = include_str!("../queries/helper_trace.scm");
 
 fn ts_language() -> tree_sitter::Language {
     tree_sitter_typescript::LANGUAGE_TSX.into()
@@ -44,6 +46,7 @@ static PRIVATE_IN_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static ERROR_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static RELATIONAL_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static WAIT_AND_SEE_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static HELPER_TRACE_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct TypeScriptExtractor;
 
@@ -324,7 +327,7 @@ impl LanguageExtractor for TypeScriptExtractor {
         let has_relational_assertion =
             has_any_match(relational_query, "relational", root, source_bytes);
 
-        FileAnalysis {
+        let mut file_analysis = FileAnalysis {
             file: file_path.to_string(),
             functions,
             has_pbt_import,
@@ -332,7 +335,23 @@ impl LanguageExtractor for TypeScriptExtractor {
             has_error_test,
             has_relational_assertion,
             parameterized_count,
-        }
+        };
+
+        // Apply same-file helper tracing (Phase 23b — TypeScript port)
+        // helper_trace.scm contains both @call_name and @def_name/@def_body captures
+        // in a single query. Same object is passed as both call_query and def_query by design.
+        let helper_trace_query = cached_query(&HELPER_TRACE_QUERY_CACHE, HELPER_TRACE_QUERY);
+        let assertion_query_for_trace = cached_query(&ASSERTION_QUERY_CACHE, ASSERTION_QUERY);
+        apply_same_file_helper_tracing(
+            &mut file_analysis,
+            &tree,
+            source_bytes,
+            helper_trace_query,
+            helper_trace_query,
+            assertion_query_for_trace,
+        );
+
+        file_analysis
     }
 }
 
@@ -1999,6 +2018,155 @@ describe('d', () => {
             funcs[6].analysis.assertion_count, 0,
             "TC-07 no assertion should have assertion_count == 0, got {}",
             funcs[6].analysis.assertion_count
+        );
+    }
+
+    // --- Same-file helper tracing (Phase 23b TypeScript port, TC-01 ~ TC-08) ---
+
+    #[test]
+    fn helper_tracing_tc01_calls_helper_with_assert() {
+        // TC-01: test that calls a helper with assertion → assertion_count >= 1 after tracing
+        let source = fixture("t001_pass_helper_tracing.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.test.ts");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "TC-01 calls helper with assert")
+            .expect("TC-01 calls helper with assert not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "TC-01: expected assertion_count >= 1, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc02_calls_helper_without_assert() {
+        // TC-02: test that calls a helper WITHOUT assertion → assertion_count stays 0
+        let source = fixture("t001_pass_helper_tracing.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.test.ts");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "TC-02 calls helper without assert")
+            .expect("TC-02 calls helper without assert not found");
+        assert_eq!(
+            func.analysis.assertion_count, 0,
+            "TC-02: expected assertion_count == 0, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc03_has_own_assert_plus_helper() {
+        // TC-03: test with own assert + calls helper → assertion_count >= 1 (direct assertion)
+        let source = fixture("t001_pass_helper_tracing.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.test.ts");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "TC-03 has own assert plus helper")
+            .expect("TC-03 has own assert plus helper not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "TC-03: expected assertion_count >= 1, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc04_calls_undefined_function() {
+        // TC-04: calling a function not defined in the file → no crash, assertion_count stays 0
+        let source = fixture("t001_pass_helper_tracing.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.test.ts");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "TC-04 calls undefined function")
+            .expect("TC-04 calls undefined function not found");
+        assert_eq!(
+            func.analysis.assertion_count, 0,
+            "TC-04: expected assertion_count == 0, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc05_two_hop_tracing() {
+        // TC-05: 2-hop helper (intermediate → checkResult) — only 1-hop traced.
+        // intermediate() itself has NO assertion → assertion_count stays 0
+        let source = fixture("t001_pass_helper_tracing.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.test.ts");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "TC-05 two hop tracing")
+            .expect("TC-05 two hop tracing not found");
+        assert_eq!(
+            func.analysis.assertion_count, 0,
+            "TC-05: 2-hop not traced, expected assertion_count == 0, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc06_with_assertion_early_return() {
+        // TC-06: test with own assertion → helper tracing early returns, assertion_count unchanged
+        let source = fixture("t001_pass_helper_tracing.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.test.ts");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "TC-06 with assertion early return")
+            .expect("TC-06 with assertion early return not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "TC-06: expected assertion_count >= 1, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc07_multiple_calls_same_helper() {
+        // TC-07: test that calls same helper multiple times
+        // Should deduplicate and count helper assertions once, not once per call.
+        // checkResult has exactly 1 assert → dedup → assertion_count == 1
+        let source = fixture("t001_pass_helper_tracing.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.test.ts");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "TC-07 multiple calls same helper")
+            .expect("TC-07 multiple calls same helper not found");
+        assert_eq!(
+            func.analysis.assertion_count, 1,
+            "TC-07: dedup expected assertion_count == 1, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc08_arrow_function_helper() {
+        // TC-08: arrow function helper with assertion → assertion_count >= 1
+        let source = fixture("t001_pass_helper_tracing.test.ts");
+        let extractor = TypeScriptExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.test.ts");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "TC-08 arrow function helper")
+            .expect("TC-08 arrow function helper not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "TC-08: arrow function helper expected assertion_count >= 1, got {}",
+            func.analysis.assertion_count
         );
     }
 }
