@@ -4,8 +4,9 @@ use std::sync::OnceLock;
 
 use exspec_core::extractor::{FileAnalysis, LanguageExtractor, TestAnalysis, TestFunction};
 use exspec_core::query_utils::{
-    collect_mock_class_names, count_captures, count_captures_within_context,
-    count_duplicate_literals, extract_suppression_from_previous_line, has_any_match,
+    apply_same_file_helper_tracing, collect_mock_class_names, count_captures,
+    count_captures_within_context, count_duplicate_literals,
+    extract_suppression_from_previous_line, has_any_match,
 };
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
@@ -22,6 +23,7 @@ const PRIVATE_IN_ASSERTION_QUERY: &str = include_str!("../queries/private_in_ass
 const ERROR_TEST_QUERY: &str = include_str!("../queries/error_test.scm");
 const RELATIONAL_ASSERTION_QUERY: &str = include_str!("../queries/relational_assertion.scm");
 const WAIT_AND_SEE_QUERY: &str = include_str!("../queries/wait_and_see.scm");
+const HELPER_TRACE_QUERY: &str = include_str!("../queries/helper_trace.scm");
 
 fn rust_language() -> tree_sitter::Language {
     tree_sitter_rust::LANGUAGE.into()
@@ -43,6 +45,7 @@ static PRIVATE_IN_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static ERROR_TEST_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static RELATIONAL_ASSERTION_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 static WAIT_AND_SEE_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
+static HELPER_TRACE_QUERY_CACHE: OnceLock<Query> = OnceLock::new();
 
 pub struct RustExtractor;
 
@@ -462,7 +465,7 @@ impl LanguageExtractor for RustExtractor {
         let has_relational_assertion =
             has_any_match(relational_query, "relational", root, source_bytes);
 
-        FileAnalysis {
+        let mut file_analysis = FileAnalysis {
             file: file_path.to_string(),
             functions,
             has_pbt_import,
@@ -470,7 +473,21 @@ impl LanguageExtractor for RustExtractor {
             has_error_test,
             has_relational_assertion,
             parameterized_count,
-        }
+        };
+
+        // Apply same-file helper tracing (Phase 23a)
+        let helper_trace_query = cached_query(&HELPER_TRACE_QUERY_CACHE, HELPER_TRACE_QUERY);
+        let assertion_query_for_trace = cached_query(&ASSERTION_QUERY_CACHE, ASSERTION_QUERY);
+        apply_same_file_helper_tracing(
+            &mut file_analysis,
+            &tree,
+            source_bytes,
+            helper_trace_query,
+            helper_trace_query,
+            assertion_query_for_trace,
+        );
+
+        file_analysis
     }
 }
 
@@ -1341,6 +1358,187 @@ mod tests {
             funcs[0].analysis.assertion_count, 0,
             "assertion!() should NOT be counted as assertion, got {}",
             funcs[0].analysis.assertion_count
+        );
+    }
+
+    // --- Same-file helper tracing (Phase 23a, TC-01 ~ TC-06) ---
+
+    #[test]
+    fn helper_tracing_tc01_delegates_to_helper_with_assertion() {
+        // TC-01: test that calls a helper with assertion → assertion_count >= 1 after tracing
+        // RED: apply_same_file_helper_tracing is a stub → assertion_count stays 0 → FAIL expected
+        let source = fixture("t001_pass_helper_tracing.rs");
+        let extractor = RustExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.rs");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_delegates_to_helper_with_assertion")
+            .expect("test_delegates_to_helper_with_assertion not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "TC-01: helper with assertion traced → assertion_count >= 1, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc02_delegates_to_helper_without_assertion() {
+        // TC-02: test that calls a helper WITHOUT assertion → assertion_count stays 0
+        let source = fixture("t001_pass_helper_tracing.rs");
+        let extractor = RustExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.rs");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_delegates_to_helper_without_assertion")
+            .expect("test_delegates_to_helper_without_assertion not found");
+        assert_eq!(
+            func.analysis.assertion_count, 0,
+            "TC-02: helper without assertion → assertion_count == 0, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc03_has_own_assertion_and_calls_helper() {
+        // TC-03: test with own assert_eq! → assertion_count >= 1 (direct assertion, no tracing needed)
+        let source = fixture("t001_pass_helper_tracing.rs");
+        let extractor = RustExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.rs");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_has_own_assertion_and_calls_helper")
+            .expect("test_has_own_assertion_and_calls_helper not found");
+        assert!(
+            func.analysis.assertion_count >= 1,
+            "TC-03: own assertion present → assertion_count >= 1, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc04_calls_undefined_function() {
+        // TC-04: calling a function not defined in the file → no crash, assertion_count stays 0
+        let source = fixture("t001_pass_helper_tracing.rs");
+        let extractor = RustExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.rs");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_calls_undefined_function")
+            .expect("test_calls_undefined_function not found");
+        assert_eq!(
+            func.analysis.assertion_count, 0,
+            "TC-04: undefined function call → no crash, assertion_count == 0, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc05_two_hop_not_traced() {
+        // TC-05: 2-hop helper (intermediate_helper → check_result) — only 1-hop traced.
+        // intermediate_helper itself has no assertion → assertion_count stays 0
+        let source = fixture("t001_pass_helper_tracing.rs");
+        let extractor = RustExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.rs");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_two_hop_not_traced")
+            .expect("test_two_hop_not_traced not found");
+        assert_eq!(
+            func.analysis.assertion_count, 0,
+            "TC-05: 2-hop helper not traced → assertion_count == 0, got {}",
+            func.analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc06_all_functions_have_assertions_early_return() {
+        // TC-06: when all functions already have assertion_count > 0,
+        // apply_same_file_helper_tracing should early-return without extra cost.
+        // We verify by calling apply_same_file_helper_tracing on a FileAnalysis
+        // where all functions have assertion_count > 0 — counts must not change.
+        use exspec_core::query_utils::apply_same_file_helper_tracing;
+        use tree_sitter::Query;
+
+        // Build a source where the only test has an assertion
+        let source = "#[test]\nfn test_has_assertion() {\n    assert_eq!(1, 1);\n}\n";
+        let extractor = RustExtractor::new();
+        let mut fa = extractor.extract_file_analysis(source, "tc06.rs");
+
+        // All functions already have assertion_count > 0
+        assert!(
+            fa.functions.iter().all(|f| f.analysis.assertion_count > 0),
+            "TC-06 precondition: all functions must have assertion_count > 0"
+        );
+
+        // Prepare stub queries (content does not matter since stub does nothing)
+        let language = tree_sitter_rust::LANGUAGE;
+        let lang: tree_sitter::Language = language.into();
+        // Minimal valid queries for Rust
+        let call_query =
+            Query::new(&lang, "(call_expression function: (identifier) @call_name)").unwrap();
+        let def_query = Query::new(
+            &lang,
+            "(function_item name: (identifier) @def_name body: (block) @def_body)",
+        )
+        .unwrap();
+        let assertion_query =
+            Query::new(&lang, "(macro_invocation macro: (identifier) @assertion)").unwrap();
+
+        let mut parser = RustExtractor::parser();
+        let tree = parser.parse(source, None).unwrap();
+
+        let before: Vec<usize> = fa
+            .functions
+            .iter()
+            .map(|f| f.analysis.assertion_count)
+            .collect();
+
+        apply_same_file_helper_tracing(
+            &mut fa,
+            &tree,
+            source.as_bytes(),
+            &call_query,
+            &def_query,
+            &assertion_query,
+        );
+
+        let after: Vec<usize> = fa
+            .functions
+            .iter()
+            .map(|f| f.analysis.assertion_count)
+            .collect();
+
+        assert_eq!(
+            before, after,
+            "TC-06: assertion_counts must not change when all > 0 (early return)"
+        );
+    }
+
+    #[test]
+    fn helper_tracing_tc07_multiple_calls_to_same_helper() {
+        // TC-07: test that calls same helper multiple times
+        // Should deduplicate and count helper assertions once, not once per call
+        let source = fixture("t001_pass_helper_tracing.rs");
+        let extractor = RustExtractor::new();
+        let fa = extractor.extract_file_analysis(&source, "t001_pass_helper_tracing.rs");
+        let func = fa
+            .functions
+            .iter()
+            .find(|f| f.name == "test_calls_helper_twice")
+            .expect("test_calls_helper_twice not found");
+
+        // check_result has 1 assertion. Calling it twice should add 1, not 2.
+        // Expected: assertion_count == 1 (deduplicated)
+        // Current bug: assertion_count == 2 (counted per call)
+        assert_eq!(
+            func.analysis.assertion_count, 1,
+            "TC-07: multiple calls to same helper should be deduplicated, got {}",
+            func.analysis.assertion_count
         );
     }
 }
