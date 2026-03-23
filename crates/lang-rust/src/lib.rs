@@ -29,6 +29,43 @@ fn rust_language() -> tree_sitter::Language {
     tree_sitter_rust::LANGUAGE.into()
 }
 
+/// Check if an `attribute_item` node has an exact attribute name.
+/// Walks the tree-sitter structure: attribute_item → attribute → identifier.
+/// Avoids substring matches that could falsely trigger on names like
+/// `my_crate::should_panic_handler`.
+fn attribute_has_name(node: &Node, source_bytes: &[u8], name: &str) -> bool {
+    // tree-sitter-rust structure:
+    //   attribute_item → "#" → "[" → attribute → "]"
+    //   attribute → path (identifier | scoped_identifier) [+ arguments]
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        // Direct identifier child (simple attribute like #[test])
+        if child.kind() == "identifier" {
+            if let Ok(text) = child.utf8_text(source_bytes) {
+                if text == name {
+                    return true;
+                }
+            }
+        }
+        // attribute or meta_item child
+        if child.kind() == "attribute" || child.kind() == "meta_item" {
+            let mut inner_cursor = child.walk();
+            for inner in child.children(&mut inner_cursor) {
+                if inner.kind() == "identifier" {
+                    if let Ok(text) = inner.utf8_text(source_bytes) {
+                        if text == name {
+                            return true;
+                        }
+                    }
+                    // Only check the first identifier (the attribute name, not arguments)
+                    break;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn cached_query<'a>(lock: &'a OnceLock<Query>, source: &str) -> &'a Query {
     lock.get_or_init(|| Query::new(&rust_language(), source).expect("invalid query"))
 }
@@ -278,10 +315,8 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 while let Some(p) = prev {
                     if p.kind() == "attribute_item" {
                         attr_start_row = p.start_position().row;
-                        if let Ok(text) = p.utf8_text(source_bytes) {
-                            if text.contains("should_panic") {
-                                has_should_panic = true;
-                            }
+                        if attribute_has_name(&p, source_bytes, "should_panic") {
+                            has_should_panic = true;
                         }
                     } else if p.kind() != "line_comment" && p.kind() != "block_comment" {
                         break;
@@ -319,10 +354,8 @@ fn extract_functions_from_tree(source: &str, file_path: &str, root: Node) -> Vec
                 // Skip over other attribute_items or whitespace nodes
                 // If we hit something that is not an attribute_item, stop
                 if s.kind() == "attribute_item" {
-                    if let Ok(text) = s.utf8_text(source_bytes) {
-                        if text.contains("should_panic") {
-                            has_should_panic = true;
-                        }
+                    if attribute_has_name(&s, source_bytes, "should_panic") {
+                        has_should_panic = true;
                     }
                 } else if s.kind() != "line_comment" && s.kind() != "block_comment" {
                     break;
@@ -1276,6 +1309,22 @@ mod tests {
         assert!(
             funcs[0].analysis.assertion_count >= 1,
             "#[should_panic] in mod should count as assertion, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
+    #[test]
+    fn t001_should_panic_substring_not_matched() {
+        // TC-09d: #[my_should_panic_wrapper] should NOT count as #[should_panic]
+        // Substring match was tightened to exact identifier match (#29)
+        let source = fixture("t001_should_panic_substring_no_match.rs");
+        let extractor = RustExtractor::new();
+        let funcs =
+            extractor.extract_test_functions(&source, "t001_should_panic_substring_no_match.rs");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(
+            funcs[0].analysis.assertion_count, 0,
+            "#[my_should_panic_wrapper] should NOT count as assertion (exact match only), got {}",
             funcs[0].analysis.assertion_count
         );
     }
