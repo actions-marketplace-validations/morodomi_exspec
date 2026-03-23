@@ -9,7 +9,23 @@
 
 ## Now
 
-(no active phase)
+### Phase 22: Rust custom assert macro auto-detection
+
+Goal: Automatically recognize `assert_*!` macro invocations as assertions, eliminating the need for manual `custom_patterns` config in most Rust projects.
+
+**Why**: tokio has 124 FP and clap has 115 FP from custom assertion macros (`assert_pending!`, `assert_ready!`, `assert_data_eq!`, etc.). These are the dominant FP source for Rust T001 (95% of tokio FPs, 53% of clap FPs). Currently users must manually enumerate every custom assert macro in `.exspec.toml` -- a poor onboarding experience.
+
+**Approach**: In Rust assertion detection, match `macro_invocation` nodes whose name starts with `assert` (e.g. `assert_pending!`, `assert_ready_ok!`). tree-sitter can see the macro name even though the body is opaque `token_tree`. This is strictly additive -- existing `custom_patterns` config continues to work for non-`assert_*` patterns.
+
+**Expected impact**: tokio BLOCK 385→~261 (-124), clap BLOCK 193→~78 (-115). Combined -239 FP across 2 projects.
+
+### Next: Phase 23: Helper delegation (1-hop assertion tracing)
+
+Goal: Detect assertions inside project-local helper functions called from test functions. Trace 1 hop from test → helper → assertion.
+
+**Why**: Helper delegation is the #1 remaining FP source across all languages (laravel 222, symfony ~50, fastapi ~15, django 8, clap 103). The `custom_patterns` workaround requires manual config per project. 1-hop tracing would eliminate most helper delegation FPs automatically.
+
+**Approach**: Reuse observe's import/function resolution infrastructure. For each assertion-free test function, check if any called function (same file or 1-hop import) contains assertions. Scope: same-file first, then 1-hop cross-file. opt-in via config to avoid performance regression.
 
 ## Completed Recently
 
@@ -63,8 +79,8 @@ Goal: Extract API route definitions from framework decorators/config. NestJS, Fa
 
 | Priority | Task | Trigger |
 |----------|------|---------|
-| P1 | Multi-path CLI for observe (B2 cross-package resolution) | 13 FN in NestJS, all B2 |
-| -- | ~~Python observe stable promotion~~ | Done in v0.4.0 |
+| P1 | Phase 23: Helper delegation (1-hop assertion tracing) | #1 FP source across all languages |
+| P2 | Multi-path CLI for observe (B2 cross-package resolution) | 13 FN in NestJS, all B2 |
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
 | P2 | Barrel sym-tracking for setup-only import FP | 1 remaining httpx FP (`_models.py <- test_timeouts.py`) |
 

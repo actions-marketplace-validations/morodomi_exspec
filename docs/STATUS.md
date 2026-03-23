@@ -2,7 +2,9 @@
 
 ## Current Phase
 
-v0.4.0. observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Route extraction for 4 frameworks. Lint: 17 active rules, 4 languages, 11 projects / ~40k tests dogfooded. Default output: ai-prompt (with fix guidance).
+v0.4.x development. Phase 22: Rust custom assert macro auto-detection (`assert_*!` macro invocations as assertions). Expected impact: tokio -124 FP, clap -115 FP. Next: Phase 23 helper delegation (1-hop assertion tracing).
+
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Route extraction for 4 frameworks. Lint: 17 active rules, 4 languages, 11 projects / ~40k tests dogfooded. Default output: ai-prompt (with fix guidance).
 
 ## Progress
 
