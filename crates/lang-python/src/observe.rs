@@ -1549,6 +1549,61 @@ def endpoint():
     // PY-IMPORT-02: `import os.path` -> specifier="os/path", symbols=[]
     // -----------------------------------------------------------------------
     #[test]
+    fn py_import_01b_bare_import_attribute_access_narrowing() {
+        // Given: source with bare import + attribute access (simple, non-dotted)
+        let source = "import httpx\nhttpx.Client()\nhttpx.get('/api')\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: contains ("httpx", ["Client", "get"]) -- attribute access narrows symbols
+        let entry = result.iter().find(|(spec, _)| spec == "httpx");
+        assert!(entry.is_some(), "httpx not found in {:?}", result);
+        let (_, symbols) = entry.unwrap();
+        assert!(
+            symbols.contains(&"Client".to_string()),
+            "expected Client in symbols, got {:?}",
+            symbols
+        );
+        assert!(
+            symbols.contains(&"get".to_string()),
+            "expected get in symbols, got {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-IMPORT-02a: `import os.path; os.path.join(...)` -> specifier="os/path", symbols=[]
+    //   Dotted bare import attribute-access fallback: @module_name captures single
+    //   identifier "os" but import_name_parts[0] is "os.path", so no match → empty symbols.
+    //   This is intentional: fallback to match-all is the safe side.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_import_02a_dotted_bare_import_attribute_fallback() {
+        // Given: source with dotted bare import + attribute access
+        let source = "import os.path\nos.path.join('/a', 'b')\n";
+
+        // When: extract_all_import_specifiers is called
+        let extractor = PythonExtractor::new();
+        let result = extractor.extract_all_import_specifiers(source);
+
+        // Then: specifier="os/path", symbols=[] (fallback: tree-sitter @module_name captures
+        //   "os" (single identifier) but import_name_parts[0] is "os.path", so mismatch → empty)
+        let entry = result.iter().find(|(spec, _)| spec == "os/path");
+        assert!(entry.is_some(), "os/path not found in {:?}", result);
+        let (_, symbols) = entry.unwrap();
+        assert!(
+            symbols.is_empty(),
+            "expected empty symbols for dotted bare import (intentional fallback), got {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-IMPORT-02: `import os.path` -> specifier="os/path", symbols=[]
+    // -----------------------------------------------------------------------
+    #[test]
     fn py_import_02_bare_import_dotted() {
         // Given: source with a dotted bare import
         let source = "import os.path\n";
@@ -5184,6 +5239,41 @@ class TestMyModel(unittest.TestCase):
             types_mapping.is_none() || types_mapping.unwrap().test_files.is_empty(),
             "_types.py should NOT be mapped (type definitions); mappings={:?}",
             result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-RESOLVE-PRIORITY-01: file wins over package when both exist
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_resolve_priority_01_file_wins_over_package() {
+        // Given: tempdir with both foo/bar/baz.py and foo/bar/baz/__init__.py
+        let tmp = tempfile::tempdir().unwrap();
+        let baz_dir = tmp.path().join("foo").join("bar").join("baz");
+        std::fs::create_dir_all(&baz_dir).unwrap();
+        let baz_file = tmp.path().join("foo").join("bar").join("baz.py");
+        std::fs::write(&baz_file, "class Baz: pass\n").unwrap();
+        let baz_init = baz_dir.join("__init__.py");
+        std::fs::write(&baz_init, "from .impl import Baz\n").unwrap();
+
+        let canonical_root = tmp.path().canonicalize().unwrap();
+        let base = tmp.path().join("foo").join("bar").join("baz");
+        let extractor = PythonExtractor::new();
+
+        // When: resolve_absolute_base_to_file is called
+        let result =
+            exspec_core::observe::resolve_absolute_base_to_file(&extractor, &base, &canonical_root);
+
+        // Then: resolves to baz.py (file), not baz/__init__.py (package)
+        assert!(result.is_some(), "expected resolution, got None");
+        let resolved = result.unwrap();
+        assert!(
+            resolved.ends_with("baz.py"),
+            "expected baz.py (file wins over package), got: {resolved}"
+        );
+        assert!(
+            !resolved.contains("__init__"),
+            "should NOT resolve to __init__.py, got: {resolved}"
         );
     }
 }

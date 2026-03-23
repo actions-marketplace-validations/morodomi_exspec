@@ -1338,6 +1338,31 @@ mod tests {
         );
     }
 
+    // --- #30: Round-trip test: same fixture through T001 (assertion) and T103 (error_test) ---
+
+    #[test]
+    fn t001_t103_round_trip_expect_exception() {
+        // Given: t103_pass.php contains $this->expectException()
+        let source = fixture("t103_pass.php");
+        let extractor = PhpExtractor::new();
+
+        // When: extract_file_analysis (T103) and extract_test_functions (T001)
+        let fa = extractor.extract_file_analysis(&source, "t103_pass.php");
+        let funcs = extractor.extract_test_functions(&source, "t103_pass.php");
+
+        // Then: T103 detects error test AND T001 counts as assertion (both queries aligned)
+        assert!(
+            fa.has_error_test,
+            "error_test.scm should detect $this->expectException()"
+        );
+        assert!(!funcs.is_empty(), "should extract at least 1 test function");
+        assert!(
+            funcs[0].analysis.assertion_count >= 1,
+            "assertion.scm should count $this->expectException() as assertion, got {}",
+            funcs[0].analysis.assertion_count
+        );
+    }
+
     // --- #44: T001 FP: arbitrary-object ->assert*() and self::assert*() ---
 
     #[test]
