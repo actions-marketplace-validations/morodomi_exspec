@@ -9,22 +9,43 @@
 
 ## Now
 
-### Phase 23b: Helper delegation (1-hop cross-file assertion tracing)
+### v0.4.2: observe recall improvement + Rust/PHP dogfooding
 
-Goal: Detect assertions inside project-local helper functions called from test functions across files. Trace 1 hop from test → imported helper → assertion.
+Goal: Improve observe recall for stable languages (TS, Python), establish ship criteria for experimental languages (Rust, PHP).
 
-**Why**: Helper delegation is the #1 remaining FP source across all languages (laravel 222, symfony 616, tokio 247, clap 43). Phase 23a (same-file, Rust-only) shipped in v0.4.0. Phase 23b extends to cross-file for all 4 languages.
+| Issue | Task | Type | Impact |
+|-------|------|------|--------|
+| #85 | TS namespace re-export (.scm addition) | recall | NestJS barrel FN improvement |
+| #119 | Python sub-module direct import resolution | recall | httpx 3 unmapped FN recovery |
+| #126 | Python stem-only fallback stem collision guard | precision | False match prevention |
+| -- | Rust observe formal dogfooding (tokio, clap) | dogfood | P/R measurement, ship criteria |
+| -- | PHP observe formal dogfooding (laravel) | dogfood | P/R measurement, ship criteria |
 
-**Approach**: Reuse observe's import/function resolution infrastructure. For each assertion-free test function, check if any called function (1-hop imported) contains assertions. opt-in via config to avoid performance regression.
+**Why**: TS and Python observe are stable (P>=98%, R>=90%), but #85 and #119 address known FN gaps. Rust and PHP observe have never been formally dogfooded — we need P/R baselines before investing in precision improvements.
 
-## Next
+### v0.4.3: observe precision improvement + helper delegation
+
+Goal: Reduce observe false positives and lint BLOCK FP via helper delegation.
+
+| Issue | Task | Type | Impact |
+|-------|------|------|--------|
+| #131 | L1 exclusive mode (opt-in: L1 match suppresses L2) | precision | httpx L2 FP ~25 elimination |
+| #129 | L2 fan-out filter (high-frequency mapping suppression) | precision | Cross-project utility FP reduction |
+| #93 | PHP PSR-4 multi-segment namespace resolution | recall | Depends on v0.4.2 dogfood results |
+| -- | Phase 23b: 1-hop cross-file helper delegation | lint | #1 BLOCK FP source (laravel 222, symfony 616) |
+
+**Why**: v0.4.2 dogfooding will reveal Rust/PHP precision gaps. #131/#129 are language-agnostic precision improvements. Phase 23b is the biggest remaining lint BLOCK reduction opportunity.
+
+## Backlog
 
 | Priority | Task | Trigger |
 |----------|------|---------|
 | P2 | Multi-path CLI for observe (B2 cross-package resolution) | 13 FN in NestJS, all B2 |
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
-| P2 | #119 Python sub-module direct import resolution | Python observe recall |
-| P2 | #85 namespace re-export | TypeScript observe recall |
+| P2 | #127 Python barrel suppression per-(test, prod) scope | Precision refinement |
+| P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
+| P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
+| P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
 
 ## Completed Recently
 
