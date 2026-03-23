@@ -1,7 +1,7 @@
 ---
 feature: rust-custom-assert-macro
 cycle: 20260323_0852
-phase: REVIEW-DONE
+phase: DONE
 complexity: trivial
 test_count: 4
 risk_level: low
@@ -149,4 +149,4 @@ After:
 4. [Done] GREEN
 5. [Done] REFACTOR
 6. [Done] REVIEW
-7. [Next] COMMIT
+7. [Done] COMMIT
