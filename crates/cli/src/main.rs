@@ -87,7 +87,8 @@ fn is_python_test_file(path: &str) -> bool {
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or("");
-    (filename.starts_with("test_") || filename.ends_with("_test.py")) && filename.ends_with(".py")
+    (filename.starts_with("test_") || filename.ends_with("_test.py") || filename == "tests.py")
+        && filename.ends_with(".py")
 }
 
 fn is_typescript_test_file(path: &str) -> bool {
@@ -814,6 +815,28 @@ mod tests {
         assert!(!is_python_test_file("foo.py"));
         assert!(!is_python_test_file("helper.py"));
         assert!(!is_python_test_file("test_foo.js"));
+    }
+
+    // -----------------------------------------------------------------------
+    // CLI-PY-TESTS-01: is_python_test_file("app/tests.py") -> true
+    // -----------------------------------------------------------------------
+    #[test]
+    fn cli_py_tests_01_tests_file_is_recognized() {
+        // Given: path = "app/tests.py"
+        // When: is_python_test_file(path)
+        // Then: true (Django tests.py naming convention)
+        assert!(is_python_test_file("app/tests.py"));
+    }
+
+    // -----------------------------------------------------------------------
+    // CLI-PY-TESTS-02: is_python_test_file("tests/__init__.py") -> false
+    // -----------------------------------------------------------------------
+    #[test]
+    fn cli_py_tests_02_init_file_in_tests_dir_not_recognized() {
+        // Given: path = "tests/__init__.py"
+        // When: is_python_test_file(path)
+        // Then: false (__init__.py is not a test file even inside tests/
+        assert!(!is_python_test_file("tests/__init__.py"));
     }
 
     // --- TypeScript file discovery ---

@@ -59,6 +59,17 @@ pub fn test_stem(path: &str) -> Option<&str> {
     if let Some(rest) = stem.strip_suffix("_test") {
         return Some(rest);
     }
+    // Django: tests.py → parent directory name as stem
+    if stem == "tests" {
+        let sep_pos = path.rfind('/')?;
+        let before_sep = &path[..sep_pos];
+        let parent_start = before_sep.rfind('/').map(|i| i + 1).unwrap_or(0);
+        let parent_name = &path[parent_start..sep_pos];
+        if parent_name.is_empty() {
+            return None;
+        }
+        return Some(parent_name);
+    }
     None
 }
 
@@ -72,6 +83,10 @@ pub fn production_stem(path: &str) -> Option<&str> {
     let stem = file_name.strip_suffix(".py")?;
     // Exclude __init__.py
     if stem == "__init__" {
+        return None;
+    }
+    // Exclude Django tests.py
+    if stem == "tests" {
         return None;
     }
     // Exclude test files
@@ -2246,6 +2261,54 @@ def endpoint():
     }
 
     // -----------------------------------------------------------------------
+    // PY-STEM-13: test_stem("app/tests.py") -> Some("app")
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_stem_13_tests_file_with_parent_dir() {
+        // Given: path = "app/tests.py"
+        // When: test_stem(path)
+        // Then: Some("app") (parent directory name used as stem)
+        let result = test_stem("app/tests.py");
+        assert_eq!(result, Some("app"));
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-STEM-14: test_stem("tests/aggregation/tests.py") -> Some("aggregation")
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_stem_14_tests_file_with_nested_parent_dir() {
+        // Given: path = "tests/aggregation/tests.py"
+        // When: test_stem(path)
+        // Then: Some("aggregation") (immediate parent directory name used as stem)
+        let result = test_stem("tests/aggregation/tests.py");
+        assert_eq!(result, Some("aggregation"));
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-STEM-15: test_stem("tests.py") -> None (no parent dir)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_stem_15_tests_file_no_parent_dir() {
+        // Given: path = "tests.py" (no parent directory component)
+        // When: test_stem(path)
+        // Then: None (no parent dir to derive stem from, defer to Layer 2)
+        let result = test_stem("tests.py");
+        assert_eq!(result, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-STEM-16: production_stem("app/tests.py") -> None
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_stem_16_production_stem_excludes_tests_file() {
+        // Given: path = "app/tests.py"
+        // When: production_stem(path)
+        // Then: None (tests.py must not appear in production_files)
+        let result = production_stem("app/tests.py");
+        assert_eq!(result, None);
+    }
+
+    // -----------------------------------------------------------------------
     // PY-SRCLAYOUT-01: src/ layout absolute import resolved
     // -----------------------------------------------------------------------
     #[test]
@@ -2430,6 +2493,42 @@ def endpoint():
             mapping.test_files.contains(&r.test_path),
             "test_thing.py not in test_files for pkg/utils.py via bare two-dot import: {:?}",
             mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PY-L2-DJANGO-01: Django layout tests.py mapped via Layer 2
+    // -----------------------------------------------------------------------
+    #[test]
+    fn py_l2_django_01_tests_file_mapped_via_import_tracing() {
+        // Given: tempdir with src/models.py (production) and app/tests.py (test)
+        //        app/tests.py contains `from src.models import Model`
+        let r = run_import_test(
+            "src/models.py",
+            "class Model:\n    pass\n",
+            "app/tests.py",
+            "from src.models import Model\n\n\ndef test_model():\n    pass\n",
+            &[],
+        );
+
+        // Then: src/models.py is mapped to app/tests.py via ImportTracing strategy
+        let mapping = r.mappings.iter().find(|m| m.production_file == r.prod_path);
+        assert!(
+            mapping.is_some(),
+            "src/models.py not found in mappings: {:?}",
+            r.mappings
+        );
+        let mapping = mapping.unwrap();
+        assert!(
+            mapping.test_files.contains(&r.test_path),
+            "app/tests.py not in test_files for src/models.py: {:?}",
+            mapping.test_files
+        );
+        assert_eq!(
+            mapping.strategy,
+            MappingStrategy::ImportTracing,
+            "expected ImportTracing strategy, got {:?}",
+            mapping.strategy
         );
     }
 }
