@@ -1,7 +1,38 @@
 # Dogfooding Results
 
-Latest: 2026-03-24, exspec v0.4.3-dev (same-file helper tracing all 4 languages)
+Latest: 2026-03-24, exspec v0.4.3-dev (helper tracing + L1 exclusive + GT audit)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
+
+## GT Audit: Rust/PHP Observe (#149, 2026-03-24)
+
+Ship criteria: P>=98%, R>=90% (test file coverage)
+
+### Rust (tokio, 30-pair sample)
+
+| Metric | Value | Target | Result |
+|--------|-------|--------|--------|
+| Precision | **76.7%** (23/30) | >= 98% | **FAIL** |
+| Recall (test file) | **36.8%** (100/272) | >= 90% | **FAIL** |
+
+FP causes (7/30):
+- Filename strategy: mod.rs ambiguity (1), test file absent (3), production-only files mapped (1)
+- Import strategy: re-export/wrapper confusion (2)
+
+### PHP (laravel, 30-pair sample)
+
+| Metric | Value | Target | Result |
+|--------|-------|--------|--------|
+| Precision | **90.0%** (27/30) | >= 98% | **FAIL** |
+| Recall (test file) | **88.6%** (808/912) | >= 90% | **FAIL** (marginal) |
+
+FP causes (3/30):
+- Str.php utility class incidental imports (3/3)
+
+### Conclusion
+
+Both languages remain **experimental**. Key improvement paths:
+- Rust: filter filename matches for mod.rs / files without corresponding test files
+- PHP: filter high-fan-out utility classes (Str, Collection) from L2 mappings — related to #129
 
 ## Summary (v0.4.3-dev, same-file helper tracing)
 

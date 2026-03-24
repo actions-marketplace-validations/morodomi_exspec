@@ -17,8 +17,8 @@ Goal: Improve observe precision and graduate Rust/PHP observe from experimental 
 |-------|------|------|--------|
 | #144 | Relative direct import assertion filter bypass | observe | **CLOSED** (already fixed by #146 in v0.4.2) |
 | #131 | L1 exclusive mode (`--l1-exclusive` flag) | observe precision | **DONE**. L1-matched tests skip L2 |
-| #129 | L2 fan-out filter (high-frequency mapping suppression) | observe precision | Cross-project utility FP reduction |
-| #149 | Rust/PHP observe formal GT audit | observe ship | Ship criteria (P>=98%, R>=90%) validation |
+| #129 | L2 fan-out filter | observe precision | **DEFERRED to backlog** (#131 で httpx FP 解消済み) |
+| #149 | Rust/PHP observe formal GT audit | observe ship | **DONE**. Rust P=76.7%, PHP P=90.0% — both FAIL (experimental) |
 
 **Why**: #150/#151/#152 (same-file helper tracing) は完了したが dogfooding で BLOCK 削減効果はほぼゼロ（helper delegation FP の本体は cross-file class method）。残りは observe 精度改善と ship criteria 確定。
 
@@ -36,6 +36,7 @@ Goal: Improve observe precision and graduate Rust/PHP observe from experimental 
 | P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
 | P2 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit (#149) で再評価 |
 | P2 | #153 Cross-file 1-hop helper delegation | v0.4.4 再評価。same-file dogfooding で FP <= 5% |
+| P2 | #129 L2 fan-out filter | GT audit (#149) 後に再評価。#131 で httpx FP 解消済み |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
 | P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
 
@@ -129,7 +130,7 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 
 - **ObserveExtractor trait** -- language-agnostic interface in `crates/core/`, each lang crate implements it
 - **Two-layer algorithm is portable** -- Layer 1 (filename convention) + Layer 2 (import tracing) applies to all 4 languages
-- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable. Rust and PHP remain experimental (baselines established in v0.4.2, GT audit pending #149)
+- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable. Rust (P=76.7%) and PHP (P=90.0%) remain experimental — GT audit #149 completed, both FAIL. Rust FP: filename ambiguity (mod.rs, missing test files). PHP FP: utility class imports (Str.php)
 
 ### B4 barrel fix rejection (Phase 11)
 
