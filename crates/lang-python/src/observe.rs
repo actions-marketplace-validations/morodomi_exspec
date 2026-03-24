@@ -817,6 +817,7 @@ impl PythonExtractor {
         production_files: &[String],
         test_sources: &HashMap<String, String>,
         scan_root: &Path,
+        l1_exclusive: bool,
     ) -> Vec<FileMapping> {
         let test_file_list: Vec<String> = test_sources.keys().cloned().collect();
 
@@ -926,6 +927,9 @@ impl PythonExtractor {
 
         // Layer 2: import tracing
         for (test_file, source) in test_sources {
+            if l1_exclusive && l1_matched_tests.contains(test_file.as_str()) {
+                continue;
+            }
             let imports = <Self as ObserveExtractor>::extract_imports(self, source, test_file);
             let from_file = Path::new(test_file);
             // all_matched: every idx matched by L2 (traditional behavior)
@@ -1853,8 +1857,12 @@ def endpoint():
             [(test_path.clone(), test_source)].into_iter().collect();
 
         // When: map_test_files_with_imports
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: module.py is matched to test_foo.py via barrel chain
         let mapping = result.iter().find(|m| m.production_file == module_path);
@@ -1907,8 +1915,12 @@ def endpoint():
             [(test_path.clone(), test_source)].into_iter().collect();
 
         // When: map_test_files_with_imports
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: module.py is matched to test_foo.py via barrel chain
         let mapping = result.iter().find(|m| m.production_file == module_path);
@@ -1968,8 +1980,12 @@ def endpoint():
             [(test_path.clone(), test_source)].into_iter().collect();
 
         // When: map_test_files_with_imports
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: module.py is NOT matched to test_nonexistent.py
         // (NonExistent is not exported by module.py)
@@ -1999,8 +2015,12 @@ def endpoint():
 
         // When: map_test_files_with_imports is called
         let scan_root = PathBuf::from(".");
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
 
         // Then: models.py is matched to test_models.py via Layer 1 (FileNameConvention)
         let mapping = result
@@ -2052,8 +2072,12 @@ def endpoint():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &fixture_root);
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &fixture_root,
+            false,
+        );
 
         // Then: views.py is matched to test_views.py (Layer 2 or Layer 1)
         let mapping = result.iter().find(|m| m.production_file == views_path);
@@ -2090,8 +2114,12 @@ def endpoint():
 
         // When: map_test_files_with_imports is called
         let scan_root = PathBuf::from(".");
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
 
         // Then: conftest.py is NOT included in any test_files list
         for mapping in &result {
@@ -2157,8 +2185,12 @@ def endpoint():
             .into_iter()
             .collect();
 
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         ImportTestResult {
             mappings,
@@ -2529,8 +2561,12 @@ def endpoint():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         // Then: models/cars.py is mapped via absolute import (Layer 2)
         let cars_mapping = result.iter().find(|m| m.production_file == cars_prod);
@@ -3660,8 +3696,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: module.py is matched via bare import + wildcard barrel chain
         let mapping = result.iter().find(|m| m.production_file == module_path);
@@ -3710,8 +3750,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: module.py is matched via bare import + named barrel chain
         let mapping = result.iter().find(|m| m.production_file == module_path);
@@ -3913,8 +3957,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: mod.py is mapped (Foo is accessed via pkg.Foo())
         let mod_mapping = result.iter().find(|m| m.production_file == mod_path);
@@ -3983,8 +4031,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: test_client.py is mapped to pkg/_client.py via stem-only fallback
         let mapping = result.iter().find(|m| m.production_file == client_path);
@@ -4038,8 +4090,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: test_decoders.py is mapped to pkg/_decoders.py via stem-only fallback
         //       (production_stem strips '_' prefix: "_decoders" -> "decoders")
@@ -4097,8 +4153,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: test_asgi.py is mapped to pkg/transports/asgi.py
         //       (stem "asgi" matches across directory depth)
@@ -4158,8 +4218,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: test_client.py is NOT mapped to pkg/client.py (collision guard defers to L2)
         let client_mapped = result
@@ -4223,8 +4287,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: test_client.py is mapped to svc/client.py only (L1 core match)
         let svc_client_mapped = result
@@ -4294,8 +4362,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: test_client.py is mapped to pkg/client.py only (L2 ImportTracing)
         let client_mapping = result.iter().find(|m| m.production_file == client_path);
@@ -4375,8 +4447,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: collision guard prevents L1 stem-only from mapping to both files
         //       L2 barrel import resolves to pkg/client.py (via __init__.py re-export)
@@ -4454,8 +4530,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: _client.py IS mapped (L1 stem-only match)
         let client_mapped = result
@@ -4530,8 +4610,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: _utils.py IS mapped (direct import bypasses barrel suppression)
         let utils_mapped = result
@@ -4591,8 +4675,12 @@ def test_user_detail():
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: barrel fan-out proceeds for L1-unmatched test
         //       BOTH _client.py and _utils.py should be mapped (barrel re-exports both)
@@ -4711,8 +4799,12 @@ def test_user_detail():
         let extractor = PythonExtractor::new();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Ground truth (expected TP pairs):
         // test_client.py -> _client.py  (L1 stem-only)
@@ -5030,8 +5122,12 @@ class TestMyModel(unittest.TestCase):
 
         // When: map_test_files_with_imports is called
         let extractor = PythonExtractor::new();
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &fixture_root);
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &fixture_root,
+            false,
+        );
 
         // Then: test_client.py maps to client.py (Client is asserted)
         let client_mapping = result.iter().find(|m| m.production_file == client_prod);
@@ -5099,8 +5195,12 @@ class TestMyModel(unittest.TestCase):
 
         // When: map_test_files_with_imports is called
         let extractor = PythonExtractor::new();
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &fixture_root);
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &fixture_root,
+            false,
+        );
 
         // Then: helpers.py IS mapped (fallback activated because asserted_matched is empty)
         let helpers_mapping = result.iter().find(|m| m.production_file == helpers_prod);
@@ -5162,8 +5262,12 @@ class TestMyModel(unittest.TestCase):
 
         // When: map_test_files_with_imports is called
         let extractor = PythonExtractor::new();
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &fixture_root);
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &fixture_root,
+            false,
+        );
 
         // Then: http_client.py IS mapped (primary SUT, must not be a FN)
         let http_client_mapping = result
@@ -5231,7 +5335,7 @@ class TestMyModel(unittest.TestCase):
 
         // When: map_test_files_with_imports is called
         let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, root);
+            extractor.map_test_files_with_imports(&production_files, &test_sources, root, false);
 
         // Then: tests/helpers.py should NOT appear as a production_file in any mapping
         for m in &mappings {
@@ -5315,7 +5419,8 @@ class TestMyModel(unittest.TestCase):
             .into_iter()
             .collect();
 
-        let result = extractor.map_test_files_with_imports(&production_files, &test_sources, root);
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, root, false);
 
         let mock_mapping = result.iter().find(|m| m.production_file == mock_path);
         assert!(
@@ -5365,7 +5470,8 @@ class TestMyModel(unittest.TestCase):
             .into_iter()
             .collect();
 
-        let result = extractor.map_test_files_with_imports(&production_files, &test_sources, root);
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, root, false);
 
         let version_mapping = result.iter().find(|m| m.production_file == version_path);
         assert!(
@@ -5419,7 +5525,8 @@ class TestMyModel(unittest.TestCase):
             .into_iter()
             .collect();
 
-        let result = extractor.map_test_files_with_imports(&production_files, &test_sources, root);
+        let result =
+            extractor.map_test_files_with_imports(&production_files, &test_sources, root, false);
 
         let types_mapping = result.iter().find(|m| m.production_file == types_path);
         assert!(
@@ -5510,8 +5617,12 @@ class TestMyModel(unittest.TestCase):
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: _urlparse.py IS mapped (direct import bypasses assertion filter)
         let urlparse_mapped = result
@@ -5568,8 +5679,12 @@ class TestMyModel(unittest.TestCase):
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: _internal.py IS mapped
         let internal_mapped = result
@@ -5627,8 +5742,12 @@ class TestMyModel(unittest.TestCase):
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: _helpers.py IS mapped
         let helpers_mapped = result
@@ -5692,8 +5811,12 @@ class TestMyModel(unittest.TestCase):
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: _config.py IS mapped (non-bare relative direct import bypasses assertion filter)
         let config_mapped = result
@@ -5758,8 +5881,12 @@ class TestMyModel(unittest.TestCase):
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: utils.py IS mapped (bare relative direct import bypasses assertion filter)
         let utils_mapped = result
@@ -5821,8 +5948,12 @@ class TestMyModel(unittest.TestCase):
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: _models.py is NOT mapped (barrel import, assertion filter still applies)
         let models_not_mapped = result

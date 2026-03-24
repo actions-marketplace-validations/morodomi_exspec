@@ -80,6 +80,10 @@ pub struct ObserveArgs {
     /// Output format (terminal, json)
     #[arg(long, default_value = "terminal")]
     pub format: String,
+
+    /// Suppress L2 import tracing for L1-matched test files
+    #[arg(long)]
+    pub l1_exclusive: bool,
 }
 
 fn is_python_test_file(path: &str) -> bool {
@@ -426,7 +430,7 @@ fn run_observe(args: ObserveArgs) {
                 &args.format,
                 &config,
                 |prod, test_src, root_path| {
-                    ts_ext.map_test_files_with_imports(prod, test_src, root_path)
+                    ts_ext.map_test_files_with_imports(prod, test_src, root_path, args.l1_exclusive)
                 },
                 |prod_files| {
                     let mut all_routes = Vec::new();
@@ -471,7 +475,7 @@ fn run_observe(args: ObserveArgs) {
                 &args.format,
                 &config,
                 |prod, test_src, root_path| {
-                    py_ext.map_test_files_with_imports(prod, test_src, root_path)
+                    py_ext.map_test_files_with_imports(prod, test_src, root_path, args.l1_exclusive)
                 },
                 |production_files| {
                     let mut all_routes = Vec::new();
@@ -506,7 +510,12 @@ fn run_observe(args: ObserveArgs) {
                 &args.format,
                 &config,
                 |prod, test_src, root_path| {
-                    rust_ext.map_test_files_with_imports(prod, test_src, root_path)
+                    rust_ext.map_test_files_with_imports(
+                        prod,
+                        test_src,
+                        root_path,
+                        args.l1_exclusive,
+                    )
                 },
                 |_| Vec::new(),
             );
@@ -520,7 +529,12 @@ fn run_observe(args: ObserveArgs) {
                 &args.format,
                 &config,
                 |prod, test_src, root_path| {
-                    php_ext.map_test_files_with_imports(prod, test_src, root_path)
+                    php_ext.map_test_files_with_imports(
+                        prod,
+                        test_src,
+                        root_path,
+                        args.l1_exclusive,
+                    )
                 },
                 |_| Vec::new(),
             );

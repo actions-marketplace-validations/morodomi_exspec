@@ -791,6 +791,7 @@ impl RustExtractor {
         production_files: &[String],
         test_sources: &HashMap<String, String>,
         scan_root: &Path,
+        l1_exclusive: bool,
     ) -> Vec<FileMapping> {
         let test_file_list: Vec<String> = test_sources.keys().cloned().collect();
 
@@ -828,6 +829,12 @@ impl RustExtractor {
             .map(|m| m.test_files.iter().cloned().collect())
             .collect();
 
+        // Collect set of test files matched by L1 for l1_exclusive mode
+        let layer1_matched: HashSet<String> = layer1_tests_per_prod
+            .iter()
+            .flat_map(|s| s.iter().cloned())
+            .collect();
+
         // Resolve crate name for integration test import matching
         let crate_name = parse_crate_name(scan_root);
         let members = find_workspace_members(scan_root);
@@ -842,6 +849,8 @@ impl RustExtractor {
                 &canonical_root,
                 &canonical_to_idx,
                 &mut mappings,
+                l1_exclusive,
+                &layer1_matched,
             );
         }
 
@@ -866,6 +875,8 @@ impl RustExtractor {
                     &canonical_root,
                     &canonical_to_idx,
                     &mut mappings,
+                    l1_exclusive,
+                    &layer1_matched,
                 );
             }
         } else if crate_name.is_none() {
@@ -878,6 +889,8 @@ impl RustExtractor {
                 &canonical_root,
                 &canonical_to_idx,
                 &mut mappings,
+                l1_exclusive,
+                &layer1_matched,
             );
         }
 
@@ -897,6 +910,7 @@ impl RustExtractor {
     ///
     /// `crate_name`: the crate name (underscored).
     /// `crate_root`: the crate root directory (contains `Cargo.toml` and `src/`).
+    #[allow(clippy::too_many_arguments)]
     fn apply_l2_imports(
         &self,
         test_sources: &HashMap<String, String>,
@@ -905,8 +919,13 @@ impl RustExtractor {
         canonical_root: &Path,
         canonical_to_idx: &HashMap<String, usize>,
         mappings: &mut [FileMapping],
+        l1_exclusive: bool,
+        layer1_matched: &HashSet<String>,
     ) {
         for (test_file, source) in test_sources {
+            if l1_exclusive && layer1_matched.contains(test_file) {
+                continue;
+            }
             let imports = extract_import_specifiers_with_crate_name(source, Some(crate_name));
             let mut matched_indices = HashSet::<usize>::new();
 
@@ -1428,8 +1447,12 @@ mod tests {
         let test_sources: HashMap<String, String> = HashMap::new();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         // Then: user.rs is self-mapped (Layer 0)
         let mapping = result.iter().find(|m| m.production_file == prod_path);
@@ -1456,8 +1479,12 @@ mod tests {
 
         // When: map_test_files_with_imports is called
         let scan_root = PathBuf::from(".");
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
 
         // Then: Layer 1 stem match (same directory not required for test_stem)
         // Note: map_test_files requires same directory, but tests/ files have test_stem
@@ -1496,8 +1523,12 @@ mod tests {
             .collect();
 
         // When: map_test_files_with_imports is called
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         // Then: service.rs is matched to test_service.rs via import tracing
         let mapping = result.iter().find(|m| m.production_file == prod_path);
@@ -1529,8 +1560,12 @@ mod tests {
 
         // When: map_test_files_with_imports is called
         let scan_root = PathBuf::from(".");
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
 
         // Then: tests/common/mod.rs is NOT in any mapping
         for mapping in &result {
@@ -1757,8 +1792,12 @@ mod tests {
             .collect();
 
         // When: map_test_files_with_imports を呼ぶ
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         // Then: test_user.rs → user.rs が Layer 2 (ImportTracing) でマッチ
         let mapping = result.iter().find(|m| m.production_file == prod_path);
@@ -1818,8 +1857,12 @@ mod tests {
             .collect();
 
         // When: map_test_files_with_imports を呼ぶ
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         // Then: test_models.rs → user.rs が Layer 2 (ImportTracing) でマッチ
         let mapping = result.iter().find(|m| m.production_file == user_path);
@@ -1886,8 +1929,12 @@ mod tests {
             .collect();
 
         // When: map_test_files_with_imports を呼ぶ
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         // Then: test_account.rs → user.rs が Layer 2 (ImportTracing) でマッチ
         // (lib.rs → models/ → pub mod user; の wildcard chain を辿る必要がある)
@@ -2323,8 +2370,12 @@ mod tests {
         .collect();
 
         // When: map_test_files_with_imports is called at workspace root
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         // Then: test_user.rs -> user.rs via Layer 2 (ImportTracing)
         let mapping = result.iter().find(|m| m.production_file == prod_path);
@@ -2407,8 +2458,12 @@ mod tests {
         .collect();
 
         // When: map_test_files_with_imports is called at workspace root
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         // Then: service.rs self-mapped (Layer 0) and test_service.rs mapped (Layer 1)
         let mapping = result.iter().find(|m| m.production_file == prod_path);
@@ -2494,8 +2549,12 @@ mod tests {
         .collect();
 
         // When: map_test_files_with_imports at workspace root
-        let result =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, tmp.path());
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
 
         // Then: member's test maps to member's src via L2
         let member_mapping = result.iter().find(|m| m.production_file == member_src_path);
