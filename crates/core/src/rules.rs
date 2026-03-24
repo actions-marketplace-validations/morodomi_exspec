@@ -111,7 +111,7 @@ impl Default for Config {
             ignore_patterns: Vec::new(),
             min_severity: Severity::Info,
             severity_overrides: HashMap::new(),
-            max_fan_out_percent: 20.0,
+            max_fan_out_percent: 5.0,
         }
     }
 }
