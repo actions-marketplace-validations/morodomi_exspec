@@ -17,9 +17,11 @@ Goal: Rust (P=76.7%) と PHP (P=90.0%) の observe precision を改善する。s
 |-------|------|------|-----------------|
 | #161 | ~~Rust L0 barrel self-mapping exclusion~~ | observe precision | **DONE** Rust P 76.7% → 92.0% (+15.3pp) |
 | #163 | ~~Rust 中間 re-audit (50-pair, tokio)~~ | observe validation | **DONE** P=92.0% (46/50). #162 GO判定 |
-| #162 | Rust L2 re-export chain validation + L0 detect_inline_tests 改善 | observe precision | Rust P 92.0% → ~98% (4 FP 排除) |
+| #162 | ~~Rust L2 export filter + L0 mod_item check~~ | observe precision | **DONE** P 92.0% → 96.0% (+4pp). pub(crate) visibility issue 残存 |
+| #163 | ~~Rust final re-audit (50-pair, tokio)~~ | observe validation | **DONE** P=96.0% (48/50). FAIL — pub(crate) visibility fix 必要 |
+| NEW | Rust exported_symbol.scm pub-only filter | observe precision | P 96.0% → ~100% (2 FP: pub(crate) を pub と区別) |
 | #129 | PHP L2 fan-out filter (高頻度utility class抑制) | observe precision | PHP P 90.0% → ~97% (Str, Collection 等の除外) |
-| #163 | Final re-audit (50-pair, tokio + laravel + symfony) | observe validation | ship criteria 最終判定 |
+| NEW | Final re-audit (50-pair, tokio + laravel + symfony) | observe validation | ship criteria 最終判定 |
 
 **Why**: GT audit (#149) で判明した FP パターンは言語固有の構造的問題。Rust は L1 filename matching の曖昧性 (mod.rs, テスト不在ファイル)、PHP は L2 の高頻度utility class (Str, Collection 等) が原因。
 

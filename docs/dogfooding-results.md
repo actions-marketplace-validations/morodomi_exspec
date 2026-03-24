@@ -1,7 +1,31 @@
 # Dogfooding Results
 
-Latest: 2026-03-24, exspec v0.4.3-dev (post-#161 L0 barrel exclusion + re-audit)
+Latest: 2026-03-24, exspec v0.4.4-dev (post-#161+#162 L0+L2 fixes + final re-audit)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
+
+## Rust Final Re-audit: Post-#162 (50-pair, tokio, 2026-03-24)
+
+Ship criteria: P>=98% (49/50)
+
+| Metric | Value | Target | Result |
+|--------|-------|--------|--------|
+| Precision | **96.0%** (48/50) | >= 98% | **FAIL** |
+| Recall (test file) | ~36.8% (unchanged) | >= 90% | **FAIL** |
+
+FP causes (2/50):
+- L2 `pub(crate)` visibility false match (2): driver.rs ← dump.rs, driver.rs ← shutdown.rs — `pub(crate) struct Handle` matches `exported_symbol.scm` query because tree-sitter `visibility_modifier` includes both `pub` and `pub(crate)`. `file_exports_any_symbol()` returns true for `pub(crate)` items.
+
+### Fix applied vs previous audit
+
+| FP Type | Post-#161 (4 FP) | Post-#162 (2 FP) | Status |
+|---------|-------------------|-------------------|--------|
+| L0 cfg_test helper (source.rs) | 1 | **0** | Fixed by #162 mod_item check |
+| L0 cfg_test mock (open_options.rs) | 1 | 0 (not in sample) | Still exists but `mod mock_open_options;` is a valid mod_item |
+| L2 re-export confusion (driver.rs) | 2 | **2** | NOT fixed — `pub(crate)` matches visibility_modifier |
+
+### Decision: Additional fix needed
+
+P=96.0% < 98%. Root cause: `exported_symbol.scm` does not distinguish `pub` from `pub(crate)`. Fix: refine query to match only `pub` (not `pub(crate)`, `pub(super)`, etc.).
 
 ## Rust Re-audit: Post-#161 (50-pair, tokio, 2026-03-24)
 
