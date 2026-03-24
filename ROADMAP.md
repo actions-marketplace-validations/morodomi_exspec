@@ -20,7 +20,7 @@ Goal: Rust observe recall を 62.9% → 90% に引き上げる。PHP Str.php FP 
 | P2 | PHP Str.php FP resolution (import frequency or usage pattern analysis) | observe precision | PHP P 96.0% → >=98% |
 | P2 | PHP re-audit (50-pair, laravel + symfony) | observe validation | ship criteria 判定 |
 
-**Why**: #179 で R=38.2% → 62.9% (+67 test files)。2つの L2 バグ (self:: prefix, single-segment import) を修正。残り 126 FN の最大要因は cfg macro 内の multi-hop barrel resolution (60 FN)。`cfg_net! { pub use tcp::listener::TcpListener; }` のような re-export が `net/tcp/listener.rs` に解決されない。
+**Why**: #179 で R=38.2% → 62.9%, #181 で 62.9% → 71.0%。cfg macro 内の pub items を text fallback で検出 + multi-line pub use を結合。残り 79 FN。
 
 **Rust FN 内訳 (126 FN)**:
 - cfg macro multi-hop barrel: 60 FN (tokio/tests/) — `pub use tcp::listener::TcpListener` が cfg_net! 内で解決されない
@@ -39,13 +39,25 @@ Goal: Rust observe recall を 62.9% → 90% に引き上げる。PHP Str.php FP 
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
 | P2 | #127 Python barrel suppression per-(test, prod) scope | Precision refinement |
 | P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
-| P2 | Rust observe recall: cfg multi-hop barrel + inline tests | R=62.9% → 90%。v0.4.5 で継続 |
+| P2 | Rust observe recall: remaining 79 FN (inline tests, cross-crate, compile-tests) | R=71.0% → 90%。v0.4.5 で継続 |
 | P2 | #153 Cross-file 1-hop helper delegation | lint BLOCK FP。observe precision 完了後に再評価 (v0.4.3 で defer 確定) |
 | P3 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit FP にmulti-segment起因なし。優先度低下 |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
 | P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
 
 ## Completed Recently
+
+### #181: Rust cfg macro export fallback + multi-line pub use (2026-03-25)
+
+Goal: Rust observe recall 改善 (62.9% → 71.0%)。cfg macro 内 pub items の text fallback + multi-line pub use 結合。
+
+| Issue | Task | Status |
+|-------|------|--------|
+| #181 | `file_exports_any_symbol` text fallback (comment-skip) | DONE (R +8.1pp) |
+| #181 | `join_multiline_pub_use` (brace depth tracking) | DONE |
+| #181 | `extract_single_re_export_stmt` (semicolon split) | DONE |
+
+**Key insight**: cfg macro 内の `pub struct TcpListener` は tree-sitter の `exported_symbol.scm` query にマッチしない (token_tree が不透明)。text fallback で行単位検索 (コメント行スキップ) を追加。
 
 ### #179: Rust L2 self:: prefix + single-segment import fix (2026-03-24)
 
@@ -176,7 +188,7 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 
 - **ObserveExtractor trait** -- language-agnostic interface in `crates/core/`, each lang crate implements it
 - **Two-layer algorithm is portable** -- Layer 1 (filename convention) + Layer 2 (import tracing) applies to all 4 languages
-- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable. Rust (P=100%, R=62.9%) experimental (precision PASS, recall improving). PHP (P=96.0%, R=88.6%) experimental (Str.php incidental import FP)
+- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable. Rust (P=100%, R=71.0%) experimental (precision PASS, recall improving). PHP (P=96.0%, R=88.6%) experimental (Str.php incidental import FP)
 
 ### B4 barrel fix rejection (Phase 11)
 

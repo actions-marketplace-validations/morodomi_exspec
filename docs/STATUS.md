@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-v0.4.5-dev. Rust recall improved R=62.9% (post-#179). PHP precision FAIL (P=96.0%).
+v0.4.5-dev. Rust recall improved R=71.0% (post-#181). PHP precision FAIL (P=96.0%).
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=100%, R=62.9% (experimental, P PASS R FAIL). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=100%, R=71.0% (experimental, P PASS R FAIL). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
 ## Progress
 
@@ -43,6 +43,17 @@ observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). R
 | 20 - Python observe test helper exclusion | **DONE** |
 | 21 - Python observe re-dogfood + FP fix | **DONE** |
 | #179 - Rust L2 self:: prefix + single-segment import fix | **DONE** |
+| #181 - Rust cfg macro export fallback + multi-line pub use | **DONE** |
+
+### #181 Rust Observe Recall Improvement (2026-03-25)
+
+| Metric | Post-#179 | Post-#181 | Target |
+|--------|-----------|-----------|--------|
+| Precision | 100% | 100% | >= 98% |
+| Recall (test file) | **62.9%** (171/272) | **71.0%** (193/272) | >= 90% |
+| Regression | 0 | 0 | 0 |
+
+**+22 test files mapped.** `file_exports_any_symbol` text fallback for cfg macro pub items + `join_multiline_pub_use` with brace depth tracking. Remaining 79 FN.
 
 ### #179 Rust Observe Recall Improvement (2026-03-24)
 
@@ -138,7 +149,7 @@ Root mode resolves most B2 FN but introduces FP from peripheral imports not yet 
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 1180 passing | -- |
+| Tests | 1187 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
