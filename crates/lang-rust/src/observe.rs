@@ -374,6 +374,7 @@ impl ObserveExtractor for RustExtractor {
         let symbol_idx = query
             .capture_index_for_name("symbol_name")
             .expect("@symbol_name capture not found in exported_symbol.scm");
+        let vis_idx = query.capture_index_for_name("vis");
 
         let source_bytes = source.as_bytes();
         let mut cursor = QueryCursor::new();
@@ -381,6 +382,14 @@ impl ObserveExtractor for RustExtractor {
         while let Some(m) = matches.next() {
             for cap in m.captures {
                 if cap.index == symbol_idx {
+                    // Only consider items with exactly `pub` visibility (not `pub(crate)`, `pub(super)`)
+                    let is_pub_only = m.captures.iter().any(|c| {
+                        vis_idx == Some(c.index)
+                            && c.node.utf8_text(source_bytes).unwrap_or("") == "pub"
+                    });
+                    if !is_pub_only {
+                        continue;
+                    }
                     let name = cap.node.utf8_text(source_bytes).unwrap_or("");
                     if symbols.iter().any(|s| s == name) {
                         return true;
@@ -2146,6 +2155,85 @@ mod tests {
         assert!(
             result,
             "Expected true for non-existent file (optimistic fallback)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-PUB-ONLY-01: pub fn matches (regression)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_pub_only_01_pub_fn_matches() {
+        // Given: a file with `pub fn create_user() {}`
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("service.rs");
+        std::fs::write(&file, "pub fn create_user() {}").unwrap();
+        let extractor = RustExtractor::new();
+        let symbols = vec!["create_user".to_string()];
+
+        // When: file_exports_any_symbol is called
+        let result = extractor.file_exports_any_symbol(&file, &symbols);
+
+        // Then: returns true (pub fn is exported)
+        assert!(result, "Expected true for pub fn create_user");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-PUB-ONLY-02: pub(crate) struct excluded
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_pub_only_02_pub_crate_excluded() {
+        // Given: a file with `pub(crate) struct Handle {}`
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("driver.rs");
+        std::fs::write(&file, "pub(crate) struct Handle {}").unwrap();
+        let extractor = RustExtractor::new();
+        let symbols = vec!["Handle".to_string()];
+
+        // When: file_exports_any_symbol is called
+        let result = extractor.file_exports_any_symbol(&file, &symbols);
+
+        // Then: returns false (pub(crate) is NOT a public export)
+        assert!(!result, "Expected false for pub(crate) struct Handle");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-PUB-ONLY-03: pub(super) fn excluded
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_pub_only_03_pub_super_excluded() {
+        // Given: a file with `pub(super) fn helper() {}`
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("internal.rs");
+        std::fs::write(&file, "pub(super) fn helper() {}").unwrap();
+        let extractor = RustExtractor::new();
+        let symbols = vec!["helper".to_string()];
+
+        // When: file_exports_any_symbol is called
+        let result = extractor.file_exports_any_symbol(&file, &symbols);
+
+        // Then: returns false (pub(super) is NOT a public export)
+        assert!(!result, "Expected false for pub(super) fn helper");
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-EXPORT-PUB-ONLY-04: mixed visibility - pub struct matches, pub(crate) excluded
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_export_pub_only_04_mixed_visibility() {
+        // Given: a file with `pub struct User {}` and `pub(crate) struct Inner {}`
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("models.rs");
+        std::fs::write(&file, "pub struct User {}\npub(crate) struct Inner {}").unwrap();
+        let extractor = RustExtractor::new();
+        let symbols = vec!["User".to_string()];
+
+        // When: file_exports_any_symbol is called with "User"
+        let result = extractor.file_exports_any_symbol(&file, &symbols);
+
+        // Then: returns true (pub struct User is exported)
+        assert!(
+            result,
+            "Expected true for pub struct User in mixed visibility file"
         );
     }
 
