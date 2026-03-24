@@ -9,22 +9,52 @@
 
 ## Now
 
-### v0.4.3: observe precision + ship criteria
+### v0.4.4: observe precision improvement
 
-Goal: Improve observe precision and graduate Rust/PHP observe from experimental to stable.
+Goal: Rust (P=76.7%) と PHP (P=90.0%) の observe precision を改善する。ship criteria (P>=98%, R>=90%) 達成は re-audit 結果次第であり、v0.4.4 で保証はしない。
 
-| Issue | Task | Type | Impact |
-|-------|------|------|--------|
-| #144 | Relative direct import assertion filter bypass | observe | **CLOSED** (already fixed by #146 in v0.4.2) |
-| #131 | L1 exclusive mode (`--l1-exclusive` flag) | observe precision | **DONE**. L1-matched tests skip L2 |
-| #129 | L2 fan-out filter | observe precision | **DEFERRED to backlog** (#131 で httpx FP 解消済み) |
-| #149 | Rust/PHP observe formal GT audit | observe ship | **DONE**. Rust P=76.7%, PHP P=90.0% — both FAIL (experimental) |
+| Issue | Task | Type | Expected Impact |
+|-------|------|------|-----------------|
+| -- | Rust L1 safeguards: mod.rs除外 + テストファイル存在検証 | observe precision | Rust P 76.7% → ~90% (4 FP 排除) |
+| -- | Rust L1 fix → re-audit (50-pair, tokio) | observe validation | 中間計測。結果次第で L2 fix の Go/No-Go |
+| -- | Rust L2 re-export chain validation (conditional) | observe precision | Rust P ~90% → ~97% (2 FP 排除。L1 re-audit 後に判断) |
+| #129 | PHP L2 fan-out filter (高頻度utility class抑制) | observe precision | PHP P 90.0% → ~97% (Str, Collection 等の除外) |
+| -- | Final re-audit (50-pair, tokio + laravel + symfony) | observe validation | ship criteria 最終判定 |
 
-**Why**: #150/#151/#152 (same-file helper tracing) は完了したが dogfooding で BLOCK 削減効果はほぼゼロ（helper delegation FP の本体は cross-file class method）。残りは observe 精度改善と ship criteria 確定。
+**Why**: GT audit (#149) で判明した FP パターンは言語固有の構造的問題。Rust は L1 filename matching の曖昧性 (mod.rs, テスト不在ファイル)、PHP は L2 の高頻度utility class (Str, Collection 等) が原因。
 
-**Execution order**: ~~#144~~ (CLOSED) → #131/#129 (independent) → #149 (GT audit, last).
+**Execution order**: Rust L1 fix → re-audit (中間計測) → Rust L2 fix (conditional) → PHP fan-out filter → final re-audit (50-pair, 複数プロジェクト)
 
-**Decision: #149 scope** -- GT audit の結果は ship criteria (P>=98%, R>=90%) に対する判定のみ。PASS なら stable 昇格、FAIL なら追加実装が必要。#93 の再評価は audit 結果の副産物。
+**Note: Rust recall (R=36.8%) は v0.4.4 では改善しない。** L1 safeguards は precision 改善のみ。Recall 改善には L2 import tracing の拡充 (deep re-export, wildcard import 等) が必要で、これは別バージョンのスコープ。ship criteria の R>=90% は precision 改善後に再評価。
+
+### Rust observe precision improvement
+
+GT audit FP内訳 (7/30):
+- **L1 mod.rs collision** (1): `production_stem()` が mod を返し、テスト側 mod.rs と衝突
+- **L1 テストファイル不在** (3): L1 がファイル名一致を仮定するが、実際にはテストファイルが存在しない
+- **L1 barrel mismatch** (1): lib.rs/mod.rs がproduction fileとして不適切にマッチ
+- **L2 re-export confusion** (2): `pub mod` chain で wrapper と実体を混同
+
+**Phase 1** (L1 safeguards): `map_test_files()` で (a) mod.rs を L1 候補から除外、(b) テストファイルリストとの照合を追加。予想: **4 FP 排除 → 27/30 = P 90.0%**。その後 50-pair re-audit で中間計測。
+
+**Phase 2** (L2 re-export, conditional): Phase 1 の re-audit で P < 95% なら `file_exports_any_symbol()` を L2 マッチ時に検証。予想: **2 FP 排除 → ~29/30 = P ~97%**。P >= 95% なら Phase 2 はスキップ。
+
+### PHP observe precision improvement
+
+GT audit FP内訳 (3/30):
+- **高頻度 utility class** (3/3): Str.php (全3件)。Collection, DB 等も同様のパターンが推定される。
+
+Fix: L2 post-processing で fan-out 閾値超えの production file をデフォルトで除外。閾値は configurable (`[observe] max_fan_out_percent`, default 20%)。`--no-fan-out-filter` で無効化可能。
+
+**Fan-out filter は default ON** — opt-in ではなく opt-out。ship criteria はデフォルト動作で判定する。閾値は Laravel (912 tests) + Symfony (2419 tests) の両方で dogfooding 検証し、FN が発生しない値を決定する。
+
+### GT re-audit protocol
+
+v0.4.3 の 30-pair サンプルは信頼区間が広い (P=96.7% でも 95%CI=[83-100%])。v0.4.4 では:
+- **サンプルサイズ**: 50-pair (95%CI が ±10% 以内に収まる)
+- **対象**: Rust: tokio (workspace)。PHP: laravel + symfony (2プロジェクト)
+- **PASS 基準**: P >= 49/50 (98%) AND R >= 90% (test file coverage)
+- **FAIL 時**: 追加 fix を issue 起票し、v0.4.5 で再挑戦
 
 ## Backlog
 
@@ -34,13 +64,27 @@ Goal: Improve observe precision and graduate Rust/PHP observe from experimental 
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
 | P2 | #127 Python barrel suppression per-(test, prod) scope | Precision refinement |
 | P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
-| P2 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit (#149) で再評価 |
-| P2 | #153 Cross-file 1-hop helper delegation | v0.4.4 再評価。same-file dogfooding で FP <= 5% |
-| P2 | #129 L2 fan-out filter | GT audit (#149) 後に再評価。#131 で httpx FP 解消済み |
+| P2 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit FP にmulti-segment起因なし → 優先度低下 |
+| P2 | #153 Cross-file 1-hop helper delegation | lint BLOCK FP。observe precision 完了後に再評価 (v0.4.3 で defer 確定) |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
 | P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
 
 ## Completed Recently
+
+### v0.4.3: lint helper tracing + observe L1 exclusive + GT audit (2026-03-24)
+
+Goal: Same-file helper tracing (all languages), L1 exclusive mode, Rust/PHP GT audit.
+
+| Issue | Task | Status |
+|-------|------|--------|
+| #150/#151/#152 | Same-file helper tracing (Python/TS/PHP) | DONE. Near-zero BLOCK impact |
+| #131 | L1 exclusive mode (`--l1-exclusive`) | DONE |
+| #149 | GT audit: Rust P=76.7%, PHP P=90.0% | DONE. Both FAIL → experimental |
+| #144 | Relative direct import | CLOSED (already fixed by #146) |
+| #129 | L2 fan-out filter | DEFERRED → v0.4.4 (PHP precision fix) |
+| #153 | Cross-file helper delegation | DEFERRED → backlog |
+
+**Key insight**: same-file helper tracing は BLOCK FP に効果なし (helper delegation は cross-file class method が主体)。GT audit で Rust/PHP の精度 gap が定量化された。v0.4.4 で targeted fix に集中。
 
 ### Phase 23b: Same-file helper tracing for Python/TypeScript/PHP (2026-03-24)
 
@@ -184,5 +228,6 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 | -- | v0.4.1 cleanup: should_panic exact match, PHP query align, docs, tests | v0.4.1 |
 | -- | observe recall/precision: #85 TS re-export, #119/#126/#146 Python, Rust/PHP dogfood baselines | v0.4.2 |
 | 23b | Same-file helper tracing: Python (#150), TypeScript (#151), PHP (#152). Near-zero BLOCK impact | v0.4.3 |
+| -- | L1 exclusive mode (#131), GT audit (#149): Rust P=76.7%, PHP P=90.0% | v0.4.3 |
 
 Detail for completed phases is archived in git history. Key decisions are preserved in "Key Design Decisions" above.
