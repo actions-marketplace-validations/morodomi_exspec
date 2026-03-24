@@ -4,7 +4,7 @@
 
 v0.4.4-dev. Rust precision PASS (P=100%), PHP precision FAIL (P=96.0%). Fan-out filter added.
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=100%, R=36.8% (experimental, P PASS but R FAIL). PHP: P=96.0%, R=88.6% (experimental, Str.php FP残存). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=100%, R=36.8% (experimental, P PASS R FAIL). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
 ## Progress
 
@@ -127,7 +127,7 @@ Root mode resolves most B2 FN but introduces FP from peripheral imports not yet 
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 1161 passing | -- |
+| Tests | 1169 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
