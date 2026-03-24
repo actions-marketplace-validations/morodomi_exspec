@@ -84,6 +84,10 @@ pub struct ObserveArgs {
     /// Suppress L2 import tracing for L1-matched test files
     #[arg(long)]
     pub l1_exclusive: bool,
+
+    /// Disable fan-out filter (show all mappings including high-frequency utility classes)
+    #[arg(long)]
+    pub no_fan_out_filter: bool,
 }
 
 fn is_python_test_file(path: &str) -> bool {
@@ -341,12 +345,14 @@ fn build_observe_report(
 /// `lang_str` / `lang` select which files to discover.
 /// `map_fn` receives (production_files, test_sources, root) and returns file mappings.
 /// `route_fn` receives (production_files) and returns route entries (TypeScript only; others pass `|_| Vec::new()`).
+#[allow(clippy::too_many_arguments)]
 fn run_observe_common(
     root: &str,
     lang_str: &str,
     lang: Language,
     format: &str,
     config: &Config,
+    no_fan_out_filter: bool,
     map_fn: impl FnOnce(
         &[String],
         &HashMap<String, String>,
@@ -369,7 +375,14 @@ fn run_observe_common(
         }
     }
 
-    let file_mappings = map_fn(production_files, &test_sources, Path::new(root));
+    let mut file_mappings = map_fn(production_files, &test_sources, Path::new(root));
+    if !no_fan_out_filter {
+        apply_fan_out_filter(
+            &mut file_mappings,
+            test_files.len(),
+            config.max_fan_out_percent,
+        );
+    }
     let route_entries = route_fn(production_files);
 
     // Build route entries with coverage info
@@ -429,6 +442,7 @@ fn run_observe(args: ObserveArgs) {
                 Language::TypeScript,
                 &args.format,
                 &config,
+                args.no_fan_out_filter,
                 |prod, test_src, root_path| {
                     ts_ext.map_test_files_with_imports(prod, test_src, root_path, args.l1_exclusive)
                 },
@@ -474,6 +488,7 @@ fn run_observe(args: ObserveArgs) {
                 Language::Python,
                 &args.format,
                 &config,
+                args.no_fan_out_filter,
                 |prod, test_src, root_path| {
                     py_ext.map_test_files_with_imports(prod, test_src, root_path, args.l1_exclusive)
                 },
@@ -509,6 +524,7 @@ fn run_observe(args: ObserveArgs) {
                 Language::Rust,
                 &args.format,
                 &config,
+                args.no_fan_out_filter,
                 |prod, test_src, root_path| {
                     rust_ext.map_test_files_with_imports(
                         prod,
@@ -528,6 +544,7 @@ fn run_observe(args: ObserveArgs) {
                 Language::Php,
                 &args.format,
                 &config,
+                args.no_fan_out_filter,
                 |prod, test_src, root_path| {
                     php_ext.map_test_files_with_imports(
                         prod,
@@ -674,6 +691,23 @@ fn run_lint(lint: LintArgs) {
     // Exit code uses UNFILTERED diagnostics
     let exit_code = compute_exit_code(&diagnostics, lint.strict);
     process::exit(exit_code);
+}
+
+fn apply_fan_out_filter(
+    file_mappings: &mut [exspec_core::observe::FileMapping],
+    total_test_files: usize,
+    max_fan_out_percent: f64,
+) {
+    if total_test_files == 0 {
+        return;
+    }
+    let threshold = max_fan_out_percent / 100.0;
+    for mapping in file_mappings.iter_mut() {
+        let fan_out = mapping.test_files.len() as f64 / total_test_files as f64;
+        if fan_out > threshold {
+            mapping.test_files.clear();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2206,6 +2240,115 @@ test('GET returns array', async () => {
         assert!(
             parsed["summary"]["routes_covered"].as_u64().unwrap_or(0) >= 1,
             "routes_covered should be >= 1"
+        );
+    }
+
+    // --- fan-out filter ---
+
+    // TC-01: fan_out_filter_removes_high_fan_out
+    #[test]
+    fn fan_out_filter_removes_high_fan_out() {
+        // Given: 10 test files total, prod A mapped to 3 tests (30%), threshold 20%
+        let mut mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/utils/Str.php".to_string(),
+            test_files: vec![
+                "tests/A.php".to_string(),
+                "tests/B.php".to_string(),
+                "tests/C.php".to_string(),
+            ],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // When: apply_fan_out_filter with threshold 20%
+        apply_fan_out_filter(&mut mappings, 10, 20.0);
+        // Then: A's test_files is empty (30% > 20%)
+        assert!(
+            mappings[0].test_files.is_empty(),
+            "expected test_files to be cleared for high fan-out prod file"
+        );
+    }
+
+    // TC-02: fan_out_filter_keeps_low_fan_out
+    #[test]
+    fn fan_out_filter_keeps_low_fan_out() {
+        // Given: 10 test files total, prod B mapped to 1 test (10%), threshold 20%
+        let mut mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/utils/Helper.php".to_string(),
+            test_files: vec!["tests/HelperTest.php".to_string()],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // When: apply_fan_out_filter with threshold 20%
+        apply_fan_out_filter(&mut mappings, 10, 20.0);
+        // Then: B's test_files is maintained (10% <= 20%)
+        assert_eq!(
+            mappings[0].test_files.len(),
+            1,
+            "expected test_files to be kept for low fan-out prod file"
+        );
+    }
+
+    // TC-03: fan_out_filter_disabled_keeps_all
+    #[test]
+    fn fan_out_filter_disabled_keeps_all() {
+        // Given: prod A mapped to 5 tests (50%), threshold 20%
+        // When: apply_fan_out_filter is NOT called (simulating no_fan_out_filter=true)
+        let mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/utils/Str.php".to_string(),
+            test_files: vec![
+                "tests/A.php".to_string(),
+                "tests/B.php".to_string(),
+                "tests/C.php".to_string(),
+                "tests/D.php".to_string(),
+                "tests/E.php".to_string(),
+            ],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // Then: A's test_files is maintained (filter was skipped)
+        assert_eq!(
+            mappings[0].test_files.len(),
+            5,
+            "expected test_files to be kept when filter is not applied"
+        );
+    }
+
+    // TC-04: fan_out_filter_custom_threshold
+    #[test]
+    fn fan_out_filter_custom_threshold() {
+        // Given: 10 test files total, prod mapped to 4 tests (40%), threshold 50%
+        let mut mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/services/UserService.php".to_string(),
+            test_files: vec![
+                "tests/A.php".to_string(),
+                "tests/B.php".to_string(),
+                "tests/C.php".to_string(),
+                "tests/D.php".to_string(),
+            ],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // When: apply_fan_out_filter with custom threshold 50%
+        apply_fan_out_filter(&mut mappings, 10, 50.0);
+        // Then: test_files maintained (40% < 50%)
+        assert_eq!(
+            mappings[0].test_files.len(),
+            4,
+            "expected test_files to be kept when fan-out is below custom threshold"
+        );
+    }
+
+    // TC-05: fan_out_filter_zero_test_files
+    #[test]
+    fn fan_out_filter_zero_test_files() {
+        // Given: 0 total test files (edge case)
+        let mut mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/utils/Str.php".to_string(),
+            test_files: vec![],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // When: apply_fan_out_filter with 0 total test files
+        // Then: no panic
+        apply_fan_out_filter(&mut mappings, 0, 20.0);
+        assert!(
+            mappings[0].test_files.is_empty(),
+            "expected test_files to remain empty"
         );
     }
 }

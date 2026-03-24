@@ -19,6 +19,13 @@ pub struct ExspecConfig {
     pub assertions: AssertionsConfig,
     #[serde(default)]
     pub output: OutputConfig,
+    #[serde(default)]
+    pub observe: ObserveConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct ObserveConfig {
+    pub max_fan_out_percent: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -149,6 +156,10 @@ impl From<ExspecConfig> for Config {
                 })
                 .unwrap_or(defaults.min_severity),
             severity_overrides,
+            max_fan_out_percent: ec
+                .observe
+                .max_fan_out_percent
+                .unwrap_or(defaults.max_fan_out_percent),
         }
     }
 }
