@@ -15,9 +15,9 @@ Goal: Rust (P=76.7%) と PHP (P=90.0%) の observe precision を改善する。s
 
 | Issue | Task | Type | Expected Impact |
 |-------|------|------|-----------------|
-| #161 | Rust L1 safeguards: mod.rs除外 + テストファイル存在検証 | observe precision | Rust P 76.7% → ~90% (4 FP 排除) |
-| #163 | Rust L1 fix → re-audit (50-pair, tokio) | observe validation | 中間計測。結果次第で #162 の Go/No-Go |
-| #162 | Rust L2 re-export chain validation (conditional) | observe precision | Rust P ~90% → ~97% (2 FP 排除。re-audit 後に判断) |
+| #161 | ~~Rust L0 barrel self-mapping exclusion~~ | observe precision | **DONE** Rust P 76.7% → 92.0% (+15.3pp) |
+| #163 | ~~Rust 中間 re-audit (50-pair, tokio)~~ | observe validation | **DONE** P=92.0% (46/50). #162 GO判定 |
+| #162 | Rust L2 re-export chain validation + L0 detect_inline_tests 改善 | observe precision | Rust P 92.0% → ~98% (4 FP 排除) |
 | #129 | PHP L2 fan-out filter (高頻度utility class抑制) | observe precision | PHP P 90.0% → ~97% (Str, Collection 等の除外) |
 | #163 | Final re-audit (50-pair, tokio + laravel + symfony) | observe validation | ship criteria 最終判定 |
 
@@ -29,15 +29,16 @@ Goal: Rust (P=76.7%) と PHP (P=90.0%) の observe precision を改善する。s
 
 ### Rust observe precision improvement
 
-GT audit FP内訳 (7/30):
-- **L1 mod.rs collision** (1): `production_stem()` が mod を返し、テスト側 mod.rs と衝突
-- **L1 テストファイル不在** (3): L1 がファイル名一致を仮定するが、実際にはテストファイルが存在しない
-- **L1 barrel mismatch** (1): lib.rs/mod.rs がproduction fileとして不適切にマッチ
-- **L2 re-export confusion** (2): `pub mod` chain で wrapper と実体を混同
+**Phase 1 DONE** (#161): L0 barrel self-mapping exclusion。`production_stem()` が None のファイル (mod.rs, lib.rs, main.rs) の self-mapping をスキップ。P 76.7% → 92.0% (+15.3pp)。
 
-**Phase 1** (L1 safeguards): `map_test_files()` で (a) mod.rs を L1 候補から除外、(b) テストファイルリストとの照合を追加。予想: **4 FP 排除 → 27/30 = P 90.0%**。その後 50-pair re-audit で中間計測。
+50-pair re-audit (#163) FP内訳 (4/50):
+- **L0 cfg(test) false detection** (2): source.rs (helper method用), open_options.rs (mock切替用) — `#[cfg(test)]` がテストモジュール以外の条件付きコンパイルに使われているケース
+- **L2 re-export chain confusion** (2): driver.rs ← shutdown.rs/yield_now.rs — `pub(crate) mod driver` in runtime/mod.rs で `crate::runtime::*` をimportするテストが driver.rs にマッピングされる
 
-**Phase 2** (L2 re-export, conditional): Phase 1 の re-audit で P < 98% なら `file_exports_any_symbol()` を L2 マッチ時に検証。予想: **2 FP 排除 → ~29/30 = P ~97%**。P >= 98% なら Phase 2 はスキップ。
+**Phase 2** (#162, GO判定): 2つの改善が必要:
+1. **L0 detect_inline_tests 改善**: `#[cfg(test)]` の後に実際の `mod tests` ブロックがあるかチェック (2 FP 排除)
+2. **L2 re-export validation**: `file_exports_any_symbol()` で production file がテストで使われるシンボルを実際にexportしているか検証 (2 FP 排除)
+予想: **4 FP 排除 → 50/50 = P 100%**。
 
 ### PHP observe precision improvement
 
