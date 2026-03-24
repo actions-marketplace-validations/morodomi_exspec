@@ -9,59 +9,19 @@
 
 ## Now
 
-### v0.4.4: observe precision improvement
+### v0.4.5: PHP observe precision + Rust recall
 
-Goal: Rust (P=76.7%) と PHP (P=90.0%) の observe precision を改善する。ship criteria (P>=98%, R>=90%) 達成は re-audit 結果次第であり、v0.4.4 で保証はしない。
+Goal: PHP Str.php FP を解消し P>=98% を達成する。Rust recall 改善に着手する。
 
-| Issue | Task | Type | Expected Impact |
-|-------|------|------|-----------------|
-| #161 | ~~Rust L0 barrel self-mapping exclusion~~ | observe precision | **DONE** Rust P 76.7% → 92.0% (+15.3pp) |
-| #163 | ~~Rust 中間 re-audit (50-pair, tokio)~~ | observe validation | **DONE** P=92.0% (46/50). #162 GO判定 |
-| #162 | ~~Rust L2 export filter + L0 mod_item check~~ | observe precision | **DONE** P 92.0% → 96.0% (+4pp). pub(crate) visibility issue 残存 |
-| #163 | ~~Rust final re-audit (50-pair, tokio)~~ | observe validation | **DONE** P=96.0% (48/50). FAIL — pub(crate) visibility fix 必要 |
-| NEW | Rust exported_symbol.scm pub-only filter | observe precision | P 96.0% → ~100% (2 FP: pub(crate) を pub と区別) |
-| #129 | PHP L2 fan-out filter (高頻度utility class抑制) | observe precision | PHP P 90.0% → ~97% (Str, Collection 等の除外) |
-| NEW | Final re-audit (50-pair, tokio + laravel + symfony) | observe validation | ship criteria 最終判定 |
+| Priority | Task | Type | Expected Impact |
+|----------|------|------|-----------------|
+| P1 | PHP Str.php FP resolution (import frequency or usage pattern analysis) | observe precision | PHP P 96.0% → >=98% |
+| P1 | PHP re-audit (50-pair, laravel + symfony) | observe validation | ship criteria 判定 |
+| P2 | Rust observe recall improvement (L2 deep re-export, wildcard import) | observe recall | R 36.8% → target 90% |
 
-**Why**: GT audit (#149) で判明した FP パターンは言語固有の構造的問題。Rust は L1 filename matching の曖昧性 (mod.rs, テスト不在ファイル)、PHP は L2 の高頻度utility class (Str, Collection 等) が原因。
+**Why**: v0.4.4 で Rust precision は 100% に到達したが、PHP は fan-out filter (20% threshold) が Str.php (6.7% fan-out) を捕捉できなかった。Fan-out アプローチだけでは utility class の incidental import FP を解決できない。import 頻度分析や usage pattern analysis など別アプローチが必要。
 
-**Execution order**: #161 (Rust L1) → #163 中間 re-audit → #162 (Rust L2, conditional) → #129 (PHP fan-out) → #163 final re-audit
-
-**Note: Rust recall (R=36.8%) は v0.4.4 では改善しない。** L1 safeguards は precision 改善のみ。Recall 改善には L2 import tracing の拡充 (deep re-export, wildcard import 等) が必要で、これは別バージョンのスコープ。ship criteria の R>=90% は precision 改善後に再評価。
-
-### Rust observe precision improvement
-
-**Phase 1 DONE** (#161): L0 barrel self-mapping exclusion。`production_stem()` が None のファイル (mod.rs, lib.rs, main.rs) の self-mapping をスキップ。P 76.7% → 92.0% (+15.3pp)。
-
-50-pair re-audit (#163) FP内訳 (4/50):
-- **L0 cfg(test) false detection** (2): source.rs (helper method用), open_options.rs (mock切替用) — `#[cfg(test)]` がテストモジュール以外の条件付きコンパイルに使われているケース
-- **L2 re-export chain confusion** (2): driver.rs ← shutdown.rs/yield_now.rs — `pub(crate) mod driver` in runtime/mod.rs で `crate::runtime::*` をimportするテストが driver.rs にマッピングされる
-
-**Phase 2** (#162, GO判定): 2つの改善が必要:
-1. **L0 detect_inline_tests 改善**: `#[cfg(test)]` の後に実際の `mod tests` ブロックがあるかチェック (2 FP 排除)
-2. **L2 re-export validation**: `file_exports_any_symbol()` で production file がテストで使われるシンボルを実際にexportしているか検証 (2 FP 排除)
-予想: **4 FP 排除 → 50/50 = P 100%**。
-
-### PHP observe precision improvement
-
-GT audit FP内訳 (3/30):
-- **高頻度 utility class** (3/3): Str.php (全3件)。Collection, DB 等も同様のパターンが推定される。
-
-Fix: L2 post-processing で fan-out 閾値超えの production file をデフォルトで除外。閾値は configurable (`[observe] max_fan_out_percent`, default 20%)。`--no-fan-out-filter` で無効化可能。
-
-**Fan-out filter は default ON** — opt-in ではなく opt-out。ship criteria はデフォルト動作で判定する。閾値は Laravel (912 tests) + Symfony (2419 tests) の両方で dogfooding 検証し、FN が発生しない値を決定する。
-
-**Note: FN リスク** — fan-out filter は「utility class をテストしているテスト」の mapping も除外する FN リスクがある。CONSTITUTION の quiet 原則 (FP を避ける方向にエラーする) に沿った設計だが、`--no-fan-out-filter` でエスケープ可能であることを README/docs に明記する。
-
-### GT re-audit protocol
-
-v0.4.3 の 30-pair サンプルは信頼区間が広い (P=96.7% でも 95%CI=[83-100%])。v0.4.4 では:
-- **サンプルサイズ**: 50-pair (95%CI が ±10% 以内に収まる)
-- **対象**: Rust: tokio (workspace)。PHP: laravel + symfony (2プロジェクト)
-- **PASS 基準 (言語別)**:
-  - PHP: P >= 49/50 (98%) AND R >= 90% → stable 昇格
-  - Rust: P >= 49/50 (98%) のみ判定。R=36.8% は v0.4.4 で改善しないため、R の判定は precision 改善後の別バージョンに持ち越す。Rust は v0.4.4 で precision PASS しても experimental のまま (R が足りない)
-- **FAIL 時**: 追加 fix を issue 起票し、v0.4.5 で再挑戦
+**PHP Str.php FP 分析**: Str.php は 61/912 テスト (6.7%) にマッピングされる。テストは `Str::random()` 等を utility として使うだけで Str を直接テストしていない。fan-out threshold を下げると Model.php (20%) 等の正当な高頻度 production file も除外される FN リスクがある。
 
 ## Backlog
 
@@ -71,13 +31,27 @@ v0.4.3 の 30-pair サンプルは信頼区間が広い (P=96.7% でも 95%CI=[8
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
 | P2 | #127 Python barrel suppression per-(test, prod) scope | Precision refinement |
 | P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
-| P2 | Rust observe recall improvement (L2 deep re-export, wildcard import) | R=36.8% → 90%。v0.4.4 precision 完了後に着手 |
+| P2 | Rust observe recall improvement (L2 deep re-export, wildcard import) | R=36.8% → 90%。v0.4.5 で着手 |
 | P2 | #153 Cross-file 1-hop helper delegation | lint BLOCK FP。observe precision 完了後に再評価 (v0.4.3 で defer 確定) |
 | P3 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit FP にmulti-segment起因なし。優先度低下 |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
 | P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
 
 ## Completed Recently
+
+### v0.4.4: observe precision improvement (2026-03-24)
+
+Goal: Rust/PHP observe precision improvement。Rust P=100% 達成、PHP P=96.0% (Str.php FP は v0.4.5 へ)。
+
+| Issue | Task | Status |
+|-------|------|--------|
+| #161 | Rust L0 barrel self-mapping exclusion | DONE (P 76.7% → 92.0%) |
+| #162 | Rust L0 mod_item check + L2 export filter | DONE (P 92.0% → 96.0%) |
+| #168 | Rust pub-only visibility filter | DONE (P 96.0% → 100%) |
+| #129 | Fan-out filter (`[observe] max_fan_out_percent`) | DONE (infrastructure。Str.php には効果なし) |
+| #163 | GT re-audit (50-pair, tokio + laravel) | DONE. Rust P=100% PASS, PHP P=96.0% FAIL |
+
+**Key insight**: Fan-out filter (20% threshold) は Str.php (6.7% fan-out) を捕捉できない。utility class の incidental import は fan-out 閾値ではなく import の「目的」(assert 対象か否か) で判定する必要がある。v0.4.5 で別アプローチを検討。
 
 ### v0.4.3: lint helper tracing + observe L1 exclusive + GT audit (2026-03-24)
 
@@ -182,7 +156,7 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 
 - **ObserveExtractor trait** -- language-agnostic interface in `crates/core/`, each lang crate implements it
 - **Two-layer algorithm is portable** -- Layer 1 (filename convention) + Layer 2 (import tracing) applies to all 4 languages
-- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable. Rust (P=76.7%) and PHP (P=90.0%) remain experimental — GT audit #149 completed, both FAIL. Rust FP: filename ambiguity (mod.rs, missing test files). PHP FP: utility class imports (Str.php)
+- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable. Rust (P=100%, R=36.8%) experimental (precision PASS but recall FAIL). PHP (P=96.0%, R=88.6%) experimental (Str.php incidental import FP)
 
 ### B4 barrel fix rejection (Phase 11)
 
@@ -237,5 +211,7 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 | -- | observe recall/precision: #85 TS re-export, #119/#126/#146 Python, Rust/PHP dogfood baselines | v0.4.2 |
 | 23b | Same-file helper tracing: Python (#150), TypeScript (#151), PHP (#152). Near-zero BLOCK impact | v0.4.3 |
 | -- | L1 exclusive mode (#131), GT audit (#149): Rust P=76.7%, PHP P=90.0% | v0.4.3 |
+| -- | Rust observe precision: L0 barrel exclusion (#161), L0 mod_item + L2 export filter (#162), pub-only visibility (#168) | v0.4.4 |
+| -- | Fan-out filter (#129), final re-audit (#163): Rust P=100%, PHP P=96.0% | v0.4.4 |
 
 Detail for completed phases is archived in git history. Key decisions are preserved in "Key Design Decisions" above.
