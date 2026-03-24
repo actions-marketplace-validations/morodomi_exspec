@@ -9,17 +9,25 @@
 
 ## Now
 
-### v0.4.5: PHP observe precision + Rust recall
+### v0.4.5: Rust recall + PHP precision
 
-Goal: PHP Str.php FP を解消し P>=98% を達成する。Rust recall 改善に着手する。
+Goal: Rust observe recall を 62.9% → 90% に引き上げる。PHP Str.php FP を解消する。
 
 | Priority | Task | Type | Expected Impact |
 |----------|------|------|-----------------|
-| P1 | PHP Str.php FP resolution (import frequency or usage pattern analysis) | observe precision | PHP P 96.0% → >=98% |
-| P1 | PHP re-audit (50-pair, laravel + symfony) | observe validation | ship criteria 判定 |
-| P2 | Rust observe recall improvement (L2 deep re-export, wildcard import) | observe recall | R 36.8% → target 90% |
+| P1 | Rust cfg macro multi-hop barrel resolution (nested cfg_net!/cfg_not_wasi!) | observe recall | R 62.9% → ~75% (tokio/tests/ 60 FN の主因) |
+| P1 | Rust inline test module improvement (loom/runtime internal tests) | observe recall | R → ~80% (20 FN) |
+| P2 | PHP Str.php FP resolution (import frequency or usage pattern analysis) | observe precision | PHP P 96.0% → >=98% |
+| P2 | PHP re-audit (50-pair, laravel + symfony) | observe validation | ship criteria 判定 |
 
-**Why**: v0.4.4 で Rust precision は 100% に到達したが、PHP は fan-out filter (20% threshold) が Str.php (6.7% fan-out) を捕捉できなかった。Fan-out アプローチだけでは utility class の incidental import FP を解決できない。import 頻度分析や usage pattern analysis など別アプローチが必要。
+**Why**: #179 で R=38.2% → 62.9% (+67 test files)。2つの L2 バグ (self:: prefix, single-segment import) を修正。残り 126 FN の最大要因は cfg macro 内の multi-hop barrel resolution (60 FN)。`cfg_net! { pub use tcp::listener::TcpListener; }` のような re-export が `net/tcp/listener.rs` に解決されない。
+
+**Rust FN 内訳 (126 FN)**:
+- cfg macro multi-hop barrel: 60 FN (tokio/tests/) — `pub use tcp::listener::TcpListener` が cfg_net! 内で解決されない
+- loom/runtime inline tests: 20 FN (tokio/src/runtime/tests/) — 内部テストモジュール
+- cross-crate import: 20 FN (tokio-stream/tests/) — `tokio_stream::` import
+- compile-tests: 13 FN (tests-build/) — production mapping 不適
+- other: 13 FN
 
 **PHP Str.php FP 分析**: Str.php は 61/912 テスト (6.7%) にマッピングされる。テストは `Str::random()` 等を utility として使うだけで Str を直接テストしていない。fan-out threshold を下げると Model.php (20%) 等の正当な高頻度 production file も除外される FN リスクがある。
 
@@ -31,13 +39,25 @@ Goal: PHP Str.php FP を解消し P>=98% を達成する。Rust recall 改善に
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
 | P2 | #127 Python barrel suppression per-(test, prod) scope | Precision refinement |
 | P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
-| P2 | Rust observe recall improvement (L2 deep re-export, wildcard import) | R=36.8% → 90%。v0.4.5 で着手 |
+| P2 | Rust observe recall: cfg multi-hop barrel + inline tests | R=62.9% → 90%。v0.4.5 で継続 |
 | P2 | #153 Cross-file 1-hop helper delegation | lint BLOCK FP。observe precision 完了後に再評価 (v0.4.3 で defer 確定) |
 | P3 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit FP にmulti-segment起因なし。優先度低下 |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
 | P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
 
 ## Completed Recently
+
+### #179: Rust L2 self:: prefix + single-segment import fix (2026-03-24)
+
+Goal: Rust observe recall 改善 (38.2% → 62.9%)。2つの L2 バグを修正。
+
+| Issue | Task | Status |
+|-------|------|--------|
+| #179 | `parse_use_path` single-segment import fix | DONE (R +24.7pp) |
+| #179 | `extract_pub_use_re_exports` self:: prefix strip | DONE |
+| #179 | `extract_re_exports_from_text` self:: prefix strip | DONE |
+
+**Key insight**: `use tokio::fs` (single-segment) が `parse_use_path` で無視されていた。`pub use self::file::File` が `./self/file` に解決されていた。修正で +67 test files mapped, regression 0。残り 126 FN は cfg macro multi-hop barrel が主因。
 
 ### v0.4.4: observe precision improvement (2026-03-24)
 
@@ -156,7 +176,7 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 
 - **ObserveExtractor trait** -- language-agnostic interface in `crates/core/`, each lang crate implements it
 - **Two-layer algorithm is portable** -- Layer 1 (filename convention) + Layer 2 (import tracing) applies to all 4 languages
-- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable. Rust (P=100%, R=36.8%) experimental (precision PASS but recall FAIL). PHP (P=96.0%, R=88.6%) experimental (Str.php incidental import FP)
+- **Success bar**: Ship criteria P>=98%, R>=90% per language. TypeScript (P=100%, R=91%) and Python (P=98.2%, R=96.8%) are stable. Rust (P=100%, R=62.9%) experimental (precision PASS, recall improving). PHP (P=96.0%, R=88.6%) experimental (Str.php incidental import FP)
 
 ### B4 barrel fix rejection (Phase 11)
 

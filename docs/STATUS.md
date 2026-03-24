@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-v0.4.4-dev. Rust precision PASS (P=100%), PHP precision FAIL (P=96.0%). Fan-out filter added.
+v0.4.5-dev. Rust recall improved R=62.9% (post-#179). PHP precision FAIL (P=96.0%).
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=100%, R=36.8% (experimental, P PASS R FAIL). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=100%, R=62.9% (experimental, P PASS R FAIL). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
 ## Progress
 
@@ -42,6 +42,17 @@ observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). R
 | 17 - ai-prompt output format (default) | **DONE** |
 | 20 - Python observe test helper exclusion | **DONE** |
 | 21 - Python observe re-dogfood + FP fix | **DONE** |
+| #179 - Rust L2 self:: prefix + single-segment import fix | **DONE** |
+
+### #179 Rust Observe Recall Improvement (2026-03-24)
+
+| Metric | Pre-#179 | Post-#179 | Target |
+|--------|----------|-----------|--------|
+| Precision | 100% | 100% | >= 98% |
+| Recall (test file) | **38.2%** (104/272) | **62.9%** (171/272) | >= 90% |
+| Regression | - | 0 | 0 |
+
+**+67 test files mapped.** Two L2 bugs fixed: `parse_use_path` single-segment drop, `extract_pub_use_re_exports` self:: prefix. Remaining 126 FN: cfg macro multi-hop barrel (60), loom inline tests (20), cross-crate tokio-stream (20), compile-tests (13), other (13).
 
 ### Phase 21 Python Observe Re-dogfood Results (2026-03-22)
 
@@ -127,7 +138,7 @@ Root mode resolves most B2 FN but introduces FP from peripheral imports not yet 
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 1169 passing | -- |
+| Tests | 1180 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
