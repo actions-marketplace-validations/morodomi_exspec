@@ -101,6 +101,27 @@ Custom patterns use substring matching. A test function containing any of these 
 - Whitespace-only patterns (e.g. `" "`) are **not** filtered — avoid them as they will match most lines.
 - Matching includes comments and string literals (text-based fallback, not AST-aware). This is by design for simplicity and reliability.
 
+### `[observe]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_fan_out_percent` | float | `20.0` | Max percentage of test files a single production file can be mapped to before being excluded. Set to `100.0` to effectively disable. |
+
+The fan-out filter prevents high-frequency utility classes (e.g., `Str.php`, `Collection.php`) from being mapped to every test that imports them incidentally. Production files exceeding the threshold have their test mappings cleared.
+
+Use `--no-fan-out-filter` CLI flag to disable the filter entirely.
+
+```toml
+[observe]
+max_fan_out_percent = 10.0  # stricter threshold (default: 20.0)
+```
+
+### `[output]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `min_severity` | string | `"info"` | Minimum severity to display (`info`, `warn`, `block`) |
+
 ## Inline Suppression
 
 Suppress specific rules per function with a comment directly above the test:

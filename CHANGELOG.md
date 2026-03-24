@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.4.4 (2026-03-24)
+
+Rust observe precision from 76.7% to 100%, fan-out filter for high-frequency utility class FP, and pub-only visibility filter.
+
+### Features
+
+- **Rust L0 barrel self-mapping exclusion**: `detect_inline_tests()` no longer self-maps barrel files (mod.rs, lib.rs, main.rs) that have `#[cfg(test)]` but no test module. Eliminates false positive self-mappings. (#161)
+- **Rust L0 mod_item verification**: `detect_inline_tests()` now verifies that `#[cfg(test)]` is followed by a `mod_item` sibling, preventing false detection of conditional compilation helpers (mock substitution, test-only methods). (#162)
+- **Rust L2 export symbol filter**: `apply_l2_imports()` now filters L2 matches through `file_exports_any_symbol()`, excluding production files that don't export the imported symbols. Prevents re-export chain confusion. (#162)
+- **Rust pub-only visibility filter**: `exported_symbol.scm` now distinguishes `pub` from `pub(crate)`/`pub(super)`. Only truly public items count as exports. (#168)
+- **Observe fan-out filter**: Post-processing filter excludes production files mapped to more than `max_fan_out_percent` (default 20%) of all test files. Configurable via `[observe] max_fan_out_percent` in `.exspec.toml`. Disable with `--no-fan-out-filter`. Language-agnostic. (#129)
+
+### Dogfooding
+
+- Rust observe: P=76.7% -> **P=100%** (50-pair, tokio). Ship criteria P>=98% **PASS**. R=36.8% unchanged (experimental maintained).
+- PHP observe: P=90.0% -> P=96.0% (50-pair, laravel). Fan-out filter (20%) does not catch Str.php (6.7% fan-out). Deferred to v0.4.5.
+- TypeScript/Python observe: unchanged (stable, P>=98%, R>=90%).
+
+### Internal
+
+- 1161 tests (up from 1142 in v0.4.3).
+- `[observe]` config section added to `.exspec.toml` schema.
+- `ObserveArgs` gains `--no-fan-out-filter` flag.
+
 ## v0.4.3 (2026-03-24)
 
 Same-file helper tracing for all 4 languages, L1 exclusive mode for observe, and GT audit.

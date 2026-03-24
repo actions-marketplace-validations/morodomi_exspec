@@ -2,7 +2,7 @@
 
 Static analyzer for test design quality. Verifies that tests function as executable specifications -- fast, language-agnostic, zero LLM cost.
 
-> **Public beta** (v0.1.2). Dogfooded across 11 projects / 4 languages / ~40,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
+> **Public beta** (v0.4.4). Dogfooded across 11 projects / 4 languages / ~40,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
 
 ## Why exspec?
 
@@ -116,16 +116,24 @@ exspec observe --lang rust --format json .  # JSON for CI
 2. **Route coverage** (TypeScript/NestJS): Detects controller routes and shows which have test coverage
 3. **Gap detection**: Lists unmapped production files (potential test gaps)
 
+### Observe flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--l1-exclusive` | off | Suppress L2 for L1-matched test files |
+| `--no-fan-out-filter` | off | Disable fan-out threshold filter |
+| `--format json` | terminal | JSON output for CI |
+
 ### Dogfooding results
 
-| Project | Lang | Prod | Mapped | Precision |
-|---------|------|------|--------|-----------|
-| NestJS | TypeScript | 1279 | 466 (36%) | ~100% |
-| FastAPI | Python | 620 | 122 (20%) | ~100% |
-| Django | Python | 2266 | 381 (17%) | ~100% |
-| tokio | Rust | 495 | 71 (14%) | 100% |
-| Laravel | PHP | 1945 | 968 (50%) | ~100% |
-| Symfony | PHP | 7937 | 4117 (52%) | ~100% |
+| Project | Lang | Prod | Mapped | Precision | Status |
+|---------|------|------|--------|-----------|--------|
+| NestJS | TypeScript | 1279 | 466 (36%) | 100% | stable |
+| FastAPI | Python | 620 | 122 (20%) | ~100% | stable |
+| Django | Python | 2266 | 381 (17%) | ~100% | stable |
+| tokio | Rust | 495 | 50 (10%) | 100% | experimental (R < 90%) |
+| Laravel | PHP | 1945 | 973 (50%) | 96% | experimental |
+| Symfony | PHP | 7937 | 4117 (52%) | ~96% | experimental |
 
 See [docs/dogfooding-results.md](docs/dogfooding-results.md) for full details.
 

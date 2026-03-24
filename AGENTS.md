@@ -161,3 +161,11 @@ feat | fix | docs | refactor | test | chore
 ```
 
 コミット前: `cargo test` + `cargo clippy -- -D warnings` + `cargo fmt --check` + `cargo run -- --lang rust .`
+
+## Observe CLI Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--l1-exclusive` | off | L1マッチ済みテストのL2を抑制 |
+| `--no-fan-out-filter` | off | fan-outフィルタを無効化 |
+| `--format json` | terminal | JSON出力 |
