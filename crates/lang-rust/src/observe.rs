@@ -330,6 +330,18 @@ impl ObserveExtractor for RustExtractor {
                     extract_pub_use_re_exports(&arg, source_bytes, &mut result);
                 }
             }
+
+            // cfg macro blocks: cfg_*! { pub mod ...; pub use ...; }
+            if child.kind() == "macro_invocation" {
+                for j in 0..child.child_count() {
+                    if let Some(tt) = child.child(j) {
+                        if tt.kind() == "token_tree" {
+                            let tt_text = tt.utf8_text(source_bytes).unwrap_or("");
+                            extract_re_exports_from_text(tt_text, &mut result);
+                        }
+                    }
+                }
+            }
         }
 
         result
@@ -745,6 +757,80 @@ fn parse_use_path(path: &str, result: &mut HashMap<String, Vec<String>>) {
             .entry(specifier)
             .or_default()
             .push(symbol.to_string());
+    }
+}
+
+/// Extract `pub mod` and `pub use` re-exports from raw text (e.g., inside cfg macro token_tree).
+/// Uses text matching since tree-sitter token_tree content is not structured AST.
+fn extract_re_exports_from_text(text: &str, result: &mut Vec<BarrelReExport>) {
+    for line in text.lines() {
+        let trimmed = line.trim();
+
+        // pub mod foo; or pub(crate) mod foo;
+        if (trimmed.starts_with("pub mod ") || trimmed.starts_with("pub(crate) mod "))
+            && trimmed.ends_with(';')
+        {
+            let mod_name = trimmed
+                .trim_start_matches("pub(crate) mod ")
+                .trim_start_matches("pub mod ")
+                .trim_end_matches(';')
+                .trim();
+            if !mod_name.is_empty() && !mod_name.contains(' ') {
+                result.push(BarrelReExport {
+                    symbols: Vec::new(),
+                    from_specifier: format!("./{mod_name}"),
+                    wildcard: true,
+                    namespace_wildcard: false,
+                });
+            }
+        }
+
+        // pub use module::{A, B}; or pub use module::*;
+        if trimmed.starts_with("pub use ") && trimmed.contains("::") {
+            let use_path = trimmed
+                .trim_start_matches("pub use ")
+                .trim_end_matches(';')
+                .trim();
+            // Delegate to the same text-based parsing used for tree-sitter nodes
+            if use_path.ends_with("::*") {
+                let module_part = use_path.strip_suffix("::*").unwrap_or("");
+                result.push(BarrelReExport {
+                    symbols: Vec::new(),
+                    from_specifier: format!("./{}", module_part.replace("::", "/")),
+                    wildcard: true,
+                    namespace_wildcard: false,
+                });
+            } else if let Some(brace_start) = use_path.find('{') {
+                let module_part = &use_path[..brace_start.saturating_sub(2)];
+                if let Some(brace_end) = use_path.find('}') {
+                    let list_content = &use_path[brace_start + 1..brace_end];
+                    let symbols: Vec<String> = list_content
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty() && s != "*")
+                        .collect();
+                    result.push(BarrelReExport {
+                        symbols,
+                        from_specifier: format!("./{}", module_part.replace("::", "/")),
+                        wildcard: false,
+                        namespace_wildcard: false,
+                    });
+                }
+            } else {
+                // pub use module::Symbol;
+                let parts: Vec<&str> = use_path.split("::").collect();
+                if parts.len() >= 2 {
+                    let module_parts = &parts[..parts.len() - 1];
+                    let symbol = parts[parts.len() - 1];
+                    result.push(BarrelReExport {
+                        symbols: vec![symbol.to_string()],
+                        from_specifier: format!("./{}", module_parts.join("/")),
+                        wildcard: false,
+                        namespace_wildcard: false,
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -3129,5 +3215,89 @@ mod tests;
             "service.rs should be mapped to test_app.rs, got: {:?}",
             mapping.unwrap().test_files
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-BARREL-CFG-01: cfg_feat! { pub mod sub; } -> extract_barrel_re_exports
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_barrel_cfg_macro_pub_mod() {
+        // Given: barrel mod.rs with cfg_feat! { pub mod sub; }
+        let source = r#"
+cfg_feat! {
+    pub mod sub;
+}
+"#;
+
+        // When: extract_barrel_re_exports is called
+        let ext = RustExtractor::new();
+        let result = ext.extract_barrel_re_exports(source, "src/mod.rs");
+
+        // Then: result contains BarrelReExport for "./sub" with wildcard=true
+        assert!(
+            !result.is_empty(),
+            "Expected non-empty result, got: {:?}",
+            result
+        );
+        assert!(
+            result
+                .iter()
+                .any(|r| r.from_specifier == "./sub" && r.wildcard),
+            "./sub with wildcard=true not found in {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-BARREL-CFG-02: cfg_feat! { pub use util::{Symbol}; } -> extract_barrel_re_exports
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_barrel_cfg_macro_pub_use_braces() {
+        // Given: barrel mod.rs with cfg_feat! { pub use util::{Symbol}; }
+        let source = r#"
+cfg_feat! {
+    pub use util::{Symbol};
+}
+"#;
+
+        // When: extract_barrel_re_exports is called
+        let ext = RustExtractor::new();
+        let result = ext.extract_barrel_re_exports(source, "src/mod.rs");
+
+        // Then: result contains BarrelReExport for "./util" with symbols=["Symbol"]
+        assert!(
+            !result.is_empty(),
+            "Expected non-empty result, got: {:?}",
+            result
+        );
+        assert!(
+            result.iter().any(|r| r.from_specifier == "./util"
+                && !r.wildcard
+                && r.symbols.contains(&"Symbol".to_string())),
+            "./util with symbols=[\"Symbol\"] not found in {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-BARREL-CFG-03: top-level pub mod foo; (no macro) regression
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_barrel_top_level_regression() {
+        // Given: barrel mod.rs with top-level pub mod foo; (no macro wrapper)
+        let source = "pub mod foo;\n";
+
+        // When: extract_barrel_re_exports is called
+        let ext = RustExtractor::new();
+        let result = ext.extract_barrel_re_exports(source, "src/mod.rs");
+
+        // Then: foo is detected (regression - top-level pub mod must still work)
+        let entry = result.iter().find(|e| e.from_specifier == "./foo");
+        assert!(
+            entry.is_some(),
+            "./foo not found in {:?} (regression: top-level pub mod broken)",
+            result
+        );
+        assert!(entry.unwrap().wildcard);
     }
 }
