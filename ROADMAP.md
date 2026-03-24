@@ -37,7 +37,7 @@ GT audit FP内訳 (7/30):
 
 **Phase 1** (L1 safeguards): `map_test_files()` で (a) mod.rs を L1 候補から除外、(b) テストファイルリストとの照合を追加。予想: **4 FP 排除 → 27/30 = P 90.0%**。その後 50-pair re-audit で中間計測。
 
-**Phase 2** (L2 re-export, conditional): Phase 1 の re-audit で P < 95% なら `file_exports_any_symbol()` を L2 マッチ時に検証。予想: **2 FP 排除 → ~29/30 = P ~97%**。P >= 95% なら Phase 2 はスキップ。
+**Phase 2** (L2 re-export, conditional): Phase 1 の re-audit で P < 98% なら `file_exports_any_symbol()` を L2 マッチ時に検証。予想: **2 FP 排除 → ~29/30 = P ~97%**。P >= 98% なら Phase 2 はスキップ。
 
 ### PHP observe precision improvement
 
@@ -48,12 +48,16 @@ Fix: L2 post-processing で fan-out 閾値超えの production file をデフォ
 
 **Fan-out filter は default ON** — opt-in ではなく opt-out。ship criteria はデフォルト動作で判定する。閾値は Laravel (912 tests) + Symfony (2419 tests) の両方で dogfooding 検証し、FN が発生しない値を決定する。
 
+**Note: FN リスク** — fan-out filter は「utility class をテストしているテスト」の mapping も除外する FN リスクがある。CONSTITUTION の quiet 原則 (FP を避ける方向にエラーする) に沿った設計だが、`--no-fan-out-filter` でエスケープ可能であることを README/docs に明記する。
+
 ### GT re-audit protocol
 
 v0.4.3 の 30-pair サンプルは信頼区間が広い (P=96.7% でも 95%CI=[83-100%])。v0.4.4 では:
 - **サンプルサイズ**: 50-pair (95%CI が ±10% 以内に収まる)
 - **対象**: Rust: tokio (workspace)。PHP: laravel + symfony (2プロジェクト)
-- **PASS 基準**: P >= 49/50 (98%) AND R >= 90% (test file coverage)
+- **PASS 基準 (言語別)**:
+  - PHP: P >= 49/50 (98%) AND R >= 90% → stable 昇格
+  - Rust: P >= 49/50 (98%) のみ判定。R=36.8% は v0.4.4 で改善しないため、R の判定は precision 改善後の別バージョンに持ち越す。Rust は v0.4.4 で precision PASS しても experimental のまま (R が足りない)
 - **FAIL 時**: 追加 fix を issue 起票し、v0.4.5 で再挑戦
 
 ## Backlog
@@ -64,8 +68,9 @@ v0.4.3 の 30-pair サンプルは信頼区間が広い (P=96.7% でも 95%CI=[8
 | P2 | `exspec init` (framework detection + auto-config) | User onboarding friction |
 | P2 | #127 Python barrel suppression per-(test, prod) scope | Precision refinement |
 | P2 | #92 L1 stem matching for cross-directory layouts | Recall architecture |
-| P2 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit FP にmulti-segment起因なし → 優先度低下 |
+| P2 | Rust observe recall improvement (L2 deep re-export, wildcard import) | R=36.8% → 90%。v0.4.4 precision 完了後に着手 |
 | P2 | #153 Cross-file 1-hop helper delegation | lint BLOCK FP。observe precision 完了後に再評価 (v0.4.3 で defer 確定) |
+| P3 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit FP にmulti-segment起因なし。優先度低下 |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
 | P3 | #113/#114/#115 Refactoring (cached_query, dedup, trait) | Internal cleanup |
 
@@ -151,8 +156,8 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 
 | Priority | Task | Trigger |
 |----------|------|---------|
-| P2 | T201 spec-quality (advisory mode) | "I want semantic quality checks" |
-| P2 | GitHub Action marketplace | After route extraction ships |
+| P2 | T201 spec-quality (structural advisory mode) | "I want structural spec-quality advisory" (Note: semantic validation is Non-Goal per CONSTITUTION) |
+| P2 | GitHub Action marketplace | After Rust/PHP observe stabilize (route extraction shipped in v0.4.0) |
 | P3 | T203 AST similarity duplicate detection | "I want duplicate test detection" |
 | P3 | Go language support (lint) | After observe multi-language proves demand |
 | Rejected | LSP/VSCode extension | Too early -- low user count for UI investment |
@@ -205,7 +210,7 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 - User-owned config + runtime guidance. No framework-specific knowledge in exspec core
 - Phase 23a: same-file helper tracing for Rust (v0.4.0)
 - Phase 23b: same-file tracing ported to Python/TypeScript/PHP (v0.4.3). Dogfooding result: near-zero BLOCK reduction — helper delegation FP is dominated by cross-file class method calls, not free functions
-- Cross-file 1-hop (#153): deferred to v0.4.4. Requires import resolution or class hierarchy tracing — significantly more complex than same-file
+- Cross-file 1-hop (#153): deferred to backlog (v0.4.3 で defer 確定。observe precision 完了後に再評価)。Requires import resolution or class hierarchy tracing — significantly more complex than same-file
 - `custom_patterns` remains the primary user-facing escape hatch for helper delegation FP
 
 ## Completed Phases
