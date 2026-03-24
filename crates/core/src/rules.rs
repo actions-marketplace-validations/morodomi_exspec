@@ -93,6 +93,7 @@ pub struct Config {
     pub ignore_patterns: Vec<String>,
     pub min_severity: Severity,
     pub severity_overrides: HashMap<String, Severity>,
+    pub max_fan_out_percent: f64,
 }
 
 impl Default for Config {
@@ -110,6 +111,7 @@ impl Default for Config {
             ignore_patterns: Vec::new(),
             min_severity: Severity::Info,
             severity_overrides: HashMap::new(),
+            max_fan_out_percent: 20.0,
         }
     }
 }
