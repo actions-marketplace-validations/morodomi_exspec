@@ -801,6 +801,10 @@ impl RustExtractor {
 
         // Layer 0: Inline test self-mapping
         for (idx, prod_file) in production_files.iter().enumerate() {
+            // Skip barrel/entry point files (mod.rs, lib.rs, main.rs, build.rs)
+            if production_stem(prod_file).is_none() {
+                continue;
+            }
             if let Ok(source) = std::fs::read_to_string(prod_file) {
                 if detect_inline_tests(&source) {
                     // Self-map: production file maps to itself
@@ -2607,5 +2611,194 @@ mod tests {
         // No Cargo.toml
         std::fs::remove_file(tmp.path().join("Cargo.toml")).unwrap();
         assert!(!has_workspace_section(tmp.path()));
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L0-BARREL-01: mod.rs with inline tests must NOT be self-mapped (TC-01)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l0_barrel_01_mod_rs_excluded() {
+        // Given: mod.rs containing #[cfg(test)] in production_files
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        let mod_rs = src_dir.join("mod.rs");
+        std::fs::write(
+            &mod_rs,
+            r#"pub mod sub;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_something() {}
+}
+"#,
+        )
+        .unwrap();
+
+        let extractor = RustExtractor::new();
+        let prod_path = mod_rs.to_string_lossy().into_owned();
+        let production_files = vec![prod_path.clone()];
+        let test_sources: HashMap<String, String> = HashMap::new();
+
+        // When: map_test_files_with_imports is called
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
+
+        // Then: mod.rs is NOT self-mapped (barrel file exclusion)
+        let mapping = result.iter().find(|m| m.production_file == prod_path);
+        assert!(mapping.is_some());
+        assert!(
+            !mapping.unwrap().test_files.contains(&prod_path),
+            "mod.rs should NOT be self-mapped, but found in: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L0-BARREL-02: lib.rs with inline tests must NOT be self-mapped (TC-02)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l0_barrel_02_lib_rs_excluded() {
+        // Given: lib.rs containing #[cfg(test)] in production_files
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        let lib_rs = src_dir.join("lib.rs");
+        std::fs::write(
+            &lib_rs,
+            r#"pub mod utils;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_lib() {}
+}
+"#,
+        )
+        .unwrap();
+
+        let extractor = RustExtractor::new();
+        let prod_path = lib_rs.to_string_lossy().into_owned();
+        let production_files = vec![prod_path.clone()];
+        let test_sources: HashMap<String, String> = HashMap::new();
+
+        // When: map_test_files_with_imports is called
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
+
+        // Then: lib.rs is NOT self-mapped (barrel file exclusion)
+        let mapping = result.iter().find(|m| m.production_file == prod_path);
+        assert!(mapping.is_some());
+        assert!(
+            !mapping.unwrap().test_files.contains(&prod_path),
+            "lib.rs should NOT be self-mapped, but found in: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L0-BARREL-03: regular .rs file with inline tests IS self-mapped (TC-03, regression)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l0_barrel_03_regular_file_self_mapped() {
+        // Given: a regular .rs file (not a barrel) containing #[cfg(test)]
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        let service_rs = src_dir.join("service.rs");
+        std::fs::write(
+            &service_rs,
+            r#"pub fn do_work() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_do_work() { assert!(true); }
+}
+"#,
+        )
+        .unwrap();
+
+        let extractor = RustExtractor::new();
+        let prod_path = service_rs.to_string_lossy().into_owned();
+        let production_files = vec![prod_path.clone()];
+        let test_sources: HashMap<String, String> = HashMap::new();
+
+        // When: map_test_files_with_imports is called
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
+
+        // Then: service.rs IS self-mapped (regular file with inline tests)
+        let mapping = result.iter().find(|m| m.production_file == prod_path);
+        assert!(mapping.is_some());
+        assert!(
+            mapping.unwrap().test_files.contains(&prod_path),
+            "service.rs should be self-mapped, but not found in: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L0-BARREL-04: main.rs with inline tests must NOT be self-mapped (TC-04)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l0_barrel_04_main_rs_excluded() {
+        // Given: main.rs containing #[cfg(test)] in production_files
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        let main_rs = src_dir.join("main.rs");
+        std::fs::write(
+            &main_rs,
+            r#"fn main() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_main() {}
+}
+"#,
+        )
+        .unwrap();
+
+        let extractor = RustExtractor::new();
+        let prod_path = main_rs.to_string_lossy().into_owned();
+        let production_files = vec![prod_path.clone()];
+        let test_sources: HashMap<String, String> = HashMap::new();
+
+        // When: map_test_files_with_imports is called
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
+
+        // Then: main.rs is NOT self-mapped (entry point file exclusion)
+        let mapping = result.iter().find(|m| m.production_file == prod_path);
+        assert!(mapping.is_some());
+        assert!(
+            !mapping.unwrap().test_files.contains(&prod_path),
+            "main.rs should NOT be self-mapped, but found in: {:?}",
+            mapping.unwrap().test_files
+        );
     }
 }
