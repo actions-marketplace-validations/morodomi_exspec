@@ -143,6 +143,7 @@ pub fn detect_inline_tests(source: &str) -> bool {
 
     let attr_name_idx = query.capture_index_for_name("attr_name");
     let cfg_arg_idx = query.capture_index_for_name("cfg_arg");
+    let cfg_test_attr_idx = query.capture_index_for_name("cfg_test_attr");
 
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
@@ -150,6 +151,7 @@ pub fn detect_inline_tests(source: &str) -> bool {
     while let Some(m) = matches.next() {
         let mut is_cfg = false;
         let mut is_test = false;
+        let mut attr_node: Option<tree_sitter::Node> = None;
 
         for cap in m.captures {
             let text = cap.node.utf8_text(source_bytes).unwrap_or("");
@@ -159,10 +161,25 @@ pub fn detect_inline_tests(source: &str) -> bool {
             if cfg_arg_idx == Some(cap.index) && text == "test" {
                 is_test = true;
             }
+            if cfg_test_attr_idx == Some(cap.index) {
+                attr_node = Some(cap.node);
+            }
         }
 
         if is_cfg && is_test {
-            return true;
+            // Verify that the next sibling (skipping other attribute_items) is a mod_item
+            if let Some(attr) = attr_node {
+                let mut sibling = attr.next_sibling();
+                while let Some(s) = sibling {
+                    if s.kind() == "mod_item" {
+                        return true;
+                    }
+                    if s.kind() != "attribute_item" {
+                        break;
+                    }
+                    sibling = s.next_sibling();
+                }
+            }
         }
     }
 
@@ -942,14 +959,22 @@ impl RustExtractor {
                     &src_relative,
                     canonical_root,
                 ) {
+                    let mut per_specifier_indices = HashSet::<usize>::new();
                     exspec_core::observe::collect_import_matches(
                         self,
                         &resolved,
                         symbols,
                         canonical_to_idx,
-                        &mut matched_indices,
+                        &mut per_specifier_indices,
                         canonical_root,
                     );
+                    // Filter: if symbols are specified, only include files that export them
+                    for idx in per_specifier_indices {
+                        let prod_path = Path::new(&mappings[idx].production_file);
+                        if self.file_exports_any_symbol(prod_path, symbols) {
+                            matched_indices.insert(idx);
+                        }
+                    }
                 }
             }
 
@@ -2798,6 +2823,222 @@ mod tests {
         assert!(
             !mapping.unwrap().test_files.contains(&prod_path),
             "main.rs should NOT be self-mapped, but found in: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L0-DETECT-01: #[cfg(test)] mod tests {} -> detect_inline_tests = true
+    // (REGRESSION: should PASS with current implementation)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l0_detect_01_cfg_test_with_mod_block() {
+        // Given: source with #[cfg(test)] followed by mod tests { ... }
+        let source = r#"
+pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add() {
+        assert_eq!(add(1, 2), 3);
+    }
+}
+"#;
+        // When: detect_inline_tests is called
+        // Then: returns true (real inline test module)
+        assert!(detect_inline_tests(source));
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L0-DETECT-02: #[cfg(test)] for helper method (no mod) -> false
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l0_detect_02_cfg_test_for_helper_method() {
+        // Given: source with #[cfg(test)] applied to a function (not a mod)
+        let source = r#"
+pub struct Connection;
+
+impl Connection {
+    #[cfg(test)]
+    pub fn test_helper(&self) -> bool {
+        true
+    }
+}
+"#;
+        // When: detect_inline_tests is called
+        // Then: returns false (cfg(test) does not annotate a mod_item)
+        assert!(!detect_inline_tests(source));
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L0-DETECT-03: #[cfg(test)] for mock substitution (use statement) -> false
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l0_detect_03_cfg_test_for_use_statement() {
+        // Given: source with #[cfg(test)] applied to a use statement (mock substitution)
+        let source = r#"
+#[cfg(not(test))]
+use real_http::Client;
+
+#[cfg(test)]
+use mock_http::Client;
+
+pub fn fetch(url: &str) -> String {
+    Client::get(url)
+}
+"#;
+        // When: detect_inline_tests is called
+        // Then: returns false (cfg(test) annotates a use item, not a mod_item)
+        assert!(!detect_inline_tests(source));
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L0-DETECT-04: #[cfg(test)] mod tests; (external module ref) -> true
+    // (REGRESSION: should PASS with current implementation)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l0_detect_04_cfg_test_with_external_mod_ref() {
+        // Given: source with #[cfg(test)] followed by mod tests; (semicolon form)
+        let source = r#"
+pub fn compute(x: i32) -> i32 { x * 2 }
+
+#[cfg(test)]
+mod tests;
+"#;
+        // When: detect_inline_tests is called
+        // Then: returns true (mod_item via external module reference)
+        assert!(detect_inline_tests(source));
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L2-EXPORT-FILTER-01: test imports symbol directly from module path,
+    // module file does NOT export that symbol -> file NOT mapped
+    //
+    // Scenario: use myapp::runtime::driver::{Builder}
+    // driver.rs resolves directly (non-barrel), does NOT export Builder.
+    // collect_import_matches() else-branch currently maps it without symbol check.
+    // apply_l2_imports() should filter via file_exports_any_symbol().
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l2_export_filter_01_no_export_not_mapped() {
+        // Given: temp directory mimicking a crate with:
+        //   src/runtime/driver.rs: exports spawn() and Driver, NOT Builder
+        //   tests/test_runtime.rs: use myapp::runtime::driver::{Builder}
+        let tmp = tempfile::tempdir().unwrap();
+        let src_runtime = tmp.path().join("src").join("runtime");
+        let tests_dir = tmp.path().join("tests");
+        std::fs::create_dir_all(&src_runtime).unwrap();
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        // Cargo.toml
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"myapp\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // src/runtime/driver.rs - exports spawn() and Driver, NOT Builder
+        let driver_rs = src_runtime.join("driver.rs");
+        std::fs::write(&driver_rs, "pub fn spawn() {}\npub struct Driver;\n").unwrap();
+
+        // tests/test_runtime.rs - imports Builder directly from runtime::driver
+        // driver.rs resolves as a non-barrel file (no mod.rs lookup needed)
+        let test_rs = tests_dir.join("test_runtime.rs");
+        let test_source = "use myapp::runtime::driver::{Builder};\n\n#[test]\nfn test_build() {}\n";
+        std::fs::write(&test_rs, test_source).unwrap();
+
+        let extractor = RustExtractor::new();
+        let driver_path = driver_rs.to_string_lossy().into_owned();
+        let test_path = test_rs.to_string_lossy().into_owned();
+        let production_files = vec![driver_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_source.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
+
+        // Then: driver.rs is NOT mapped to test_runtime.rs
+        // (driver.rs does not export Builder — apply_l2_imports must filter it)
+        let mapping = result.iter().find(|m| m.production_file == driver_path);
+        if let Some(m) = mapping {
+            assert!(
+                !m.test_files.contains(&test_path),
+                "driver.rs should NOT be mapped (does not export Builder), but found: {:?}",
+                m.test_files
+            );
+        }
+        // If no mapping entry exists at all, that is also acceptable
+    }
+
+    // -----------------------------------------------------------------------
+    // RS-L2-EXPORT-FILTER-02: barrel with pub mod service, test imports
+    // ServiceFn which service.rs DOES export -> service.rs IS mapped
+    // (REGRESSION: should PASS with current implementation)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn rs_l2_export_filter_02_exports_symbol_is_mapped() {
+        // Given: temp directory mimicking a crate with:
+        //   src/app/mod.rs: pub mod service;
+        //   src/app/service.rs: exports pub fn service_fn()
+        //   tests/test_app.rs: use myapp::app::{service_fn}
+        let tmp = tempfile::tempdir().unwrap();
+        let src_app = tmp.path().join("src").join("app");
+        let tests_dir = tmp.path().join("tests");
+        std::fs::create_dir_all(&src_app).unwrap();
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        // Cargo.toml
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"myapp\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // src/app/mod.rs - pub mod service
+        let mod_rs = src_app.join("mod.rs");
+        std::fs::write(&mod_rs, "pub mod service;\n").unwrap();
+
+        // src/app/service.rs - exports service_fn
+        let service_rs = src_app.join("service.rs");
+        std::fs::write(&service_rs, "pub fn service_fn() {}\n").unwrap();
+
+        // tests/test_app.rs - imports service_fn from app
+        let test_rs = tests_dir.join("test_app.rs");
+        let test_source = "use myapp::app::{service_fn};\n\n#[test]\nfn test_service() {}\n";
+        std::fs::write(&test_rs, test_source).unwrap();
+
+        let extractor = RustExtractor::new();
+        let service_path = service_rs.to_string_lossy().into_owned();
+        let test_path = test_rs.to_string_lossy().into_owned();
+        let production_files = vec![service_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_source.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports is called
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
+
+        // Then: service.rs IS mapped to test_app.rs
+        // (service.rs exports service_fn which the test imports)
+        let mapping = result.iter().find(|m| m.production_file == service_path);
+        assert!(mapping.is_some(), "service.rs should have a mapping entry");
+        assert!(
+            mapping.unwrap().test_files.contains(&test_path),
+            "service.rs should be mapped to test_app.rs, got: {:?}",
             mapping.unwrap().test_files
         );
     }
