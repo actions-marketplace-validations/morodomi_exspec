@@ -15,15 +15,15 @@ Goal: Rust (P=76.7%) と PHP (P=90.0%) の observe precision を改善する。s
 
 | Issue | Task | Type | Expected Impact |
 |-------|------|------|-----------------|
-| -- | Rust L1 safeguards: mod.rs除外 + テストファイル存在検証 | observe precision | Rust P 76.7% → ~90% (4 FP 排除) |
-| -- | Rust L1 fix → re-audit (50-pair, tokio) | observe validation | 中間計測。結果次第で L2 fix の Go/No-Go |
-| -- | Rust L2 re-export chain validation (conditional) | observe precision | Rust P ~90% → ~97% (2 FP 排除。L1 re-audit 後に判断) |
+| #161 | Rust L1 safeguards: mod.rs除外 + テストファイル存在検証 | observe precision | Rust P 76.7% → ~90% (4 FP 排除) |
+| #163 | Rust L1 fix → re-audit (50-pair, tokio) | observe validation | 中間計測。結果次第で #162 の Go/No-Go |
+| #162 | Rust L2 re-export chain validation (conditional) | observe precision | Rust P ~90% → ~97% (2 FP 排除。re-audit 後に判断) |
 | #129 | PHP L2 fan-out filter (高頻度utility class抑制) | observe precision | PHP P 90.0% → ~97% (Str, Collection 等の除外) |
-| -- | Final re-audit (50-pair, tokio + laravel + symfony) | observe validation | ship criteria 最終判定 |
+| #163 | Final re-audit (50-pair, tokio + laravel + symfony) | observe validation | ship criteria 最終判定 |
 
 **Why**: GT audit (#149) で判明した FP パターンは言語固有の構造的問題。Rust は L1 filename matching の曖昧性 (mod.rs, テスト不在ファイル)、PHP は L2 の高頻度utility class (Str, Collection 等) が原因。
 
-**Execution order**: Rust L1 fix → re-audit (中間計測) → Rust L2 fix (conditional) → PHP fan-out filter → final re-audit (50-pair, 複数プロジェクト)
+**Execution order**: #161 (Rust L1) → #163 中間 re-audit → #162 (Rust L2, conditional) → #129 (PHP fan-out) → #163 final re-audit
 
 **Note: Rust recall (R=36.8%) は v0.4.4 では改善しない。** L1 safeguards は precision 改善のみ。Recall 改善には L2 import tracing の拡充 (deep re-export, wildcard import 等) が必要で、これは別バージョンのスコープ。ship criteria の R>=90% は precision 改善後に再評価。
 
