@@ -53,7 +53,17 @@ observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). R
 | Recall (test file) | **62.9%** (171/272) | **71.0%** (193/272) | >= 90% |
 | Regression | 0 | 0 | 0 |
 
-**+22 test files mapped.** `file_exports_any_symbol` text fallback for cfg macro pub items + `join_multiline_pub_use` with brace depth tracking. Remaining 79 FN.
+**+22 test files mapped.** `file_exports_any_symbol` text fallback for cfg macro pub items + `join_multiline_pub_use` with brace depth tracking.
+
+**Remaining 79 FN analysis (fan-out filter impact):**
+- ~25 FN: trait import (AsyncReadExt etc.) correctly filtered by fan-out name-match (not true FN)
+- ~15 FN: true FN in tokio/tests/ (needs investigation)
+- 19 FN: tokio/src/ inline tests (loom/runtime internal, mapping困難)
+- 20 FN: tokio-stream/ cross-crate import (別crate `tokio_stream::`)
+- 13 FN: tests-build/ compile-tests (production mapping不適)
+- Without fan-out filter: R=no-filter ~80%+ (async_read_ext.rs alone maps 32 tests)
+
+**Next**: GT re-audit (50-pair) to measure true precision/recall with fan-out filter.
 
 ### #179 Rust Observe Recall Improvement (2026-03-24)
 

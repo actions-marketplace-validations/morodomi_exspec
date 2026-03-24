@@ -11,23 +11,22 @@
 
 ### v0.4.5: Rust recall + PHP precision
 
-Goal: Rust observe recall を 62.9% → 90% に引き上げる。PHP Str.php FP を解消する。
+Goal: Rust observe GT re-audit で ship criteria 判定。PHP Str.php FP を解消する。
 
 | Priority | Task | Type | Expected Impact |
 |----------|------|------|-----------------|
-| P1 | Rust cfg macro multi-hop barrel resolution (nested cfg_net!/cfg_not_wasi!) | observe recall | R 62.9% → ~75% (tokio/tests/ 60 FN の主因) |
-| P1 | Rust inline test module improvement (loom/runtime internal tests) | observe recall | R → ~80% (20 FN) |
+| P1 | Rust GT re-audit (50-pair, tokio) | observe validation | ship criteria 判定。fan-out filter 込みの真の P/R を測定 |
 | P2 | PHP Str.php FP resolution (import frequency or usage pattern analysis) | observe precision | PHP P 96.0% → >=98% |
 | P2 | PHP re-audit (50-pair, laravel + symfony) | observe validation | ship criteria 判定 |
 
-**Why**: #179 で R=38.2% → 62.9%, #181 で 62.9% → 71.0%。cfg macro 内の pub items を text fallback で検出 + multi-line pub use を結合。残り 79 FN。
+**Why**: #179 + #181 で R=38.2% → 71.0%。残り 79 FN の分析で、~25 FN は fan-out filter による正しい除外 (AsyncReadExt 等の trait import)、13 FN は compile-test (mapping 不適) と判明。fan-out filter なしでは async_read_ext.rs だけで 32 tests にマッピングされる。実質的な FN は ~40 (loom 19 + cross-crate 20 + 真の FN ~15)。GT re-audit で正確な P/R を確定する。
 
-**Rust FN 内訳 (126 FN)**:
-- cfg macro multi-hop barrel: 60 FN (tokio/tests/) — `pub use tcp::listener::TcpListener` が cfg_net! 内で解決されない
-- loom/runtime inline tests: 20 FN (tokio/src/runtime/tests/) — 内部テストモジュール
-- cross-crate import: 20 FN (tokio-stream/tests/) — `tokio_stream::` import
-- compile-tests: 13 FN (tests-build/) — production mapping 不適
-- other: 13 FN
+**Rust FN 内訳 (79 FN, post-#181)**:
+- trait import fan-out filtered: ~25 (正しい除外。AsyncReadExt 等)
+- true FN (tokio/tests/): ~15
+- loom/runtime inline tests: 19 (mapping 困難)
+- cross-crate (tokio-stream): 20
+- compile-tests (tests-build): 13 (mapping 不適)
 
 **PHP Str.php FP 分析**: Str.php は 61/912 テスト (6.7%) にマッピングされる。テストは `Str::random()` 等を utility として使うだけで Str を直接テストしていない。fan-out threshold を下げると Model.php (20%) 等の正当な高頻度 production file も除外される FN リスクがある。
 
