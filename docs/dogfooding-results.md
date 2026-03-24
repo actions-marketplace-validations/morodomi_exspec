@@ -1,7 +1,43 @@
 # Dogfooding Results
 
-Latest: 2026-03-24, exspec v0.4.4-dev (post-#161+#162 L0+L2 fixes + final re-audit)
+Latest: 2026-03-24, exspec v0.4.4-dev (post-#168+#129, v0.4.4 final re-audit)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
+
+## v0.4.4 Final Re-audit (50-pair, 2026-03-24)
+
+### Rust (tokio, 50-pair)
+
+| Metric | Value | Target | Result |
+|--------|-------|--------|--------|
+| Precision | **100%** (50/50) | >= 98% | **PASS** |
+| Recall | ~36.8% (unchanged) | >= 90% | FAIL |
+
+All 50 sampled pairs verified correct (import + self-mapping). driver.rs FP fully eliminated by #168 pub-only filter. Wildcard `use tokio::time::*` correctly resolves to secondary targets.
+
+**Status**: Precision PASS. Experimental maintained (R < 90%).
+
+### PHP (laravel, 50-pair)
+
+| Metric | Value | Target | Result |
+|--------|-------|--------|--------|
+| Precision | **96.0%** (48/50) | >= 98% | **FAIL** |
+| Recall | ~88.6% (unchanged) | >= 90% | FAIL (marginal) |
+
+FP causes (2/50):
+- Str.php incidental import (2): ContextTest.php (Log test), DatabaseEloquentIntegrationTest.php (Eloquent test) — both import `Illuminate\Support\Str` as utility, not testing Str itself
+
+**Fan-out filter ineffective**: Str.php fan-out = 6.7% (61/912), well below 20% threshold. Fan-out approach alone cannot address this FP pattern. Need import-level filtering (e.g., detect utility-only usage patterns) or lower threshold with FN risk.
+
+**Status**: FAIL. Str.php FP unchanged from v0.4.3.
+
+### Summary
+
+| Language | v0.4.3 | v0.4.4 | Ship Criteria |
+|----------|--------|--------|---------------|
+| Rust | P=76.7% | **P=100%** | P PASS, R FAIL (experimental) |
+| PHP | P=90.0% | **P=96.0%** | P FAIL, R FAIL (experimental) |
+| TypeScript | P=100% | unchanged | **stable** |
+| Python | P=98.2% | unchanged | **stable** |
 
 ## Rust Final Re-audit: Post-#162 (50-pair, tokio, 2026-03-24)
 
