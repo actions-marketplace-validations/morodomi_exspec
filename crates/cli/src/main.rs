@@ -693,6 +693,17 @@ fn run_lint(lint: LintArgs) {
     process::exit(exit_code);
 }
 
+/// Extract the class/file name (stem) from a file path.
+/// e.g., `src/Support/Str.php` -> `Str`, `src/user.rs` -> `user`
+#[allow(dead_code)]
+fn extract_class_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 fn apply_fan_out_filter(
     file_mappings: &mut [exspec_core::observe::FileMapping],
     total_test_files: usize,
@@ -705,7 +716,11 @@ fn apply_fan_out_filter(
     for mapping in file_mappings.iter_mut() {
         let fan_out = mapping.test_files.len() as f64 / total_test_files as f64;
         if fan_out > threshold {
-            mapping.test_files.clear();
+            let prod_class = extract_class_name(&mapping.production_file).to_lowercase();
+            mapping.test_files.retain(|test_file| {
+                let test_stem = extract_class_name(test_file).to_lowercase();
+                test_stem.contains(&prod_class)
+            });
         }
     }
 }
@@ -2349,6 +2364,145 @@ test('GET returns array', async () => {
         assert!(
             mappings[0].test_files.is_empty(),
             "expected test_files to remain empty"
+        );
+    }
+
+    // --- fan-out name-match exemption (#173) ---
+
+    // TC-01: fan_out_name_match_keeps_matching_test
+    #[test]
+    fn fan_out_name_match_keeps_matching_test() {
+        // Given: 10 total tests, src/Support/Str.php mapped to 3 tests including
+        //        SupportStrTest.php (fan-out 30% > 5%)
+        let mut mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/Support/Str.php".to_string(),
+            test_files: vec![
+                "tests/Unit/SupportStrTest.php".to_string(),
+                "tests/Unit/ContextTest.php".to_string(),
+                "tests/Unit/OtherTest.php".to_string(),
+            ],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // When: apply_fan_out_filter with threshold 5%
+        apply_fan_out_filter(&mut mappings, 10, 5.0);
+        // Then: only SupportStrTest.php is KEPT (name contains "Str")
+        assert_eq!(
+            mappings[0].test_files,
+            vec!["tests/Unit/SupportStrTest.php".to_string()],
+            "expected only name-matching test to be retained"
+        );
+    }
+
+    // TC-02: fan_out_name_match_removes_non_matching
+    #[test]
+    fn fan_out_name_match_removes_non_matching() {
+        // Given: 10 total tests, src/Support/Str.php mapped to [ContextTest.php, OtherTest.php]
+        //        (fan-out 20% > 5%, no name contains "Str")
+        let mut mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/Support/Str.php".to_string(),
+            test_files: vec![
+                "tests/Unit/ContextTest.php".to_string(),
+                "tests/Unit/OtherTest.php".to_string(),
+            ],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // When: apply_fan_out_filter with threshold 5%
+        apply_fan_out_filter(&mut mappings, 10, 5.0);
+        // Then: test_files is EMPTY (no name match)
+        assert!(
+            mappings[0].test_files.is_empty(),
+            "expected all non-matching tests to be removed"
+        );
+    }
+
+    // TC-03: fan_out_below_threshold_keeps_all
+    #[test]
+    fn fan_out_below_threshold_keeps_all() {
+        // Given: 10 total tests, prod mapped to 1 test (10% at threshold 20%)
+        let mut mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/Support/Str.php".to_string(),
+            test_files: vec!["tests/Unit/SomeTest.php".to_string()],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // When: apply_fan_out_filter with threshold 20%
+        apply_fan_out_filter(&mut mappings, 10, 20.0);
+        // Then: test kept (10% is below 20% threshold)
+        assert_eq!(
+            mappings[0].test_files.len(),
+            1,
+            "expected test to be kept when fan-out is below threshold"
+        );
+    }
+
+    // TC-04: fan_out_mixed_keeps_only_matching
+    #[test]
+    fn fan_out_mixed_keeps_only_matching() {
+        // Given: 10 total tests, src/Model.php mapped to
+        //        [EloquentModelTest.php, ContextTest.php, ModelCastTest.php] (30% > 5%)
+        let mut mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/Model.php".to_string(),
+            test_files: vec![
+                "tests/Unit/EloquentModelTest.php".to_string(),
+                "tests/Unit/ContextTest.php".to_string(),
+                "tests/Unit/ModelCastTest.php".to_string(),
+            ],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // When: apply_fan_out_filter with threshold 5%
+        apply_fan_out_filter(&mut mappings, 10, 5.0);
+        // Then: ONLY EloquentModelTest.php and ModelCastTest.php KEPT (contain "Model")
+        let mut result = mappings[0].test_files.clone();
+        result.sort();
+        let mut expected = vec![
+            "tests/Unit/EloquentModelTest.php".to_string(),
+            "tests/Unit/ModelCastTest.php".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(
+            result, expected,
+            "expected only name-matching tests to be retained"
+        );
+    }
+
+    // TC-05 (name-match): fan_out_filter_disabled_name_match_keeps_all
+    #[test]
+    fn fan_out_filter_disabled_name_match_keeps_all() {
+        // Given: prod Str.php mapped to 3 tests (fan-out 30% > 5%), filter NOT called
+        let mappings = vec![exspec_core::observe::FileMapping {
+            production_file: "src/Support/Str.php".to_string(),
+            test_files: vec![
+                "tests/Unit/SupportStrTest.php".to_string(),
+                "tests/Unit/ContextTest.php".to_string(),
+                "tests/Unit/OtherTest.php".to_string(),
+            ],
+            strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+        }];
+        // When: apply_fan_out_filter is NOT called (simulating no_fan_out_filter=true)
+        // Then: all test_files are preserved
+        assert_eq!(
+            mappings[0].test_files.len(),
+            3,
+            "expected all tests to be preserved when filter is disabled"
+        );
+    }
+
+    // --- extract_class_name ---
+
+    #[test]
+    fn extract_class_name_php() {
+        assert_eq!(extract_class_name("src/Support/Str.php"), "Str");
+    }
+
+    #[test]
+    fn extract_class_name_rust() {
+        assert_eq!(extract_class_name("src/user.rs"), "user");
+    }
+
+    #[test]
+    fn extract_class_name_nested() {
+        assert_eq!(
+            extract_class_name("src/Illuminate/Database/Eloquent/Model.php"),
+            "Model"
         );
     }
 }
