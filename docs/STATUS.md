@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-v0.4.4-dev. #161 L0 barrel exclusion + #162 L0 mod_item + L2 export filter 完了。Final re-audit P=96.0%。
+v0.4.4-dev. Rust precision PASS (P=100%), PHP precision FAIL (P=96.0%). Fan-out filter added.
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=96.0% (experimental, 50-pair FAIL, remaining: pub(crate) visibility issue). PHP: P=90.0% (experimental, GT audit FAIL). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=100%, R=36.8% (experimental, P PASS but R FAIL). PHP: P=96.0%, R=88.6% (experimental, Str.php FP残存). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
 ## Progress
 
