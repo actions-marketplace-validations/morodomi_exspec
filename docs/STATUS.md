@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-v0.4.2 release. observe recall/precision improvements (#85/#119/#126/#146) + Rust/PHP dogfooding baselines.
+v0.4.3-dev. Same-file helper tracing (all 4 languages), L1 exclusive mode, GT audit completed.
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust/PHP: experimental (first baselines, GT audit pending #149). Lint: 17 active rules, 4 languages, 11 projects / ~40k tests dogfooded. Default output: ai-prompt.
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=76.7% (experimental, GT audit FAIL). PHP: P=90.0% (experimental, GT audit FAIL). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
 ## Progress
 
