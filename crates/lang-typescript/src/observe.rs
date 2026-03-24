@@ -849,6 +849,7 @@ impl TypeScriptExtractor {
         production_files: &[String],
         test_sources: &HashMap<String, String>,
         scan_root: &Path,
+        l1_exclusive: bool,
     ) -> Vec<FileMapping> {
         let test_file_list: Vec<String> = test_sources.keys().cloned().collect();
 
@@ -895,6 +896,9 @@ impl TypeScriptExtractor {
         // Layer 2: import tracing for all test files (Layer 1 matched tests may
         // also import other production files not matched by filename convention)
         for (test_file, source) in test_sources {
+            if l1_exclusive && layer1_matched.contains(test_file) {
+                continue;
+            }
             let imports = <Self as ObserveExtractor>::extract_imports(self, source, test_file);
             let from_file = Path::new(test_file);
             let mut matched_indices = std::collections::HashSet::new();
@@ -2397,8 +2401,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: 両方のテストがマッピングされる
         assert_eq!(mappings.len(), 1, "expected 1 FileMapping");
@@ -2449,8 +2457,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: ImportTracing でマッチ
         assert_eq!(mappings.len(), 1);
@@ -2497,8 +2509,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: 未マッチ (test_files は空)
         assert_eq!(mappings.len(), 1);
@@ -2544,8 +2560,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: A と B 両方に test がマッピングされる
         assert_eq!(mappings.len(), 2, "expected 2 FileMappings (A and B)");
@@ -2942,8 +2962,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports (barrel resolution enabled)
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: foo.service.ts に foo.spec.ts がマッピングされる
         assert_eq!(mappings.len(), 1, "expected 1 FileMapping");
@@ -3002,8 +3026,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: user.service.ts にはマッピングされない (constants.ts はフィルタ済み)
         assert_eq!(
@@ -3228,8 +3256,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: foo.service.ts IS mapped to foo.spec.ts (B1 fix: namespace re-export resolved)
         let prod_mapping = mappings
@@ -3329,8 +3361,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports(scan_root=packages/core/)
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
 
         // Then: packages/common/src/foo.ts IS mapped (symlink resolved via Layer 2c)
         let common_path_str = common_path.to_string_lossy().into_owned();
@@ -3493,8 +3529,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports with tsconfig alias present
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &core_root);
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &core_root,
+            false,
+        );
 
         // Then: foo.service.ts is mapped (tsconfig alias wins), common/src/foo.ts is NOT mapped
         let test_file_str = test_path.to_string_lossy().into_owned();
@@ -3578,8 +3618,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
 
         // Then: common/src/foo.ts is mapped to BOTH test files
         let common_path_str = common_path.to_string_lossy().into_owned();
@@ -3658,8 +3702,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: route-paramtypes.enum.ts IS mapped to route.spec.ts (production-aware bypass)
         let enum_mapping = mappings
@@ -3710,8 +3758,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: user.interface.ts IS mapped to user.spec.ts (production-aware bypass)
         let iface_mapping = mappings
@@ -3788,8 +3840,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: foo.service.ts is mapped to foo.service.spec.ts via alias resolution
         let mapping = mappings
@@ -3837,8 +3893,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports (no tsconfig.json present)
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: no test_files mapped (alias import skipped without tsconfig)
         let all_test_files: Vec<&String> =
@@ -3897,8 +3957,12 @@ describe('UsersController', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: bar.service.ts is mapped via alias + barrel resolution
         let mapping = mappings
@@ -3963,8 +4027,12 @@ describe('Mixed', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: both foo.service.ts and bar.service.ts are mapped
         let foo_mapping = mappings
@@ -4030,8 +4098,12 @@ describe('Mixed', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: constants.ts is filtered by is_non_sut_helper → no test_files
         let all_test_files: Vec<&String> =
@@ -4083,8 +4155,12 @@ describe('Mixed', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports (should not panic)
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: no mapping (nonexistent.ts not in production_files), no panic
         let all_test_files: Vec<&String> =
@@ -4136,8 +4212,12 @@ describe('Mixed', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports WITH tsconfig present
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: foo.service.ts IS mapped (B3 resolved — FN → TP)
         let mapping = mappings
@@ -4197,8 +4277,12 @@ describe('Mixed', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports(scan_root=packages/core/)
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, &scan_root);
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
 
         // Then: shared.ts outside scan_root is not in production_files, so no mapping occurs.
         // `../../common/src/shared` resolves outside scan_root; it won't be in production_files
@@ -4287,8 +4371,12 @@ describe('Mixed', () => {});
         let extractor = TypeScriptExtractor::new();
 
         // When: map_test_files_with_imports
-        let mappings =
-            extractor.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+        let mappings = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
 
         // Then: foo.service.ts が test_files にマッチ (Layer 2 via namespace re-export)
         let prod_mapping = mappings
@@ -4635,6 +4723,98 @@ export async function POST() { return Response.json({}); }
 
         // Then: empty Vec
         assert!(routes.is_empty(), "expected empty routes for empty source");
+    }
+
+    // TS-L1EX-01: l1_exclusive=true suppresses L2 mappings for L1-matched test files
+    #[test]
+    fn ts_l1ex_01_l1_exclusive_suppresses_l2() {
+        use tempfile::TempDir;
+
+        // Given:
+        //   production: src/user.service.ts (L1 match target)
+        //   production: src/auth.service.ts (L2 match target via import)
+        //   test: src/user.service.spec.ts
+        //     - L1 matched to user.service.ts (filename convention)
+        //     - imports auth.service.ts (would L2 match auth.service.ts)
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        let user_service = src_dir.join("user.service.ts");
+        std::fs::File::create(&user_service).unwrap();
+        let auth_service = src_dir.join("auth.service.ts");
+        std::fs::File::create(&auth_service).unwrap();
+
+        let test_file = src_dir.join("user.service.spec.ts");
+        // This test file is L1-matched (same stem) AND imports auth.service (L2 candidate)
+        let test_source =
+            "import { AuthService } from './auth.service';\ndescribe('UserService', () => {});\n";
+
+        let production_files = vec![
+            user_service.to_string_lossy().into_owned(),
+            auth_service.to_string_lossy().into_owned(),
+        ];
+        let mut test_sources = HashMap::new();
+        test_sources.insert(
+            test_file.to_string_lossy().into_owned(),
+            test_source.to_string(),
+        );
+
+        let extractor = TypeScriptExtractor::new();
+
+        // When: l1_exclusive=true
+        let mappings_exclusive = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            true,
+        );
+
+        // Then: user.service.ts is mapped (L1), auth.service.ts is NOT mapped (L2 suppressed)
+        let user_mapping = mappings_exclusive
+            .iter()
+            .find(|m| m.production_file.contains("user.service.ts"));
+        assert!(
+            user_mapping.is_some(),
+            "expected user.service.ts in mappings, got {:?}",
+            mappings_exclusive
+        );
+        assert!(
+            !user_mapping.unwrap().test_files.is_empty(),
+            "expected user.service.ts mapped to user.service.spec.ts, got {:?}",
+            user_mapping.unwrap().test_files
+        );
+
+        let auth_mapping = mappings_exclusive
+            .iter()
+            .find(|m| m.production_file.contains("auth.service.ts"));
+        assert!(
+            auth_mapping
+                .map(|m| m.test_files.is_empty())
+                .unwrap_or(true),
+            "expected auth.service.ts NOT mapped when l1_exclusive=true, got {:?}",
+            auth_mapping
+        );
+
+        // When: l1_exclusive=false (default behavior)
+        let mappings_default = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            dir.path(),
+            false,
+        );
+
+        // Then: auth.service.ts IS mapped via L2
+        let auth_mapping_default = mappings_default
+            .iter()
+            .find(|m| m.production_file.contains("auth.service.ts"));
+        assert!(
+            auth_mapping_default
+                .map(|m| !m.test_files.is_empty())
+                .unwrap_or(false),
+            "expected auth.service.ts mapped when l1_exclusive=false, got {:?}",
+            auth_mapping_default
+        );
     }
 
     // NX-RT-08: route group in path is removed

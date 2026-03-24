@@ -421,6 +421,7 @@ impl PhpExtractor {
         production_files: &[String],
         test_sources: &HashMap<String, String>,
         scan_root: &Path,
+        l1_exclusive: bool,
     ) -> Vec<FileMapping> {
         let test_file_list: Vec<String> = test_sources.keys().cloned().collect();
 
@@ -446,9 +447,18 @@ impl PhpExtractor {
             .map(|m| m.test_files.iter().cloned().collect())
             .collect();
 
+        // Collect set of test files matched by L1 for l1_exclusive mode
+        let layer1_matched: std::collections::HashSet<String> = layer1_tests_per_prod
+            .iter()
+            .flat_map(|s| s.iter().cloned())
+            .collect();
+
         // Layer 2: PSR-4 convention import resolution
         // Use raw imports (unfiltered) and apply scan_root-aware external filtering
         for (test_file, source) in test_sources {
+            if l1_exclusive && layer1_matched.contains(test_file) {
+                continue;
+            }
             let raw_specifiers = Self::extract_raw_import_specifiers(source);
             let specifiers: Vec<(String, Vec<String>)> = raw_specifiers
                 .into_iter()
@@ -864,7 +874,7 @@ mod tests {
         );
 
         let mappings =
-            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path(), false);
 
         assert!(!mappings.is_empty(), "expected at least one mapping");
         let user_mapping = mappings
@@ -910,7 +920,7 @@ mod tests {
         );
 
         let mappings =
-            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path(), false);
 
         let order_mapping = mappings
             .iter()
@@ -952,7 +962,7 @@ mod tests {
         );
 
         let mappings =
-            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path(), false);
 
         // TestCase.php should not be matched to User.php
         let user_mapping = mappings
@@ -1006,7 +1016,7 @@ mod tests {
         );
 
         let mappings =
-            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path(), false);
 
         let request_mapping = mappings
             .iter()
@@ -1056,7 +1066,7 @@ mod tests {
         );
 
         let mappings =
-            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path(), false);
 
         // User.php should not have OrderTest.php mapped (no stem match, no import match)
         let user_mapping = mappings
@@ -1105,7 +1115,7 @@ mod tests {
         );
 
         let mappings =
-            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path(), false);
 
         let calc_mapping = mappings
             .iter()
@@ -1161,7 +1171,7 @@ mod tests {
         );
 
         let mappings =
-            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path(), false);
 
         let request_mapping = mappings
             .iter()
@@ -1190,7 +1200,7 @@ mod tests {
         let production_files: Vec<String> = vec![];
         let test_sources: HashMap<String, String> = HashMap::new();
         let mappings =
-            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path());
+            ext.map_test_files_with_imports(&production_files, &test_sources, dir.path(), false);
         assert!(mappings.is_empty());
     }
 }
