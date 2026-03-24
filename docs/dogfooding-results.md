@@ -1,7 +1,34 @@
 # Dogfooding Results
 
-Latest: 2026-03-24, exspec v0.4.3-dev (helper tracing + L1 exclusive + GT audit)
+Latest: 2026-03-24, exspec v0.4.3-dev (post-#161 L0 barrel exclusion + re-audit)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
+
+## Rust Re-audit: Post-#161 (50-pair, tokio, 2026-03-24)
+
+Ship criteria: P>=98% (49/50)
+
+| Metric | Value | Target | Result |
+|--------|-------|--------|--------|
+| Precision | **92.0%** (46/50) | >= 98% | **FAIL** |
+| Recall (test file) | **36.8%** (100/272) | >= 90% | **FAIL** (unchanged) |
+
+FP causes (4/50):
+- L0 cfg(test) false detection (2): source.rs (helper method), open_options.rs (mock substitution) — `#[cfg(test)]` used for conditional compilation, not test modules
+- L2 re-export chain confusion (2): driver.rs ← shutdown.rs, driver.rs ← yield_now.rs — `pub(crate) mod driver` in runtime/mod.rs causes any `use crate::runtime::*` test to map to driver.rs
+
+### vs v0.4.3 audit
+
+| Metric | v0.4.3 (30-pair) | Post-#161 (50-pair) | Delta |
+|--------|------------------|---------------------|-------|
+| Precision | 76.7% (23/30) | **92.0%** (46/50) | **+15.3pp** |
+
+#161 eliminated mod.rs/lib.rs barrel self-mapping FPs. Remaining FPs are:
+1. **L0 detect_inline_tests false positive**: `#[cfg(test)]` used for conditional compilation (helper methods, mock substitution) is indistinguishable from `#[cfg(test)] mod tests`
+2. **L2 re-export chain**: `pub(crate) mod` makes all sub-modules visible to import tracing, causing over-mapping
+
+### Decision: #162 (L2 re-export validation) is GO
+
+P=92.0% < 98%. L2 FPs (2/4) can be addressed by `file_exports_any_symbol()` validation. L0 FPs (2/4) require smarter `detect_inline_tests()` that checks for actual `mod tests` blocks, not just `#[cfg(test)]`.
 
 ## GT Audit: Rust/PHP Observe (#149, 2026-03-24)
 

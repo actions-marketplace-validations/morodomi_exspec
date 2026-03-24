@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-v0.4.3 release. Same-file helper tracing (all 4 languages), L1 exclusive mode, GT audit completed.
+v0.4.4-dev. #161 L0 barrel exclusion完了、中間re-audit実施。
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=76.7% (experimental, GT audit FAIL). PHP: P=90.0% (experimental, GT audit FAIL). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=92.0% (experimental, 50-pair re-audit FAIL, +15.3pp from 76.7%). PHP: P=90.0% (experimental, GT audit FAIL). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
 ## Progress
 
