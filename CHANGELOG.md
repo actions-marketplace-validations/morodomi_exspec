@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.3 (2026-03-24)
+
+Same-file helper tracing for all 4 languages, L1 exclusive mode for observe, and GT audit.
+
+### Features
+
+- **Same-file helper tracing (Python)**: Port of Phase 23a. Tests calling helpers with assertions in the same file are no longer T001 BLOCK FP. (#150)
+- **Same-file helper tracing (TypeScript)**: Includes arrow function helper support. (#151)
+- **Same-file helper tracing (PHP)**: Free function helpers at file scope. (#152)
+- **L1 exclusive mode**: `--l1-exclusive` flag suppresses L2 import tracing for L1-matched test files. Reduces FP from incidental imports. (#131)
+
+### Dogfooding
+
+- Same-file helper tracing: near-zero BLOCK reduction across all projects. Helper delegation FP dominated by cross-file class method calls.
+- GT audit (#149): Rust P=76.7% (tokio), PHP P=90.0% (laravel). Both FAIL ship criteria (P>=98%). Remain experimental.
+- #153 (cross-file) deferred to v0.4.4 (all languages FP <= 5%).
+- #129 (fan-out filter) deferred to backlog (#131 resolved httpx FP).
+
+### Internal
+
+- 1142 tests (up from 1119 in v0.4.2).
+- #144 closed (already fixed by #146 in v0.4.2).
+
 ## v0.4.2 (2026-03-23)
 
 Python observe precision/recall improvements and Rust/PHP observe dogfooding baselines.

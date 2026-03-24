@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-v0.4.3-dev. Same-file helper tracing (all 4 languages), L1 exclusive mode, GT audit completed.
+v0.4.3 release. Same-file helper tracing (all 4 languages), L1 exclusive mode, GT audit completed.
 
 observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=76.7% (experimental, GT audit FAIL). PHP: P=90.0% (experimental, GT audit FAIL). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
@@ -127,7 +127,7 @@ Root mode resolves most B2 FN but introduces FP from peripheral imports not yet 
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Tests | 1119 passing | -- |
+| Tests | 1142 passing | -- |
 | Coverage | N/A | 90%+ (min 80%) |
 | Clippy errors | 0 | 0 |
 
