@@ -219,7 +219,8 @@ Date: 2026-03-25
       ],
       "secondary_targets": [
         "tokio/src/io/util/async_read_ext.rs",
-        "tokio/src/io/async_read.rs"
+        "tokio/src/io/async_read.rs",
+        "tokio-util/src/io/read_buf.rs"
       ],
       "evidence": {
         "tokio/src/io/util/read_buf.rs": [
