@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-v0.4.5-dev. Rust recall improved R=71.0% (post-#181). PHP precision FAIL (P=96.0%).
+v0.4.5-dev. Rust precision FAIL: stratified GT audit reveals P=23.3% (barrel import fan-out). PHP precision FAIL (P=96.0%).
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: P=100%, R=71.0% (experimental, P PASS R FAIL). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: **P=23.3%** (stratified GT), R=33.3% (experimental, P FAIL R FAIL. barrel import fan-out is blocking issue). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
 ## Progress
 
@@ -44,6 +44,24 @@ observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). R
 | 21 - Python observe re-dogfood + FP fix | **DONE** |
 | #179 - Rust L2 self:: prefix + single-segment import fix | **DONE** |
 | #181 - Rust cfg macro export fallback + multi-line pub use | **DONE** |
+| GT re-audit - Rust observe stratified 53-file audit | **DONE** |
+
+### Rust Observe Stratified GT Re-audit (2026-03-25)
+
+| Metric | Previous (random 50-pair) | Stratified GT (53-file) | Target |
+|--------|--------------------------|------------------------|--------|
+| Precision | 100% | **23.3%** | >= 98% |
+| Recall | 71.0% | **33.3%** (GT sample) | >= 90% |
+
+**Barrel import fan-out is the blocking precision problem.** 2 files (io_driver.rs, fs_write.rs) generate 62/66 FP due to `use tokio::runtime::Builder` / `use tokio::fs` resolving to ALL module exports. Excluding these outliers: P=82.6%.
+
+**Previous P=100% was misleading**: random pair sampling avoided barrel FP by chance.
+
+**Fan-out filter: 92.3% accurate** (12/13 correctly filtered in sample).
+
+**FN root causes**: barrel import (10), no use statement (4), inline src/ tests (5), cross-crate (4), macro body imports (1).
+
+**Next**: Fix barrel import precision -- when barrel resolves to many files, prefer L1 filename match to select specific target.
 
 ### #181 Rust Observe Recall Improvement (2026-03-25)
 

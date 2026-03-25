@@ -94,6 +94,7 @@ pub struct Config {
     pub min_severity: Severity,
     pub severity_overrides: HashMap<String, Severity>,
     pub max_fan_out_percent: f64,
+    pub max_reverse_fan_out: usize,
 }
 
 impl Default for Config {
@@ -112,6 +113,7 @@ impl Default for Config {
             min_severity: Severity::Info,
             severity_overrides: HashMap::new(),
             max_fan_out_percent: 6.5,
+            max_reverse_fan_out: 5,
         }
     }
 }

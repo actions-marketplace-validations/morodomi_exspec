@@ -1,7 +1,54 @@
 # Dogfooding Results
 
-Latest: 2026-03-24, exspec v0.4.4-dev (post-#168+#129, v0.4.4 final re-audit)
+Latest: 2026-03-25, exspec v0.4.5-dev (post-#181, stratified GT re-audit)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
+
+## v0.4.5-dev Stratified GT Re-audit (53-file, 2026-03-25)
+
+### Rust (tokio, 53-file stratified sample)
+
+GT file: `docs/observe-ground-truth-rust-tokio.md`
+
+| Stratum | Files | TP | FP | FN | P | R |
+|---------|-------|----|----|----|----|---|
+| S1: TP import | 15 | 15 | 66 | 2 | 18.5% | 88.2% |
+| S2: TP filename | 5 | 5 | 0 | 0 | 100% | 100% |
+| S3: FN fan-out | 13 | 0 | 0 | 13 | - | 0% |
+| S4: FN other | 10 | 0 | 0 | 15 | - | 0% |
+| S5: inline src/ | 5 | 0 | 0 | 4 | - | 0% |
+| S6: cross-crate | 5 | 0 | 0 | 5 | - | 0% |
+| **Total** | **53** | **20** | **66** | **40** | **23.3%** | **33.3%** |
+
+**Precision problem: barrel import fan-out.**
+
+| Test file | FP count | Root cause |
+|-----------|----------|-----------|
+| io_driver.rs | 39 | `use tokio::runtime::Builder` resolves to ALL runtime/ files |
+| fs_write.rs | 23 | `use tokio::fs` resolves to ALL fs/ files |
+| udp.rs | 3 | codec imports not in GT primary |
+| io_read_buf.rs | 1 | async_read.rs not in GT primary |
+
+Excluding io_driver + fs_write: **P=82.6%, R=95.0%** (18 files).
+
+**Fan-out filter assessment (S3):** 12/13 correctly filtered (92.3%). 1 false negative: task_hooks.rs (builder.rs IS the SUT).
+
+**FN root causes:**
+
+| Root Cause | Count | Files |
+|-----------|-------|-------|
+| Barrel import (`tokio::`) | 10 | sync_broadcast, sync_oneshot, sync_panic, task_blocking, fs_uring, etc. |
+| No use statement | 4 | macros_test, time_wasm, unwindsafe, io_reader_stream |
+| Macro body imports | 1 | rt_common (rt_test! macro) |
+| Inline src/ tests | 5 | loom tests in src/sync/tests/, src/runtime/tests/ |
+| Cross-crate barrel | 4 | tokio-stream/ tests |
+
+**Previous P=100% was misleading.** Random 50-pair sampling happened to avoid barrel FP pairs. Stratified audit reveals per-file precision drops sharply for tests importing large module barrels.
+
+**Ship criteria: FAIL.** P=23.3% << 98%. Barrel import fan-out is the blocking issue.
+
+**Next steps:**
+1. Fix barrel import precision: when `use tokio::fs` resolves, only map to the SPECIFIC file matching the test filename, not all barrel exports
+2. This is essentially "L1 filename match should OVERRIDE L2 barrel fan-out" for cases where the barrel export maps to many files
 
 ## v0.4.4 Final Re-audit (50-pair, 2026-03-24)
 

@@ -26,6 +26,7 @@ pub struct ExspecConfig {
 #[derive(Debug, Deserialize, Default)]
 pub struct ObserveConfig {
     pub max_fan_out_percent: Option<f64>,
+    pub max_reverse_fan_out: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -160,6 +161,10 @@ impl From<ExspecConfig> for Config {
                 .observe
                 .max_fan_out_percent
                 .unwrap_or(defaults.max_fan_out_percent),
+            max_reverse_fan_out: ec
+                .observe
+                .max_reverse_fan_out
+                .unwrap_or(defaults.max_reverse_fan_out),
         }
     }
 }
