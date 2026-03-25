@@ -1,6 +1,6 @@
 # Dogfooding Results
 
-Latest: 2026-03-25, exspec v0.4.5-dev (post-#181, stratified GT re-audit)
+Latest: 2026-03-25, exspec v0.4.5-dev (post-#183, reverse fan-out filter + GT update)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
 
 ## v0.4.5-dev Stratified GT Re-audit (53-file, 2026-03-25)

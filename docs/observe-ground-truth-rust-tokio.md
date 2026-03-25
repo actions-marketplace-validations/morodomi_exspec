@@ -145,7 +145,10 @@ Date: 2026-03-25
         "tokio-util/src/udp/frame.rs"
       ],
       "secondary_targets": [
-        "tokio/src/net/udp.rs"
+        "tokio/src/net/udp.rs",
+        "tokio-util/src/codec/decoder.rs",
+        "tokio-util/src/codec/encoder.rs",
+        "tokio-util/src/codec/lines_codec.rs"
       ],
       "evidence": {
         "tokio-util/src/udp/frame.rs": [
@@ -209,27 +212,14 @@ Date: 2026-03-25
         ]
       }
     },
-    "tokio/tests/io_driver.rs": {
-      "primary_targets": [
-        "tokio/src/io/poll_evented.rs"
-      ],
-      "secondary_targets": [
-        "tokio/src/net/tcp/listener.rs",
-        "tokio/src/runtime/builder.rs"
-      ],
-      "evidence": {
-        "tokio/src/io/poll_evented.rs": [
-          "symbol_assertion"
-        ]
-      }
-    },
     "tokio/tests/io_read_buf.rs": {
       "primary_targets": [
         "tokio/src/io/util/read_buf.rs",
         "tokio/src/io/read_buf.rs"
       ],
       "secondary_targets": [
-        "tokio/src/io/util/async_read_ext.rs"
+        "tokio/src/io/util/async_read_ext.rs",
+        "tokio/src/io/async_read.rs"
       ],
       "evidence": {
         "tokio/src/io/util/read_buf.rs": [
