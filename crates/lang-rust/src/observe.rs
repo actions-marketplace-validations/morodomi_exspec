@@ -1014,10 +1014,18 @@ impl RustExtractor {
             .collect();
 
         // Collect set of test files matched by L1 for l1_exclusive mode
-        let layer1_matched: HashSet<String> = layer1_tests_per_prod
+        let mut layer1_matched: HashSet<String> = layer1_tests_per_prod
             .iter()
             .flat_map(|s| s.iter().cloned())
             .collect();
+
+        // Layer 1.5: underscore-to-path stem matching
+        // e.g., "tests/sync_broadcast.rs" (stem "sync_broadcast") -> "src/sync/broadcast.rs"
+        self.apply_l1_5_underscore_path_matching(
+            &mut mappings,
+            &test_file_list,
+            &mut layer1_matched,
+        );
 
         // Resolve crate name for integration test import matching
         let crate_name = parse_crate_name(scan_root);
@@ -1144,6 +1152,83 @@ impl RustExtractor {
             for idx in matched_indices {
                 if !mappings[idx].test_files.contains(test_file) {
                     mappings[idx].test_files.push(test_file.clone());
+                }
+            }
+        }
+    }
+
+    /// Layer 1.5: underscore-to-path stem matching.
+    ///
+    /// For each unmatched test file whose stem contains `_`, split on the first `_`
+    /// to obtain (prefix, suffix). If a production file has `prod_stem == suffix`
+    /// and its path contains `/{prefix}/`, map the test file to that production file.
+    ///
+    /// Guard: skip if suffix is 2 characters or fewer (FP risk).
+    ///
+    /// TODO: implement in GREEN phase.
+    fn apply_l1_5_underscore_path_matching(
+        &self,
+        mappings: &mut [FileMapping],
+        test_paths: &[String],
+        layer1_matched: &mut HashSet<String>,
+    ) {
+        for test_path in test_paths {
+            if layer1_matched.contains(test_path) {
+                continue;
+            }
+
+            let test_stem = match self.test_stem(test_path) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            if !test_stem.contains('_') {
+                continue;
+            }
+
+            let underscore_pos = match test_stem.find('_') {
+                Some(pos) => pos,
+                None => continue,
+            };
+
+            let prefix = &test_stem[..underscore_pos];
+            let suffix = &test_stem[underscore_pos + 1..];
+
+            if suffix.len() <= 2 {
+                continue;
+            }
+
+            let prefix_lower = prefix.to_lowercase();
+            let suffix_lower = suffix.to_lowercase();
+            let dir_segment = format!("/{prefix_lower}/");
+
+            for mapping in mappings.iter_mut() {
+                let prod_stem = match self.production_stem(&mapping.production_file) {
+                    Some(s) => s,
+                    None => continue,
+                };
+
+                if prod_stem.to_lowercase() != suffix_lower {
+                    continue;
+                }
+
+                let prod_path_lower = mapping.production_file.replace('\\', "/").to_lowercase();
+                // Crate boundary guard: in workspace with crate prefixes (e.g., tokio/tests/),
+                // test and prod must share the same crate root
+                let test_first = test_path.split('/').next().unwrap_or("");
+                let prod_first = mapping.production_file.split('/').next().unwrap_or("");
+                let test_has_crate_prefix = test_first != "tests" && test_first != "src";
+                let prod_has_crate_prefix = prod_first != "tests" && prod_first != "src";
+                if test_has_crate_prefix
+                    && prod_has_crate_prefix
+                    && !test_first.eq_ignore_ascii_case(prod_first)
+                {
+                    continue;
+                }
+                if prod_path_lower.contains(&dir_segment) {
+                    mapping.test_files.push(test_path.clone());
+                    layer1_matched.insert(test_path.clone());
+                    break;
                 }
             }
         }
@@ -3997,6 +4082,312 @@ cfg_feat! {
             mapping.test_files.contains(&test_path),
             "Expected test_io.rs to map to util.rs through multi-line cfg pub use (L2), got: {:?}",
             mapping.test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-01: underscore_path_sync_broadcast
+    // -----------------------------------------------------------------------
+    #[test]
+    fn us_01_underscore_path_sync_broadcast() {
+        // Given: test "tests/sync_broadcast.rs" and prod "src/sync/broadcast.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/sync/broadcast.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/sync_broadcast.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports (L1.5 matching)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: test maps to prod via L1.5 (stem "sync_broadcast" -> prefix "sync", suffix "broadcast")
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/sync/broadcast.rs");
+        assert!(mapping.is_some(), "No mapping for src/sync/broadcast.rs");
+        assert!(
+            mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/sync_broadcast.rs".to_string()),
+            "Expected tests/sync_broadcast.rs to map to src/sync/broadcast.rs via L1.5, got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-02: underscore_path_sync_oneshot
+    // -----------------------------------------------------------------------
+    #[test]
+    fn us_02_underscore_path_sync_oneshot() {
+        // Given: test "tests/sync_oneshot.rs" and prod "src/sync/oneshot.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/sync/oneshot.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/sync_oneshot.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports (L1.5 matching)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: test maps to prod via L1.5
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/sync/oneshot.rs");
+        assert!(mapping.is_some(), "No mapping for src/sync/oneshot.rs");
+        assert!(
+            mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/sync_oneshot.rs".to_string()),
+            "Expected tests/sync_oneshot.rs to map to src/sync/oneshot.rs via L1.5, got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-03: underscore_path_task_blocking
+    // -----------------------------------------------------------------------
+    #[test]
+    fn us_03_underscore_path_task_blocking() {
+        // Given: test "tests/task_blocking.rs" and prod "src/task/blocking.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/task/blocking.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/task_blocking.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports (L1.5 matching)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: test maps to prod via L1.5
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/task/blocking.rs");
+        assert!(mapping.is_some(), "No mapping for src/task/blocking.rs");
+        assert!(
+            mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/task_blocking.rs".to_string()),
+            "Expected tests/task_blocking.rs to map to src/task/blocking.rs via L1.5, got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-04: underscore_path_macros_select
+    // -----------------------------------------------------------------------
+    #[test]
+    fn us_04_underscore_path_macros_select() {
+        // Given: test "tests/macros_select.rs" and prod "src/macros/select.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/macros/select.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/macros_select.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports (L1.5 matching)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: test maps to prod via L1.5
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/macros/select.rs");
+        assert!(mapping.is_some(), "No mapping for src/macros/select.rs");
+        assert!(
+            mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/macros_select.rs".to_string()),
+            "Expected tests/macros_select.rs to map to src/macros/select.rs via L1.5, got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-05: underscore_path_no_underscore_unchanged
+    // -----------------------------------------------------------------------
+    #[test]
+    fn us_05_underscore_path_no_underscore_unchanged() {
+        // Given: test "tests/abc.rs" (no underscore in stem) and prod "src/abc.rs"
+        // L1 normally matches same-directory only. Cross-dir match falls to L2.
+        // L1.5 should not apply here (no underscore to split on).
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/abc.rs".to_string()];
+        let test_sources: HashMap<String, String> = [("tests/abc.rs".to_string(), String::new())]
+            .into_iter()
+            .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: mapping structure exists (L1.5 does not break normal behavior)
+        // "abc.rs" test_stem = "abc", but different dir so L1 won't match.
+        // L1.5 has no underscore -> no additional match. Result is no test_files for src/abc.rs.
+        let mapping = result.iter().find(|m| m.production_file == "src/abc.rs");
+        assert!(mapping.is_some(), "No mapping entry for src/abc.rs");
+        // L1.5 must not create a spurious match for a stem with no underscore
+        assert!(
+            !mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/abc.rs".to_string()),
+            "L1.5 must not match tests/abc.rs -> src/abc.rs (different dirs, no underscore): {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-06: underscore_path_wrong_dir_no_match
+    // -----------------------------------------------------------------------
+    #[test]
+    fn us_06_underscore_path_wrong_dir_no_match() {
+        // Given: test "tests/sync_broadcast.rs" and prod "src/runtime/broadcast.rs" (wrong dir)
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/runtime/broadcast.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/sync_broadcast.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports (L1.5)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: NO match (prefix "sync" is not present in "src/runtime/broadcast.rs")
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/runtime/broadcast.rs");
+        assert!(
+            mapping.is_some(),
+            "No mapping entry for src/runtime/broadcast.rs"
+        );
+        assert!(
+            !mapping.unwrap().test_files.contains(&"tests/sync_broadcast.rs".to_string()),
+            "L1.5 must NOT match tests/sync_broadcast.rs -> src/runtime/broadcast.rs (wrong dir), got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-07: underscore_path_short_suffix_no_match
+    // -----------------------------------------------------------------------
+    #[test]
+    fn us_07_underscore_path_short_suffix_no_match() {
+        // Given: test "tests/a_b.rs" (suffix "b" is 1 char) and prod "src/a/b.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/a/b.rs".to_string()];
+        let test_sources: HashMap<String, String> = [("tests/a_b.rs".to_string(), String::new())]
+            .into_iter()
+            .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports (L1.5)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: NO match (suffix "b" is 1 char <= 2 chars guard)
+        let mapping = result.iter().find(|m| m.production_file == "src/a/b.rs");
+        assert!(mapping.is_some(), "No mapping entry for src/a/b.rs");
+        assert!(
+            !mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/a_b.rs".to_string()),
+            "L1.5 must NOT match tests/a_b.rs -> src/a/b.rs (short suffix guard), got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // US-08: underscore_path_already_l1_matched_skipped
+    // -----------------------------------------------------------------------
+    #[test]
+    fn us_08_underscore_path_already_l1_matched_skipped() {
+        // Given: test "tests/broadcast.rs" and prod "src/broadcast.rs" (L1 exact match)
+        //        AND test "tests/sync_broadcast.rs" (underscore) and prod "src/sync/broadcast.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec![
+            "src/broadcast.rs".to_string(),
+            "src/sync/broadcast.rs".to_string(),
+        ];
+        let test_sources: HashMap<String, String> = [
+            ("tests/broadcast.rs".to_string(), String::new()),
+            ("tests/sync_broadcast.rs".to_string(), String::new()),
+        ]
+        .into_iter()
+        .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: "tests/broadcast.rs" is matched by L1 to "src/broadcast.rs"
+        // Note: L1 requires same directory; tests/ and src/ differ.
+        // "tests/sync_broadcast.rs" should be matched by L1.5 to "src/sync/broadcast.rs"
+        let sync_mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/sync/broadcast.rs");
+        assert!(
+            sync_mapping.is_some(),
+            "No mapping entry for src/sync/broadcast.rs"
+        );
+        assert!(
+            sync_mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/sync_broadcast.rs".to_string()),
+            "Expected tests/sync_broadcast.rs to map to src/sync/broadcast.rs via L1.5, got: {:?}",
+            sync_mapping.unwrap().test_files
         );
     }
 }
