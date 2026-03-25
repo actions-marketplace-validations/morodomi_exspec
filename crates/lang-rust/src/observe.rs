@@ -1016,6 +1016,26 @@ fn extract_pub_use_re_exports(
 }
 
 // ---------------------------------------------------------------------------
+// Helper: extract subdir from test path
+// ---------------------------------------------------------------------------
+
+/// Extract the subdirectory immediately under `tests/` from a normalized path.
+///
+/// Examples:
+/// - `"tests/builder/action.rs"` → `Some("builder")`
+/// - `"member/tests/builder/action.rs"` → `Some("builder")`
+/// - `"tests/action.rs"` → `None` (file directly under tests/, no subdir)
+fn extract_test_subdir(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    for (i, part) in parts.iter().enumerate() {
+        if *part == "tests" && i + 2 < parts.len() {
+            return Some(parts[i + 1].to_string());
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Concrete methods (not in trait)
 // ---------------------------------------------------------------------------
 
@@ -1085,6 +1105,11 @@ impl RustExtractor {
             &test_file_list,
             &mut layer1_matched,
         );
+
+        // Layer 1.6: subdir stem matching
+        // e.g., "tests/builder/action.rs" -> "src/builder/action.rs" or
+        //       "member/src/builder/action.rs" (cross-crate)
+        self.apply_l1_subdir_matching(&mut mappings, &test_file_list, &mut layer1_matched);
 
         // Resolve crate name for integration test import matching
         let crate_name = parse_crate_name(scan_root);
@@ -1260,6 +1285,63 @@ impl RustExtractor {
         }
     }
 
+    /// Layer 1.6: subdir stem matching.
+    ///
+    /// For each unmatched test file under `tests/<subdir>/`, extract the subdir
+    /// (e.g., `tests/builder/action.rs` -> subdir="builder", stem="action") and
+    /// match against production files where stem matches AND path contains `/{subdir}/`.
+    ///
+    /// Guard: skip if subdir is fewer than 3 characters (FP risk).
+    ///
+    fn apply_l1_subdir_matching(
+        &self,
+        mappings: &mut [FileMapping],
+        test_paths: &[String],
+        layer1_matched: &mut HashSet<String>,
+    ) {
+        for test_path in test_paths {
+            if layer1_matched.contains(test_path) {
+                continue;
+            }
+
+            let test_stem = match self.test_stem(test_path) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            let normalized = test_path.replace('\\', "/");
+            let test_subdir = extract_test_subdir(&normalized);
+            if test_subdir.as_ref().is_none_or(|s| s.len() < 3) {
+                continue;
+            }
+            let test_subdir = test_subdir.unwrap();
+
+            let subdir_lower = test_subdir.to_lowercase();
+            let stem_lower = test_stem.to_lowercase();
+            let dir_segment = format!("/{subdir_lower}/");
+
+            for mapping in mappings.iter_mut() {
+                let prod_stem = match self.production_stem(&mapping.production_file) {
+                    Some(s) => s,
+                    None => continue,
+                };
+
+                if prod_stem.to_lowercase() != stem_lower {
+                    continue;
+                }
+
+                let prod_path_lower = mapping.production_file.replace('\\', "/").to_lowercase();
+                if prod_path_lower.contains(&dir_segment) {
+                    if !mapping.test_files.contains(test_path) {
+                        mapping.test_files.push(test_path.clone());
+                    }
+                    layer1_matched.insert(test_path.clone());
+                    break;
+                }
+            }
+        }
+    }
+
     /// Layer 1.5: underscore-to-path stem matching.
     ///
     /// For each unmatched test file whose stem contains `_`, split on the first `_`
@@ -1267,8 +1349,6 @@ impl RustExtractor {
     /// and its path contains `/{prefix}/`, map the test file to that production file.
     ///
     /// Guard: skip if suffix is 2 characters or fewer (FP risk).
-    ///
-    /// TODO: implement in GREEN phase.
     fn apply_l1_5_underscore_path_matching(
         &self,
         mappings: &mut [FileMapping],
@@ -4805,6 +4885,263 @@ cfg_feat! {
             mapping.unwrap().test_files.contains(&test_path),
             "Expected member_a/tests/test_engine.rs to map to member_a/src/engine.rs via per-member L2, got: {:?}",
             mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SD-01: subdir_stem_match_same_crate
+    // -----------------------------------------------------------------------
+    #[test]
+    fn sd_01_subdir_stem_match_same_crate() {
+        // Given: test "tests/builder/action.rs" and prod "src/builder/action.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/builder/action.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/builder/action.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports (L1.6 subdir matching)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: test maps to prod (subdir="builder", stem="action")
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/builder/action.rs");
+        assert!(mapping.is_some(), "No mapping for src/builder/action.rs");
+        assert!(
+            mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/builder/action.rs".to_string()),
+            "Expected tests/builder/action.rs to map to src/builder/action.rs via L1.6 subdir matching, got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SD-02: subdir_stem_match_cross_crate
+    // -----------------------------------------------------------------------
+    #[test]
+    fn sd_02_subdir_stem_match_cross_crate() {
+        // Given: test "tests/builder/command.rs" and prod "member_a/src/builder/command.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec!["member_a/src/builder/command.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/builder/command.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports (L1.6 subdir matching)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: test maps to prod (subdir "builder" matches across crate boundary)
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "member_a/src/builder/command.rs");
+        assert!(
+            mapping.is_some(),
+            "No mapping for member_a/src/builder/command.rs"
+        );
+        assert!(
+            mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/builder/command.rs".to_string()),
+            "Expected tests/builder/command.rs to map to member_a/src/builder/command.rs via L1.6 subdir matching, got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SD-03: subdir_wrong_dir_no_match
+    // -----------------------------------------------------------------------
+    #[test]
+    fn sd_03_subdir_wrong_dir_no_match() {
+        // Given: test "tests/builder/action.rs" and prod "src/parser/action.rs" (wrong dir)
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/parser/action.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/builder/action.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: NO match (subdir "builder" not in "src/parser/")
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/parser/action.rs");
+        assert!(
+            mapping.is_some(),
+            "No mapping entry for src/parser/action.rs"
+        );
+        assert!(
+            mapping.unwrap().test_files.is_empty(),
+            "Expected NO match for src/parser/action.rs (wrong dir), got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SD-04: subdir_no_subdir_skip
+    // -----------------------------------------------------------------------
+    #[test]
+    fn sd_04_subdir_no_subdir_skip() {
+        // Given: test "tests/action.rs" (directly in tests/, no subdir) and prod "src/builder/action.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/builder/action.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/action.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: NO match (no test subdir to match)
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/builder/action.rs");
+        assert!(
+            mapping.is_some(),
+            "No mapping entry for src/builder/action.rs"
+        );
+        assert!(
+            mapping.unwrap().test_files.is_empty(),
+            "Expected NO match for src/builder/action.rs (no test subdir), got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SD-05: subdir_main_rs_skip
+    // -----------------------------------------------------------------------
+    #[test]
+    fn sd_05_subdir_main_rs_skip() {
+        // Given: test "tests/builder/main.rs" (main.rs has no test_stem)
+        // and prod "src/builder/action.rs"
+        let extractor = RustExtractor::new();
+        let production_files = vec!["src/builder/action.rs".to_string()];
+        let test_sources: HashMap<String, String> =
+            [("tests/builder/main.rs".to_string(), String::new())]
+                .into_iter()
+                .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: skip (main.rs excluded by test_stem returning None)
+        let mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/builder/action.rs");
+        assert!(
+            mapping.is_some(),
+            "No mapping entry for src/builder/action.rs"
+        );
+        assert!(
+            mapping.unwrap().test_files.is_empty(),
+            "Expected NO match for src/builder/action.rs (main.rs skipped), got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SD-06: subdir_already_matched_skip
+    //
+    // Verify that a test already matched by L1.5 is skipped by L1.6, while
+    // an unmatched subdir test is still processed by L1.6.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn sd_06_subdir_already_matched_skip() {
+        // Given: test "tests/sync_action.rs" already L1.5-matched to "src/sync/action.rs"
+        // And test "tests/builder/command.rs" not yet matched
+        // And prod "src/builder/command.rs" available
+        let extractor = RustExtractor::new();
+        let production_files = vec![
+            "src/sync/action.rs".to_string(),
+            "src/builder/command.rs".to_string(),
+        ];
+        let test_sources: HashMap<String, String> = [
+            ("tests/sync_action.rs".to_string(), String::new()),
+            ("tests/builder/command.rs".to_string(), String::new()),
+        ]
+        .into_iter()
+        .collect();
+        let scan_root = PathBuf::from(".");
+
+        // When: map_test_files_with_imports
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            &scan_root,
+            false,
+        );
+
+        // Then: tests/sync_action.rs is L1.5-matched to src/sync/action.rs
+        let l15_mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/sync/action.rs");
+        assert!(
+            l15_mapping.is_some(),
+            "No mapping entry for src/sync/action.rs"
+        );
+        assert!(
+            l15_mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/sync_action.rs".to_string()),
+            "Expected tests/sync_action.rs to L1.5-match to src/sync/action.rs, got: {:?}",
+            l15_mapping.unwrap().test_files
+        );
+
+        // And: tests/builder/command.rs should be processed by L1.6 subdir matching
+        // (this assert will fail in RED since apply_l1_subdir_matching is a stub)
+        let sd_mapping = result
+            .iter()
+            .find(|m| m.production_file == "src/builder/command.rs");
+        assert!(
+            sd_mapping.is_some(),
+            "No mapping entry for src/builder/command.rs"
+        );
+        assert!(
+            sd_mapping
+                .unwrap()
+                .test_files
+                .contains(&"tests/builder/command.rs".to_string()),
+            "Expected tests/builder/command.rs to L1.6-match to src/builder/command.rs, got: {:?}",
+            sd_mapping.unwrap().test_files
         );
     }
 }
