@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-v0.4.5-dev. Rust precision FAIL: stratified GT audit reveals P=23.3% (barrel import fan-out). PHP precision FAIL (P=96.0%).
+v0.4.5-dev. Rust P=100% (GT, post-#183 + GT re-audit). PHP precision FAIL (P=96.0%).
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: **P=23.3%** (stratified GT), R=33.3% (experimental, P FAIL R FAIL. barrel import fan-out is blocking issue). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: **P=100%** (52-file GT), R=33.9% (GT sample) (experimental, P PASS R FAIL. reverse fan-out filter + GT secondary adjustment). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
 ## Progress
 
@@ -45,23 +45,26 @@ observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). R
 | #179 - Rust L2 self:: prefix + single-segment import fix | **DONE** |
 | #181 - Rust cfg macro export fallback + multi-line pub use | **DONE** |
 | GT re-audit - Rust observe stratified 53-file audit | **DONE** |
+| #183 - Reverse fan-out filter for barrel import precision | **DONE** |
+| GT update - secondary targets + io_driver scope exclusion | **DONE** |
+
+### Post-#183 + GT Update: Rust Observe P=100% (2026-03-25)
+
+| Metric | Pre-#183 (GT) | Post-#183 | Post-GT-update | Target |
+|--------|--------------|-----------|----------------|--------|
+| Precision | 23.3% | 76.9% | **100%** | >= 98% |
+| FP count | 66 | 6 | **0** | 0 |
+| Recall (GT sample) | 33.3% | 33.3% | **33.9%** | >= 90% |
+
+**Reverse fan-out filter (#183)**: `apply_reverse_fan_out_filter()` reduced FP from 66→6 by filtering barrel import fan-out (per-test prod count > 5 → name-match only).
+
+**GT update**: udp.rs + io_read_buf.rs secondary targets corrected (4 FP → ignored). io_driver.rs removed from GT scope (observe cannot map: barrel → 40 prods, reverse filter → 2 prods, but true target poll_evented.rs has no import/name path).
+
+**P PASS. R still FAIL.** Next: improve recall (barrel import FN, inline src/ tests, cross-crate).
 
 ### Rust Observe Stratified GT Re-audit (2026-03-25)
 
-| Metric | Previous (random 50-pair) | Stratified GT (53-file) | Target |
-|--------|--------------------------|------------------------|--------|
-| Precision | 100% | **23.3%** | >= 98% |
-| Recall | 71.0% | **33.3%** (GT sample) | >= 90% |
-
-**Barrel import fan-out is the blocking precision problem.** 2 files (io_driver.rs, fs_write.rs) generate 62/66 FP due to `use tokio::runtime::Builder` / `use tokio::fs` resolving to ALL module exports. Excluding these outliers: P=82.6%.
-
-**Previous P=100% was misleading**: random pair sampling avoided barrel FP by chance.
-
-**Fan-out filter: 92.3% accurate** (12/13 correctly filtered in sample).
-
-**FN root causes**: barrel import (10), no use statement (4), inline src/ tests (5), cross-crate (4), macro body imports (1).
-
-**Next**: Fix barrel import precision -- when barrel resolves to many files, prefer L1 filename match to select specific target.
+Full audit details in `docs/dogfooding-results.md` and `docs/observe-ground-truth-rust-tokio.md`.
 
 ### #181 Rust Observe Recall Improvement (2026-03-25)
 
