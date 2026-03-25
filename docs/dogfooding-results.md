@@ -1,7 +1,37 @@
 # Dogfooding Results
 
-Latest: 2026-03-25, exspec v0.4.5-dev (tower GT + 17-library survey)
+Latest: 2026-03-25, exspec v0.5.0-dev (post-#199 barrel self-match fix, tower R=91.7%)
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
+
+## Rust observe post-#199 barrel self-match (2026-03-25)
+
+### tower R=78.3% → R=91.7%
+
+#199 barrel self-match fix resolves mod.rs as a mappable production file target. Types defined directly in `mod.rs` (rather than in named files under the module) were previously FN.
+
+| Metric | Pre-#199 | Post-#199 | Target | Result |
+|--------|----------|-----------|--------|--------|
+| Precision | 100% | **100%** | >= 98% | **PASS** |
+| Recall (GT: 24 files) | 78.3% (18/23) | **91.7%** (22/24) | >= 90% | **PASS** |
+| TP | 18 (10 external + 8 inline) | **22** (14 external + 8 inline) | - | - |
+| FP | 0 | **0** | 0 | - |
+| FN | 5 | **2** | - | - |
+
+**Resolved FN (4)**:
+- `tower/tests/filter/async_filter.rs`: `use tower::filter::AsyncFilter` → `tower/src/filter/mod.rs`
+- `tower/tests/hedge/main.rs`: `use tower::hedge::{Hedge, Policy}` → `tower/src/hedge/mod.rs`
+- `tower/tests/steer/main.rs`: `use tower::steer::Steer` → `tower/src/steer/mod.rs`
+- `tower/tests/util/call_all.rs`: `use tower::util::ServiceExt` → `tower/src/util/mod.rs`
+
+**Remaining FN (2)**:
+- `tower-test/tests/mock.rs`: cross-crate (tower-test crate). Structural: out of scope.
+- `tower/tests/limit/concurrency.rs`: deep mod hierarchy (`limit/concurrency/mod.rs` barrel). Not resolved by self-match.
+
+**Conclusion**: tower meets ship criteria post-#199. Rust observe is stable for normal-case libraries.
+
+### tokio: +29 mapped test files
+
+tokio observe: 210 → 239 mapped test files (+29). No regression (FP count unchanged). Improvement is due to mod.rs barrel self-match now resolving additional tokio modules.
 
 ## Rust observe normal-case library survey (2026-03-25)
 
@@ -45,7 +75,7 @@ Note: recall figures for non-tower libraries are approximate (survey-level, not 
 
 **Key finding**: tower uses submodule direct imports (e.g., `use tower::retry::Policy`, `use tower::buffer::error::*`) rather than crate-root barrel re-export. This eliminates the dominant FN cause seen in tokio/clap. However, `mod.rs`-defined types remain a distinct FN pattern. tower is the best-performing library in the survey but does not reach R>=90%.
 
-**Ship criteria**: P=100% PASS, R=78.3% FAIL. No surveyed library achieves R>=90%. Rust observe ship criteria remain unmet.
+**Ship criteria (pre-#199)**: P=100% PASS, R=78.3% FAIL. Post-#199: R=91.7% PASS. See "Rust observe post-#199 barrel self-match" section above.
 
 **Note on cycle doc R=94.7%**: The cycle doc (20260325_2228) recorded R=94.7% (18/19) based on misreading the observe summary field `test_files: 19, mapped_files: 19`. That field counts production files that have test mappings (production-centric), not the test-file recall. The correct GT-based recall is 78.3%.
 

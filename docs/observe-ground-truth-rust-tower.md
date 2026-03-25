@@ -24,7 +24,7 @@ Date: 2026-03-25
 |---------|-------|-------------|
 | tower/tests/ external (real tests) | 15 | Test files with at least one test function |
 | tower/src/ inline tests (self-match) | 8 | Source files with #[cfg(test)] modules |
-| **Total** | **23** | |
+| **Total** | **24** | **Note**: scope revised to 24 post-#199 (tower-test/tests/mock.rs added); effective audit scope used for P/R is 24 |
 
 ## Rust-Specific Decisions
 
@@ -36,35 +36,49 @@ Date: 2026-03-25
 
 ## FN Root Cause Analysis
 
+Post-#199 (barrel self-match fix, 2026-03-25): 4 of the original 5 FN were resolved. 2 FN remain.
+
 | Root Cause | Count | Example Files |
 |-----------|-------|---------------|
-| mod.rs barrel (filter, hedge, steer modules) | 3 | tests/filter/async_filter.rs, tests/hedge/main.rs, tests/steer/main.rs |
-| mod.rs barrel (utility crate modules) | 2 | tests/limit/concurrency.rs, tests/util/call_all.rs |
+| Cross-crate (tower-test crate) | 1 | tower-test/tests/mock.rs |
+| Deep mod hierarchy (concurrency) | 1 | tests/limit/concurrency.rs |
 
-**Detail**:
-- `tests/filter/async_filter.rs`: `use tower::filter::{error::Error, AsyncFilter}` → should map to `tower/src/filter/mod.rs` (where AsyncFilter is defined), but mod.rs is not recognized as a mappable production file
-- `tests/hedge/main.rs`: `use tower::hedge::{Hedge, Policy}` → `tower/src/hedge/mod.rs` (same root cause)
-- `tests/steer/main.rs`: `use tower::steer::Steer` → `tower/src/steer/mod.rs`
-- `tests/limit/concurrency.rs`: `use tower::limit::concurrency::ConcurrencyLimitLayer` → imports via mod hierarchy, not mapped
-- `tests/util/call_all.rs`: `use tower::util::ServiceExt` → ServiceExt is defined via trait, not directly mapped
+**Detail (remaining FN)**:
+- `tower-test/tests/mock.rs`: lives in a separate `tower-test` crate. observe maps within each crate; cross-crate test-to-code mapping is not supported.
+- `tests/limit/concurrency.rs`: `use tower::limit::concurrency::ConcurrencyLimitLayer` → resolves through deep `limit/concurrency/mod.rs` barrel hierarchy, not directly mapped.
 
-**Note on "normal-case" classification**: tower avoids crate-root barrel re-export (`use tower::Service` routes to tower_service crate, not through barrel). Most tests use submodule paths. However, mod.rs files within submodules still cause FNs, making tower a "moderate" case rather than pure "normal-case".
+**Resolved FN (fixed by #199 barrel self-match)**:
+- `tests/filter/async_filter.rs`: `use tower::filter::{error::Error, AsyncFilter}` → now correctly maps to `tower/src/filter/mod.rs` via barrel self-match
+- `tests/hedge/main.rs`: `use tower::hedge::{Hedge, Policy}` → maps to `tower/src/hedge/mod.rs`
+- `tests/steer/main.rs`: `use tower::steer::Steer` → maps to `tower/src/steer/mod.rs`
+- `tests/util/call_all.rs`: `use tower::util::ServiceExt` → now mapped via barrel self-match
+
+**Note on "normal-case" classification**: tower avoids crate-root barrel re-export (`use tower::Service` routes to tower_service crate, not through barrel). Most tests use submodule paths. Post-#199, tower now meets R>=90% ship criteria.
 
 ## P/R Metrics
 
-Based on GT scope of 23 files (15 external + 8 inline):
+### Post-#199 (barrel self-match fix, 2026-03-25)
 
-- **TP (correctly mapped)**: 18 (10 external + 8 inline self-matches)
+Based on GT scope of 24 files (15 external + 8 inline + 1 cross-crate tower-test/tests/mock.rs):
+
+- **TP (correctly mapped)**: 22 (14 external + 8 inline self-matches)
 - **FP**: 0
-- **FN**: 5 (filter/async_filter, hedge/main, steer/main, limit/concurrency, util/call_all)
-- **Precision** = 18 / (18 + 0) = **100%** (meets >= 98% ship criterion -- PASS)
-- **Recall** = 18 / (18 + 5) = **78.3%** (does NOT meet >= 90% ship criterion -- FAIL)
+- **FN**: 2 (tower-test/tests/mock.rs cross-crate, limit/concurrency.rs deep mod hierarchy)
+- **Precision** = 22 / (22 + 0) = **100%** (meets >= 98% ship criterion -- PASS)
+- **Recall** = 22 / (22 + 2) = **91.7%** (meets >= 90% ship criterion -- PASS)
 
-**Note on cycle doc R=94.7%**: The cycle doc recorded R=94.7% (18/19) based on misreading the observe summary field `test_files: 19, mapped_files: 19`. That field counts production files that have associated test file mappings (production-centric view), not the recall of external test files. The correct GT-based recall is 78.3%.
+**#199 improvement**: 4 FN resolved (filter/async_filter, hedge/main, steer/main, util/call_all). All were mod.rs barrel files where types are defined in the module root. Barrel self-match fix allows observe to recognize mod.rs as a mappable production file target.
 
-**Conclusion**: tower demonstrates that Rust observe achieves P=100% on normal-case submodule import patterns. However, R=78.3% falls short of the R>=90% ship criterion. FN cause is mod.rs barrel files (where types are defined in the module root file), which differs from the crate-root barrel FN seen in tokio/clap but is a distinct limitation.
+### Pre-#199 (for reference)
 
-**17-library survey context**: tower was the highest-recall library in the 17-library survey. R=78.3% on tower means no surveyed library achieves R>=90%, confirming that Rust observe ship criteria are not yet met for any external library.
+- TP: 18 (10 external + 8 inline), FP: 0, FN: 5
+- Precision: 100%, Recall: 78.3% (18/23, scope=23)
+
+**Note on cycle doc R=94.7%**: The cycle doc recorded R=94.7% (18/19) based on misreading the observe summary field `test_files: 19, mapped_files: 19`. That field counts production files that have associated test file mappings (production-centric view), not the recall of external test files. The correct GT-based pre-#199 recall was 78.3%.
+
+**Conclusion**: Post-#199, tower meets both ship criteria: P=100% (PASS) and R=91.7% (PASS). Rust observe achieves ship criteria on tower, a normal-case library using submodule direct imports. Remaining 2 FN are structurally out of scope (cross-crate) or require deep mod hierarchy tracing (deep concurrency path).
+
+**17-library survey context**: tower was the highest-recall library in the 17-library survey. Pre-#199 R=78.3% meant no library achieved R>=90%. Post-#199, tower achieves R=91.7%, confirming that Rust observe ship criteria are met for normal-case libraries.
 
 ## Ground Truth
 
@@ -339,9 +353,9 @@ Based on GT scope of 23 files (15 external + 8 inline):
           "symbol_assertion"
         ]
       },
-      "observe_result": "FN",
-      "root_cause": "mod_rs_barrel",
-      "note": "`use tower::filter::{error::Error, AsyncFilter}` -- AsyncFilter defined in filter/mod.rs. mod.rs not recognized as mappable production file by observe."
+      "observe_result": "TP",
+      "observe_strategy": "import",
+      "note": "Resolved by #199 barrel self-match fix. `use tower::filter::{error::Error, AsyncFilter}` -- AsyncFilter defined in filter/mod.rs. mod.rs now recognized as mappable production file."
     },
     "tower/tests/hedge/main.rs": {
       "primary_targets": [
@@ -353,9 +367,9 @@ Based on GT scope of 23 files (15 external + 8 inline):
           "symbol_assertion"
         ]
       },
-      "observe_result": "FN",
-      "root_cause": "mod_rs_barrel",
-      "note": "`use tower::hedge::{Hedge, Policy}` -- both defined in hedge/mod.rs"
+      "observe_result": "TP",
+      "observe_strategy": "import",
+      "note": "Resolved by #199 barrel self-match fix. `use tower::hedge::{Hedge, Policy}` -- both defined in hedge/mod.rs."
     },
     "tower/tests/steer/main.rs": {
       "primary_targets": [
@@ -367,9 +381,17 @@ Based on GT scope of 23 files (15 external + 8 inline):
           "symbol_assertion"
         ]
       },
+      "observe_result": "TP",
+      "observe_strategy": "import",
+      "note": "Resolved by #199 barrel self-match fix. `use tower::steer::Steer` -- Steer defined in steer/mod.rs (only file in steer/)."
+    },
+    "tower-test/tests/mock.rs": {
+      "primary_targets": [],
+      "secondary_targets": [],
+      "evidence": {},
       "observe_result": "FN",
-      "root_cause": "mod_rs_barrel",
-      "note": "`use tower::steer::Steer` -- Steer defined in steer/mod.rs (only file in steer/)"
+      "root_cause": "cross_crate",
+      "note": "tower-test is a separate crate. observe does not map across crate boundaries."
     },
     "tower/tests/limit/concurrency.rs": {
       "primary_targets": [
@@ -396,9 +418,9 @@ Based on GT scope of 23 files (15 external + 8 inline):
           "symbol_assertion"
         ]
       },
-      "observe_result": "FN",
-      "root_cause": "mod_rs_barrel",
-      "note": "`use tower::util::ServiceExt` -- ServiceExt is a trait extension, routes through util/mod.rs. call_all functionality also spread across call_all/mod.rs barrel."
+      "observe_result": "TP",
+      "observe_strategy": "import",
+      "note": "Resolved by #199 barrel self-match fix. `use tower::util::ServiceExt` -- routes through util/mod.rs. Now mapped via barrel self-match."
     }
   }
 }

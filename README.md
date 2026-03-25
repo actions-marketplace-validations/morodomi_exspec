@@ -2,7 +2,7 @@
 
 Static analyzer for test design quality. Verifies that tests function as executable specifications -- fast, language-agnostic, zero LLM cost.
 
-> **Public beta** (v0.4.4). Dogfooded across 11 projects / 4 languages / ~40,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
+> **Public beta** (v0.5.0). Dogfooded across 12 projects / 4 languages / ~40,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
 
 ## Why exspec?
 
@@ -14,7 +14,7 @@ Static analyzer for test design quality. Verifies that tests function as executa
 
 exspec checks whether your tests are well-designed *specifications*, not just code that runs. It enforces 4 properties: **What not How**, **Living Documentation**, **Compositional**, **Single Source of Truth**. See [docs/philosophy.md](docs/philosophy.md) for the full rationale.
 
-Validated against 11 real-world OSS projects (~40,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
+Validated against 12 real-world OSS projects (~40,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
 
 ## Install
 
@@ -131,7 +131,8 @@ exspec observe --lang rust --format json .  # JSON for CI
 | NestJS | TypeScript | 1279 | 466 (36%) | 100% | stable |
 | FastAPI | Python | 620 | 122 (20%) | ~100% | stable |
 | Django | Python | 2266 | 381 (17%) | ~100% | stable |
-| tokio | Rust | 495 | 50 (10%) | 100% | experimental (R < 90%) |
+| tower | Rust | -- | 22/24 GT (91.7% R) | 100% | stable (ship criteria PASS) |
+| tokio | Rust | 495 | 239 (48%) | 100% | experimental (hard-case, R < 90%) |
 | Laravel | PHP | 1951 | 973 (50%) | ~100% | stable (R=88.6%) |
 | Symfony | PHP | 7937 | 4117 (52%) | ~96% | stable |
 

@@ -9,29 +9,28 @@
 
 ## Now
 
-### v0.4.5: Multi-library dogfooding + observe stabilization
+### v0.5.0: Rust observe ship criteria PASS (tower)
 
-Goal: Rust/PHP observe を stable (ship criteria PASS) にする。tokio は hard-case baseline として継続、normal-case library を追加して公平な P/R を測定する。
+Goal: Rust observe を tower (normal-case library) で ship criteria PASS にする。#199 barrel self-match fix で達成。
 
-**Current observe status (2026-03-25)**:
+**Current observe status (2026-03-25 post-#199)**:
 
 | Language | Precision | Recall | GT corpus | Status | Ship criteria |
 |----------|-----------|--------|-----------|--------|---------------|
 | TypeScript | 100% | 91% | NestJS (77-pair) | **stable** | PASS |
 | Python | 98.2% | 96.8% | httpx (30 files) | **stable** | PASS |
-| Rust | 100% | 78.3% / 50.8% / 14.3% | tower (23-file) / tokio (52-file) / clap (91-file) | experimental | P PASS, R FAIL (all libraries) |
+| Rust | 100% | **91.7%** (tower) / 50.8% (tokio) / 14.3% (clap) | tower (24-file, post-#199) / tokio (52-file) / clap (91-file) | **stable** (tower) / experimental (tokio/clap) | tower: PASS. tokio/clap: hard-case P PASS R FAIL |
 | PHP | ~100% | 88.6% (post-#193/#194) | Laravel (912 files, 45-pair GT) | **stable** | PASS (per-language: P>=98%, R>=85%) |
 
 | Priority | Task | Type | Expected Impact |
 |----------|------|------|-----------------|
-| P2 | Rust mod.rs barrel type resolution | observe recall | tower/filter/hedge/steer の dominant FN cause。`filter/mod.rs` に定義されたシンボルを observe が認識できれば R が改善 |
 | P2 | Rust crate root barrel re-export resolution | observe recall | tokio/clap の dominant FN cause。`use clap::Arg` → barrel chain を追跡できれば R が大幅改善 |
 
-**Why Rust R=78.3% (tower) is the best we see**: tower は crate root barrel re-export を避けている (サブモジュール直接 import)。しかし `mod.rs` に定義されたシンボル (filter::AsyncFilter, hedge::Hedge, steer::Steer) は observe がマッピングできない。これが tower の 5 FN の原因。
+**#199 barrel self-match fix (2026-03-25)**: tower R=78.3% → 91.7% (22/24 GT scope)。4 FN resolved: filter/async_filter, hedge/main, steer/main, util/call_all。mod.rs ファイルを mappable production file として認識するよう修正。tokio: 210 → 239 mapped test files (+29, no regression)。
 
-**tower GT 結論 (2026-03-25)**: tower (commit 251296d) は 17-library 調査で最高 recall (78.3%)。import pattern は submodule direct import (normal-case)。しかし R=78.3% < 90%。FN cause: `mod.rs` に定義された型。ship criteria FAIL。
+**tower GT 結論 post-#199 (2026-03-25)**: tower (commit 251296d) は ship criteria PASS。P=100% PASS, R=91.7% PASS。残り 2 FN: tower-test/tests/mock.rs (cross-crate), limit/concurrency.rs (deep mod hierarchy)。いずれも structural FN。
 
-**Decision (2026-03-25)**: 17-library 調査完了。どのライブラリも R>=90% を達成していない。Rust observe の ship は引き続き保留。次のステップは mod.rs barrel 型の resolution 実装 (tower FN 原因) か、crate root barrel resolution (tokio/clap FN 原因)。
+**Decision (2026-03-25)**: tower は Rust observe の normal-case ship criteria benchmark として確定。Rust observe は tower で stable。tokio/clap は引き続き hard-case experimental。"No library achieves R>=90%" は #199 で解消された。
 
 **clap GT 結論 (2026-03-25)**: clap (commit 70f3bb3) は normal-case library ではなかった。R=14.3% (13/91)。FN の主因は tokio と同じ crate root barrel。clap も「hard case」として分類。
 
@@ -58,20 +57,36 @@ Goal: Rust/PHP observe を stable (ship criteria PASS) にする。tokio は har
 
 ## Completed Recently
 
+### #199: Barrel self-match fix -- Rust observe ship criteria PASS (2026-03-25)
+
+Goal: tower の mod.rs barrel FN を修正し、ship criteria R>=90% を達成する。
+
+| Task | Status | Result |
+|------|--------|--------|
+| Barrel self-match fix implementation | DONE | mod.rs files now recognized as mappable production targets |
+| tower P/R re-measurement | DONE | R=78.3% → 91.7% (+4 TP). P=100% unchanged |
+| tokio regression check | DONE | 210 → 239 mapped test files (+29, no regression) |
+| GT doc update | DONE | `docs/observe-ground-truth-rust-tower.md` updated (scope 23→24, FN 5→2) |
+| Ship criteria evaluation | DONE | P=100% PASS, R=91.7% PASS. tower: stable |
+
+**Key insight**: mod.rs は barrel ファイル (pub use self::... によるシンボル再エクスポート) であると同時に、型定義を含む production file でもある。barrel self-match fix により observe が mod.rs を FN なくマッピングできるようになった。
+
+**Decision**: Rust observe は tower (normal-case library) で ship criteria PASS。All 4 languages are now stable for at least one GT corpus. tokio/clap は引き続き hard-case experimental。"No library achieves R>=90%" は #199 で解消された。
+
 ### Rust normal-case library survey: tower GT (17 libraries, 2026-03-25)
 
 Goal: 17 libraries を調査し、ship criteria 評価用の normal-case GT library を特定する。
 
 | Task | Status | Result |
 |------|--------|--------|
-| 17-library recall survey | DONE | tower が最高 R=78.3% (best-surveyed) |
+| 17-library recall survey | DONE | tower が最高 R=78.3% (best-surveyed at time of survey) |
 | tower 18-file full audit (tower/tests/) | DONE | 18 TP, 0 FP, 5 FN |
 | tower GT doc creation | DONE | `docs/observe-ground-truth-rust-tower.md` |
-| Ship criteria evaluation | DONE | P=100% PASS, R=78.3% FAIL. No library achieves R>=90% |
+| Ship criteria evaluation | DONE | P=100% PASS, R=78.3% FAIL pre-#199. Post-#199: R=91.7% PASS |
 
-**Key insight**: tower は crate root barrel re-export を回避しており、tokio/clap と異なる FN パターンを示す。しかし `mod.rs` に定義された型 (filter::AsyncFilter 等) は observe が認識できず、5 FN が発生。これは crate root barrel とは別の distinct FN cause。
+**Key insight**: tower は crate root barrel re-export を回避しており、tokio/clap と異なる FN パターンを示す。FN cause は mod.rs-defined types (distinct from crate root barrel)。#199 で解消。
 
-**Decision**: tower は「best-surveyed baseline」として記録。17-library 調査でどのライブラリも R>=90% を達成しないことが確定。Rust observe の ship requires either mod.rs barrel resolution OR crate root barrel resolution improvement.
+**Decision**: tower は Rust observe の normal-case ship criteria benchmark として確定。
 
 ### PHP ship criteria decision: stable at R=88.6% (2026-03-25)
 
@@ -270,7 +285,7 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 - **Post-processing filters**: forward fan-out (prod→test) + reverse fan-out (test→prod, #183)
 - **Success bar**: Ship criteria P>=98%, R>=90% per language (PHP: R>=85% per-language exception), measured on representative GT corpus
 - **GT corpus strategy**: Each language needs at least one "normal case" library. Hard-case (workspace, barrel-heavy) projects are reference baselines, not ship-criteria benchmarks
-- **Current status**: TypeScript (P=100%, R=91%, stable). Python (P=98.2%, R=96.8%, stable). Rust (P=100%, R=50.8% tokio / 14.3% clap, both hard-case, experimental -- crate root barrel FN blocking ship). PHP (P~100%, R=88.6%, **stable** -- per-language R>=85% ship criteria PASS)
+- **Current status**: TypeScript (P=100%, R=91%, stable). Python (P=98.2%, R=96.8%, stable). Rust (P=100%, R=91.7% tower post-#199 **stable** / R=50.8% tokio hard-case experimental / R=14.3% clap hard-case experimental). PHP (P~100%, R=88.6%, **stable** -- per-language R>=85% ship criteria PASS). All 4 languages stable on at least one GT corpus.
 
 ### B4 barrel fix rejection (Phase 11)
 
@@ -331,5 +346,6 @@ Route extraction (NestJS, FastAPI, Next.js, Django). TS re-dogfood (P=100%, R=91
 | -- | Stratified GT re-audit (53-file), reverse fan-out (#183), GT update (#184), L1.5 matching (#185) | v0.4.5-dev |
 | -- | Cross-crate import (#188), L1 subdir stem (#189), clap GT (#192), PHP recall push (#193), directory-aware fan-out (#194) | v0.4.5-dev |
 | -- | PHP re-dogfood post-#193/#194: R=88.6% (808/912), structural ceiling confirmed. GT doc: `docs/observe-ground-truth-php-laravel.md` | v0.4.5-dev |
+| #199 | Barrel self-match fix: tower R=78.3% → 91.7% (ship criteria PASS), tokio +29 mapped files | v0.5.0 |
 
 Detail for completed phases is archived in git history. Key decisions are preserved in "Key Design Decisions" above.

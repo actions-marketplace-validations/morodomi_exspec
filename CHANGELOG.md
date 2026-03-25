@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.5.0 (2026-03-25)
+
+Observe multi-language stabilization. All 4 languages now ship-criteria ready. Barrel self-match fix enables Rust observe R>=90% on tower.
+
+### Features
+
+- **Barrel self-match**: Barrel files (mod.rs, index.ts, __init__.py) that directly define imported symbols are now included as production candidates. tower R=78.3%->91.7%, tokio +29 files. (#199)
+- **Directory-aware fan-out filter**: Bidirectional name-match + directory segment match. PHP Laravel fan-out blocked 63->0. (#194)
+- **PHP Fixtures/Stubs helper + PSR-4**: `tests/Fixtures/`, `tests/Stubs/` exclusion. composer.json autoload resolution. (#193)
+- **Rust cross-crate import**: Integration tests resolve `use cratename::` across workspace. (#188)
+- **Rust L1 subdir stem matching**: `test_foo_bar` matches `foo/bar.rs`. (#189)
+- **L1.5 underscore-to-path**: `sync_broadcast` matches `sync/broadcast.rs`. (#185)
+- **Cfg macro text fallback**: `pub struct` inside `#[cfg]` blocks via text search. (#181)
+- **Rust L2 self:: + single-seg fix**: `pub use self::` and single-segment imports. (#179)
+- **Reverse fan-out filter**: Per-test prod count threshold. (#183)
+- **Fan-out name-match tuning**: 5%->6.5% threshold. (#173, #177)
+
+### Observe Stabilization
+
+- **PHP -> stable**: Per-language R>=85%. R=88.6% (808/912, Laravel). (#196, #197)
+- **Rust tower**: P=100%, R=91.7% (24-file GT). Ship criteria PASS. 17-library survey. (#198, #199)
+- **Rust recall improvement**: tokio R 36.8%->50.8%. clap GT R=14.3% (hard-case). (#183-#185, #192)
+
+### Internal
+
+- 1237 tests (up from 1161 in v0.4.4).
+- Per-language ship criteria in CONSTITUTION.
+- GT docs: tower, clap, Laravel.
+- `[observe] max_reverse_fan_out` config.
+
 ## v0.4.4 (2026-03-24)
 
 Rust observe precision from 76.7% to 100%, fan-out filter for high-frequency utility class FP, and pub-only visibility filter.
