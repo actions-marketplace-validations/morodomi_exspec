@@ -562,6 +562,65 @@ pub fn extract_import_specifiers_with_crate_name(
     result_map.into_iter().collect()
 }
 
+/// Extract import specifiers with support for multiple crate names.
+///
+/// For each `use X::module::Symbol` statement in `source`:
+/// - If X is `crate`, returns `("crate", "module", ["Symbol"])`.
+/// - If X matches any of `crate_names`, returns `(X, "module", ["Symbol"])`.
+/// - Otherwise (e.g. `std::`, `serde::`) the statement is skipped.
+///
+/// Returns `Vec<(matched_crate_name, specifier, symbols)>`.
+pub fn extract_import_specifiers_with_crate_names(
+    source: &str,
+    crate_names: &[&str],
+) -> Vec<(String, String, Vec<String>)> {
+    let mut parser = RustExtractor::parser();
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    let source_bytes = source.as_bytes();
+    let root = tree.root_node();
+    let mut results = Vec::new();
+
+    for i in 0..root.child_count() {
+        let child = root.child(i).unwrap();
+        if child.kind() != "use_declaration" {
+            continue;
+        }
+        let arg = match child.child_by_field_name("argument") {
+            Some(a) => a,
+            None => continue,
+        };
+        let full_text = arg.utf8_text(source_bytes).unwrap_or("");
+
+        // Handle `crate::` prefix
+        if let Some(path_after_crate) = full_text.strip_prefix("crate::") {
+            let mut map: HashMap<String, Vec<String>> = HashMap::new();
+            parse_use_path(path_after_crate, &mut map);
+            for (specifier, symbols) in map {
+                results.push(("crate".to_string(), specifier, symbols));
+            }
+            continue;
+        }
+
+        // Handle each crate name in the list
+        for &name in crate_names {
+            let prefix = format!("{name}::");
+            if let Some(path_after_name) = full_text.strip_prefix(&prefix) {
+                let mut map: HashMap<String, Vec<String>> = HashMap::new();
+                parse_use_path(path_after_name, &mut map);
+                for (specifier, symbols) in map {
+                    results.push((name.to_string(), specifier, symbols));
+                }
+                break; // A use statement can only match one crate name
+            }
+        }
+    }
+
+    results
+}
+
 // ---------------------------------------------------------------------------
 // Workspace support
 // ---------------------------------------------------------------------------
@@ -1070,6 +1129,50 @@ impl RustExtractor {
                     l1_exclusive,
                     &layer1_matched,
                 );
+            }
+
+            // Cross-crate fallback for root integration tests:
+            // Tests not owned by any member (e.g., tests/ at workspace root) may import
+            // workspace member crates directly (e.g., `use clap_builder::...`).
+            // Try resolving these root tests against each member's src/.
+            let root_test_sources: HashMap<String, String> = test_sources
+                .iter()
+                .filter(|(path, _)| {
+                    find_member_for_path(Path::new(path.as_str()), &members).is_none()
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+
+            if !root_test_sources.is_empty() {
+                for member in &members {
+                    // Try member's own crate name (e.g., `use clap_builder::`)
+                    self.apply_l2_imports(
+                        &root_test_sources,
+                        &member.crate_name,
+                        &member.member_root,
+                        &canonical_root,
+                        &canonical_to_idx,
+                        &mut mappings,
+                        l1_exclusive,
+                        &layer1_matched,
+                    );
+                    // Also try root crate name resolved in member's src/
+                    // (handles `use clap::builder::Arg` → resolves in clap_builder/src/)
+                    if let Some(ref root_name) = crate_name {
+                        if *root_name != member.crate_name {
+                            self.apply_l2_imports(
+                                &root_test_sources,
+                                root_name,
+                                &member.member_root,
+                                &canonical_root,
+                                &canonical_to_idx,
+                                &mut mappings,
+                                l1_exclusive,
+                                &layer1_matched,
+                            );
+                        }
+                    }
+                }
             }
         } else if crate_name.is_none() {
             // Fallback: no [package] and no workspace members; apply L2 with "crate"
@@ -4388,6 +4491,320 @@ cfg_feat! {
                 .contains(&"tests/sync_broadcast.rs".to_string()),
             "Expected tests/sync_broadcast.rs to map to src/sync/broadcast.rs via L1.5, got: {:?}",
             sync_mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // XC-01: cross_crate_extract_root_crate_name
+    // -----------------------------------------------------------------------
+    #[test]
+    fn xc_01_cross_crate_extract_root_crate_name() {
+        // Given: source with `use clap::builder::Arg` and crate_names=["clap", "clap_builder"]
+        let source = "use clap::builder::Arg;\n";
+        let crate_names = ["clap", "clap_builder"];
+
+        // When: extract_import_specifiers_with_crate_names
+        let result = extract_import_specifiers_with_crate_names(source, &crate_names);
+
+        // Then: returns entry with matched_crate_name="clap", specifier="builder", symbols=["Arg"]
+        assert!(
+            !result.is_empty(),
+            "Expected at least one import entry, got empty"
+        );
+        let entry = result
+            .iter()
+            .find(|(crate_n, spec, _)| crate_n == "clap" && spec == "builder");
+        assert!(
+            entry.is_some(),
+            "Expected entry (clap, builder, [Arg]), got: {:?}",
+            result
+        );
+        let (_, _, symbols) = entry.unwrap();
+        assert!(
+            symbols.contains(&"Arg".to_string()),
+            "Expected symbols to contain 'Arg', got: {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // XC-02: cross_crate_extract_member_crate_name
+    // -----------------------------------------------------------------------
+    #[test]
+    fn xc_02_cross_crate_extract_member_crate_name() {
+        // Given: source with `use clap_builder::error::ErrorKind`
+        // and crate_names=["clap", "clap_builder"]
+        let source = "use clap_builder::error::ErrorKind;\n";
+        let crate_names = ["clap", "clap_builder"];
+
+        // When: extract_import_specifiers_with_crate_names
+        let result = extract_import_specifiers_with_crate_names(source, &crate_names);
+
+        // Then: returns entry with matched_crate_name="clap_builder", specifier="error",
+        //       symbols=["ErrorKind"]
+        assert!(
+            !result.is_empty(),
+            "Expected at least one import entry, got empty"
+        );
+        let entry = result
+            .iter()
+            .find(|(crate_n, spec, _)| crate_n == "clap_builder" && spec == "error");
+        assert!(
+            entry.is_some(),
+            "Expected entry (clap_builder, error, [ErrorKind]), got: {:?}",
+            result
+        );
+        let (_, _, symbols) = entry.unwrap();
+        assert!(
+            symbols.contains(&"ErrorKind".to_string()),
+            "Expected symbols to contain 'ErrorKind', got: {:?}",
+            symbols
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // XC-03: cross_crate_skips_external
+    // -----------------------------------------------------------------------
+    #[test]
+    fn xc_03_cross_crate_skips_external() {
+        // Given: source with `use std::collections::HashMap` and crate_names=["clap"]
+        let source = "use std::collections::HashMap;\n";
+        let crate_names = ["clap"];
+
+        // When: extract_import_specifiers_with_crate_names
+        let result = extract_import_specifiers_with_crate_names(source, &crate_names);
+
+        // Then: empty (std is not in crate_names)
+        assert!(
+            result.is_empty(),
+            "Expected empty result for std:: import not in crate_names, got: {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // XC-04: cross_crate_crate_prefix_still_works
+    // -----------------------------------------------------------------------
+    #[test]
+    fn xc_04_cross_crate_crate_prefix_still_works() {
+        // Given: source with `use crate::utils` and crate_names=["clap"]
+        let source = "use crate::utils;\n";
+        let crate_names = ["clap"];
+
+        // When: extract_import_specifiers_with_crate_names
+        let result = extract_import_specifiers_with_crate_names(source, &crate_names);
+
+        // Then: returns entry with matched_crate_name="crate", specifier="utils", symbols=[]
+        // (existing behavior for `use crate::` is preserved)
+        assert!(
+            !result.is_empty(),
+            "Expected at least one import entry for `use crate::utils`, got empty"
+        );
+        let entry = result
+            .iter()
+            .find(|(crate_n, spec, _)| crate_n == "crate" && spec == "utils");
+        assert!(
+            entry.is_some(),
+            "Expected entry (crate, utils, []), got: {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // XC-05: cross_crate_root_test_maps_to_root_src
+    // -----------------------------------------------------------------------
+    #[test]
+    fn xc_05_cross_crate_root_test_maps_to_root_src() {
+        // Given: mini workspace:
+        //   Cargo.toml (workspace root + [package] name="my_crate")
+        //   src/builder.rs
+        //   tests/test_builder.rs with `use my_crate::builder::Command;`
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        let tests_dir = tmp.path().join("tests");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my_crate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let builder_rs = src_dir.join("builder.rs");
+        std::fs::write(&builder_rs, "pub struct Command;\n").unwrap();
+
+        let test_builder_rs = tests_dir.join("test_builder.rs");
+        let test_source = "use my_crate::builder::Command;\n\n#[test]\nfn test_builder() {}\n";
+        std::fs::write(&test_builder_rs, test_source).unwrap();
+
+        let extractor = RustExtractor::new();
+        let prod_path = builder_rs.to_string_lossy().into_owned();
+        let test_path = test_builder_rs.to_string_lossy().into_owned();
+        let production_files = vec![prod_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_source.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports (cross-crate L2 resolution)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
+
+        // Then: test_builder.rs maps to src/builder.rs via L2 cross-crate
+        let mapping = result.iter().find(|m| m.production_file == prod_path);
+        assert!(mapping.is_some(), "No mapping found for src/builder.rs");
+        assert!(
+            mapping.unwrap().test_files.contains(&test_path),
+            "Expected test_builder.rs to map to builder.rs via cross-crate L2, got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // XC-06: cross_crate_root_test_maps_to_member
+    // -----------------------------------------------------------------------
+    #[test]
+    fn xc_06_cross_crate_root_test_maps_to_member() {
+        // Given: mini workspace:
+        //   Cargo.toml (workspace root, no [package])
+        //   member_a/Cargo.toml ([package] name="member_a")
+        //   member_a/src/builder.rs: pub struct Cmd;
+        //   tests/test_builder.rs with `use member_a::builder::Cmd;`
+        //   (tests/ is owned by root, not member_a)
+        let tmp = tempfile::tempdir().unwrap();
+        let member_dir = tmp.path().join("member_a");
+        let member_src = member_dir.join("src");
+        let tests_dir = tmp.path().join("tests");
+        std::fs::create_dir_all(&member_src).unwrap();
+        std::fs::create_dir_all(&tests_dir).unwrap();
+
+        // Workspace root Cargo.toml (no [package], only [workspace])
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member_a\"]\n",
+        )
+        .unwrap();
+
+        // Member Cargo.toml
+        std::fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"member_a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let builder_rs = member_src.join("builder.rs");
+        std::fs::write(&builder_rs, "pub struct Cmd;\n").unwrap();
+
+        let test_builder_rs = tests_dir.join("test_builder.rs");
+        let test_source = "use member_a::builder::Cmd;\n\n#[test]\nfn test_builder() {}\n";
+        std::fs::write(&test_builder_rs, test_source).unwrap();
+
+        let extractor = RustExtractor::new();
+        let prod_path = builder_rs.to_string_lossy().into_owned();
+        let test_path = test_builder_rs.to_string_lossy().into_owned();
+        let production_files = vec![prod_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_source.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports (cross-crate L2: root test -> member src)
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
+
+        // Then: test_builder.rs (root test) maps to member_a/src/builder.rs via cross-crate L2
+        let mapping = result.iter().find(|m| m.production_file == prod_path);
+        assert!(
+            mapping.is_some(),
+            "No mapping found for member_a/src/builder.rs"
+        );
+        assert!(
+            mapping.unwrap().test_files.contains(&test_path),
+            "Expected root test_builder.rs to map to member_a/src/builder.rs via cross-crate L2, got: {:?}",
+            mapping.unwrap().test_files
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // XC-07: cross_crate_member_test_not_affected
+    //
+    // A member-owned test (member_a/tests/test.rs) is resolved by per-member L2
+    // (using member_a's crate name), NOT by cross-crate fallback from root.
+    // The test verifies that per-member L2 continues to work correctly after
+    // cross-crate fallback is introduced.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn xc_07_cross_crate_member_test_not_affected() {
+        // Given: mini workspace:
+        //   Cargo.toml (workspace root, no [package])
+        //   member_a/Cargo.toml ([package] name="member_a")
+        //   member_a/src/engine.rs: pub struct Engine;
+        //   member_a/tests/test_engine.rs with `use member_a::engine::Engine;`
+        //   (this test is member-owned, not a root integration test)
+        let tmp = tempfile::tempdir().unwrap();
+        let member_dir = tmp.path().join("member_a");
+        let member_src = member_dir.join("src");
+        let member_tests = member_dir.join("tests");
+        std::fs::create_dir_all(&member_src).unwrap();
+        std::fs::create_dir_all(&member_tests).unwrap();
+
+        // Workspace root Cargo.toml (no [package])
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member_a\"]\n",
+        )
+        .unwrap();
+
+        // Member Cargo.toml
+        std::fs::write(
+            member_dir.join("Cargo.toml"),
+            "[package]\nname = \"member_a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let engine_rs = member_src.join("engine.rs");
+        std::fs::write(&engine_rs, "pub struct Engine;\n").unwrap();
+
+        let test_rs = member_tests.join("test_engine.rs");
+        let test_source = "use member_a::engine::Engine;\n\n#[test]\nfn test_engine() {}\n";
+        std::fs::write(&test_rs, test_source).unwrap();
+
+        let extractor = RustExtractor::new();
+        let prod_path = engine_rs.to_string_lossy().into_owned();
+        let test_path = test_rs.to_string_lossy().into_owned();
+        let production_files = vec![prod_path.clone()];
+        let test_sources: HashMap<String, String> = [(test_path.clone(), test_source.to_string())]
+            .into_iter()
+            .collect();
+
+        // When: map_test_files_with_imports
+        // member_a/tests/test_engine.rs is a member-owned test; handled by per-member L2
+        let result = extractor.map_test_files_with_imports(
+            &production_files,
+            &test_sources,
+            tmp.path(),
+            false,
+        );
+
+        // Then: the member-owned test maps correctly via per-member L2
+        // (cross-crate fallback is NOT applied to this test because it is member-owned,
+        //  but normal per-member L2 must still resolve it)
+        let mapping = result.iter().find(|m| m.production_file == prod_path);
+        assert!(
+            mapping.is_some(),
+            "No mapping found for member_a/src/engine.rs"
+        );
+        assert!(
+            mapping.unwrap().test_files.contains(&test_path),
+            "Expected member_a/tests/test_engine.rs to map to member_a/src/engine.rs via per-member L2, got: {:?}",
+            mapping.unwrap().test_files
         );
     }
 }
