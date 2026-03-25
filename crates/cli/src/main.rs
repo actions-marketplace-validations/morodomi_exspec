@@ -85,7 +85,7 @@ pub struct ObserveArgs {
     #[arg(long)]
     pub l1_exclusive: bool,
 
-    /// Disable fan-out filter (show all mappings including high-frequency utility classes)
+    /// Disable both fan-out filters: forward (prod→test) and reverse (test→prod)
     #[arg(long)]
     pub no_fan_out_filter: bool,
 }
@@ -382,6 +382,7 @@ fn run_observe_common(
             test_files.len(),
             config.max_fan_out_percent,
         );
+        apply_reverse_fan_out_filter(&mut file_mappings, config.max_reverse_fan_out);
     }
     let route_entries = route_fn(production_files);
 
@@ -722,6 +723,47 @@ fn apply_fan_out_filter(
                 test_stem.contains(&prod_class)
             });
         }
+    }
+}
+
+fn apply_reverse_fan_out_filter(
+    file_mappings: &mut [exspec_core::observe::FileMapping],
+    max_reverse_fan_out: usize,
+) {
+    // Step 1: Build reverse index (test_file -> count of prod files it maps to)
+    let mut test_prod_count: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for mapping in file_mappings.iter() {
+        for test_file in &mapping.test_files {
+            *test_prod_count.entry(test_file.clone()).or_insert(0) += 1;
+        }
+    }
+
+    // Step 2: Collect tests exceeding threshold
+    let high_fan_in_tests: std::collections::HashSet<String> = test_prod_count
+        .into_iter()
+        .filter(|(_, count)| *count > max_reverse_fan_out)
+        .map(|(test, _)| test)
+        .collect();
+
+    if high_fan_in_tests.is_empty() {
+        return;
+    }
+
+    // Step 3: For high fan-in tests, retain only name-matching mappings
+    for mapping in file_mappings.iter_mut() {
+        let prod_stem = extract_class_name(&mapping.production_file).to_lowercase();
+        mapping.test_files.retain(|test_file| {
+            if !high_fan_in_tests.contains(test_file) {
+                return true; // Not a high fan-in test, keep
+            }
+            // Name-match check (guard against empty stems)
+            let test_stem = extract_class_name(test_file).to_lowercase();
+            if prod_stem.is_empty() || test_stem.is_empty() {
+                return false;
+            }
+            test_stem.contains(&prod_stem) || prod_stem.contains(&test_stem)
+        });
     }
 }
 
@@ -2484,6 +2526,256 @@ test('GET returns array', async () => {
             3,
             "expected all tests to be preserved when filter is disabled"
         );
+    }
+
+    // --- apply_reverse_fan_out_filter ---
+
+    // RF-01: reverse_fan_out_removes_high_fan_in_test
+    #[test]
+    fn reverse_fan_out_removes_high_fan_in_test() {
+        // Given: test "tests/io_driver.rs" mapped to 10 production files (> threshold 5)
+        let prod_files = vec![
+            "src/runtime/builder.rs",
+            "src/runtime/context.rs",
+            "src/runtime/driver.rs",
+            "src/runtime/dump.rs",
+            "src/runtime/handle.rs",
+            "src/runtime/id.rs",
+            "src/runtime/park.rs",
+            "src/runtime/mod.rs",
+            "src/runtime/task/raw.rs",
+            "src/runtime/task/join.rs",
+        ];
+        let mut mappings: Vec<exspec_core::observe::FileMapping> = prod_files
+            .iter()
+            .map(|prod| exspec_core::observe::FileMapping {
+                production_file: prod.to_string(),
+                test_files: vec!["tests/io_driver.rs".to_string()],
+                strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+            })
+            .collect();
+        // When: apply_reverse_fan_out_filter with threshold=5
+        apply_reverse_fan_out_filter(&mut mappings, 5);
+        // Then: only "src/runtime/driver.rs" retains "tests/io_driver.rs"
+        //       (prod stem "driver" is contained in test stem "io_driver")
+        for mapping in &mappings {
+            let prod_stem = extract_class_name(&mapping.production_file).to_lowercase();
+            if prod_stem == "driver" {
+                assert!(
+                    mapping
+                        .test_files
+                        .contains(&"tests/io_driver.rs".to_string()),
+                    "driver.rs should retain io_driver.rs (name-match)"
+                );
+            } else {
+                assert!(
+                    !mapping
+                        .test_files
+                        .contains(&"tests/io_driver.rs".to_string()),
+                    "non-matched prod {} should not retain io_driver.rs",
+                    mapping.production_file
+                );
+            }
+        }
+    }
+
+    // RF-02: reverse_fan_out_keeps_low_fan_in
+    #[test]
+    fn reverse_fan_out_keeps_low_fan_in() {
+        // Given: test "tests/udp.rs" mapped to 3 production files (< threshold 5)
+        let mut mappings = vec![
+            exspec_core::observe::FileMapping {
+                production_file: "src/net/udp.rs".to_string(),
+                test_files: vec!["tests/udp.rs".to_string()],
+                strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+            },
+            exspec_core::observe::FileMapping {
+                production_file: "src/net/lookup.rs".to_string(),
+                test_files: vec!["tests/udp.rs".to_string()],
+                strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+            },
+            exspec_core::observe::FileMapping {
+                production_file: "src/net/addr.rs".to_string(),
+                test_files: vec!["tests/udp.rs".to_string()],
+                strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+            },
+        ];
+        // When: apply_reverse_fan_out_filter with threshold=5
+        apply_reverse_fan_out_filter(&mut mappings, 5);
+        // Then: all 3 mappings still retain "tests/udp.rs"
+        for mapping in &mappings {
+            assert!(
+                mapping.test_files.contains(&"tests/udp.rs".to_string()),
+                "all prods should retain udp.rs when fan-in < threshold"
+            );
+        }
+    }
+
+    // RF-03: reverse_fan_out_l1_match_preserved
+    #[test]
+    fn reverse_fan_out_l1_match_preserved() {
+        // Given: test "tests/fs_write.rs" mapped to 8 production files including fs/write.rs
+        let prod_files = vec![
+            "src/fs/write.rs",
+            "src/fs/copy.rs",
+            "src/fs/read.rs",
+            "src/fs/metadata.rs",
+            "src/fs/rename.rs",
+            "src/fs/remove_file.rs",
+            "src/fs/create_dir.rs",
+            "src/fs/canonicalize.rs",
+        ];
+        let mut mappings: Vec<exspec_core::observe::FileMapping> = prod_files
+            .iter()
+            .map(|prod| exspec_core::observe::FileMapping {
+                production_file: prod.to_string(),
+                test_files: vec!["tests/fs_write.rs".to_string()],
+                strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+            })
+            .collect();
+        // When: apply_reverse_fan_out_filter with threshold=5
+        apply_reverse_fan_out_filter(&mut mappings, 5);
+        // Then: only write.rs keeps fs_write.rs (stem "write" is contained in "fs_write")
+        for mapping in &mappings {
+            let prod_stem = extract_class_name(&mapping.production_file).to_lowercase();
+            if prod_stem == "write" {
+                assert!(
+                    mapping
+                        .test_files
+                        .contains(&"tests/fs_write.rs".to_string()),
+                    "write.rs should retain fs_write.rs (name-match)"
+                );
+            } else {
+                assert!(
+                    !mapping
+                        .test_files
+                        .contains(&"tests/fs_write.rs".to_string()),
+                    "non-matched prod {} should not retain fs_write.rs",
+                    mapping.production_file
+                );
+            }
+        }
+    }
+
+    // RF-04: reverse_fan_out_exact_threshold_keeps_all
+    #[test]
+    fn reverse_fan_out_exact_threshold_keeps_all() {
+        // Given: test "tests/timer.rs" mapped to exactly 5 production files, threshold=5
+        let prod_files = vec![
+            "src/time/timer.rs",
+            "src/time/wheel.rs",
+            "src/time/entry.rs",
+            "src/time/handle.rs",
+            "src/time/driver.rs",
+        ];
+        let mut mappings: Vec<exspec_core::observe::FileMapping> = prod_files
+            .iter()
+            .map(|prod| exspec_core::observe::FileMapping {
+                production_file: prod.to_string(),
+                test_files: vec!["tests/timer.rs".to_string()],
+                strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+            })
+            .collect();
+        // When: apply_reverse_fan_out_filter with threshold=5
+        apply_reverse_fan_out_filter(&mut mappings, 5);
+        // Then: all 5 retained (strictly greater than threshold)
+        for mapping in &mappings {
+            assert!(
+                mapping.test_files.contains(&"tests/timer.rs".to_string()),
+                "all prods should be retained when fan-in equals threshold (not strictly greater)"
+            );
+        }
+    }
+
+    // RF-05: reverse_fan_out_empty_mappings
+    #[test]
+    fn reverse_fan_out_empty_mappings() {
+        // Given: empty mappings
+        let mut mappings: Vec<exspec_core::observe::FileMapping> = vec![];
+        // When: apply_reverse_fan_out_filter
+        apply_reverse_fan_out_filter(&mut mappings, 5);
+        // Then: no panic
+        assert!(mappings.is_empty());
+    }
+
+    // RF-06: reverse_fan_out_custom_threshold
+    #[test]
+    fn reverse_fan_out_custom_threshold() {
+        // Given: test "tests/spawn.rs" mapped to 8 production files, threshold=10
+        let prod_files = vec![
+            "src/task/spawn.rs",
+            "src/task/local.rs",
+            "src/task/blocking.rs",
+            "src/task/builder.rs",
+            "src/task/abort.rs",
+            "src/task/join_set.rs",
+            "src/task/yield_now.rs",
+            "src/task/unconstrained.rs",
+        ];
+        let mut mappings: Vec<exspec_core::observe::FileMapping> = prod_files
+            .iter()
+            .map(|prod| exspec_core::observe::FileMapping {
+                production_file: prod.to_string(),
+                test_files: vec!["tests/spawn.rs".to_string()],
+                strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+            })
+            .collect();
+        // When: apply_reverse_fan_out_filter with threshold=10
+        apply_reverse_fan_out_filter(&mut mappings, 10);
+        // Then: all 8 retained (8 < threshold 10)
+        for mapping in &mappings {
+            assert!(
+                mapping.test_files.contains(&"tests/spawn.rs".to_string()),
+                "all prods should be retained when fan-in < custom threshold"
+            );
+        }
+    }
+
+    // RF-07: reverse_fan_out_prod_stem_contains_test_stem
+    #[test]
+    fn reverse_fan_out_prod_stem_contains_test_stem() {
+        // Given: test "tests/broadcast.rs" mapped to 8 production files including "src/sync/broadcast.rs"
+        let prod_files = vec![
+            "src/sync/broadcast.rs",
+            "src/sync/mutex.rs",
+            "src/sync/rwlock.rs",
+            "src/sync/semaphore.rs",
+            "src/sync/oneshot.rs",
+            "src/sync/watch.rs",
+            "src/sync/barrier.rs",
+            "src/sync/notify.rs",
+        ];
+        let mut mappings: Vec<exspec_core::observe::FileMapping> = prod_files
+            .iter()
+            .map(|prod| exspec_core::observe::FileMapping {
+                production_file: prod.to_string(),
+                test_files: vec!["tests/broadcast.rs".to_string()],
+                strategy: exspec_core::observe::MappingStrategy::ImportTracing,
+            })
+            .collect();
+        // When: apply_reverse_fan_out_filter with threshold=5
+        apply_reverse_fan_out_filter(&mut mappings, 5);
+        // Then: broadcast.rs is kept (prod stem "broadcast" matches test stem "broadcast")
+        //       all others have tests/broadcast.rs removed
+        for mapping in &mappings {
+            let prod_stem = extract_class_name(&mapping.production_file).to_lowercase();
+            if prod_stem == "broadcast" {
+                assert!(
+                    mapping
+                        .test_files
+                        .contains(&"tests/broadcast.rs".to_string()),
+                    "broadcast.rs should retain broadcast.rs (name-match)"
+                );
+            } else {
+                assert!(
+                    !mapping
+                        .test_files
+                        .contains(&"tests/broadcast.rs".to_string()),
+                    "non-matched prod {} should not retain broadcast.rs",
+                    mapping.production_file
+                );
+            }
+        }
     }
 
     // --- extract_class_name ---
