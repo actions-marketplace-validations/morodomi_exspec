@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-v0.4.5-dev. Rust P=100% (GT, post-#183 + GT re-audit). PHP precision FAIL (P=96.0%).
+v0.4.5-dev. Rust P=100%, R=50.8% (post-#185 L1.5 matching). PHP precision FAIL (P=96.0%).
 
-observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: **P=100%** (52-file GT), R=33.9% (GT sample) (experimental, P PASS R FAIL. reverse fan-out filter + GT secondary adjustment). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
+observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: **P=100%**, R=50.8% (52-file GT) (experimental, P PASS R FAIL. reverse fan-out filter + L1.5 underscore-path matching). PHP: P~100%, R=85.1% (experimental, P PASS R FAIL. fan-out+name-match filter). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
 ## Progress
 
@@ -47,20 +47,22 @@ observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). R
 | GT re-audit - Rust observe stratified 53-file audit | **DONE** |
 | #183 - Reverse fan-out filter for barrel import precision | **DONE** |
 | GT update - secondary targets + io_driver scope exclusion | **DONE** |
+| #185 - L1.5 underscore-to-path stem matching | **DONE** |
 
-### Post-#183 + GT Update: Rust Observe P=100% (2026-03-25)
+### Post-#185: Rust Observe P=100%, R=50.8% (2026-03-25)
 
-| Metric | Pre-#183 (GT) | Post-#183 | Post-GT-update | Target |
-|--------|--------------|-----------|----------------|--------|
-| Precision | 23.3% | 76.9% | **100%** | >= 98% |
-| FP count | 66 | 6 | **0** | 0 |
-| Recall (GT sample) | 33.3% | 33.3% | **33.9%** | >= 90% |
+| Metric | Pre-#183 | Post-#183 | Post-#184 | Post-#185 | Target |
+|--------|----------|-----------|-----------|-----------|--------|
+| Precision | 23.3% | 76.9% | 100% | **100%** | >= 98% |
+| FP count | 66 | 6 | 0 | **0** | 0 |
+| Recall (GT) | 33.3% | 33.3% | 33.9% | **50.8%** | >= 90% |
+| TP count | 20 | 20 | 20 | **30** | - |
 
-**Reverse fan-out filter (#183)**: `apply_reverse_fan_out_filter()` reduced FP from 66→6 by filtering barrel import fan-out (per-test prod count > 5 → name-match only).
+**#183 reverse fan-out filter**: FP 66→6 (barrel import fan-out suppression).
+**#184 GT update**: FP 6→0 (secondary targets + io_driver scope exclusion).
+**#185 L1.5 matching**: TP 20→30, R 33.9%→50.8% (underscore→path stem matching, e.g., sync_broadcast→sync/broadcast.rs).
 
-**GT update**: udp.rs + io_read_buf.rs secondary targets corrected (4 FP → ignored). io_driver.rs removed from GT scope (observe cannot map: barrel → 40 prods, reverse filter → 2 prods, but true target poll_evented.rs has no import/name path).
-
-**P PASS. R still FAIL.** Next: improve recall (barrel import FN, inline src/ tests, cross-crate).
+**P PASS. R FAIL (50.8% < 90%).** Remaining FN: barrel import via `tokio::` (~6), inline src/tests/ (5), cross-crate (4), no use statement (4), other (~10).
 
 ### Rust Observe Stratified GT Re-audit (2026-03-25)
 
