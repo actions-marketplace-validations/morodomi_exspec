@@ -68,6 +68,18 @@ pub struct LintArgs {
 pub enum Commands {
     /// Test-to-code mapping report
     Observe(ObserveArgs),
+    /// Initialize .exspec.toml with auto-detected settings
+    Init(InitArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct InitArgs {
+    #[arg(default_value = ".")]
+    pub path: String,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Args, Debug)]
@@ -287,6 +299,9 @@ fn main() {
 
     match cli.command {
         Some(Commands::Observe(args)) => run_observe(args),
+        Some(Commands::Init(args)) => {
+            init::run_init(std::path::Path::new(&args.path), args.dry_run, args.force);
+        }
         None => run_lint(cli.lint_args),
     }
 }
