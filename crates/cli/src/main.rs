@@ -377,11 +377,43 @@ fn route_path_to_regex(path: &str) -> Option<regex::Regex> {
                 pattern.push_str(&regex::escape(&path[i..]));
                 break;
             }
+        } else if bytes[i] == b'<' {
+            // Angle-bracket parameter: <word> → [^/]+
+            if let Some(end) = path[i..].find('>') {
+                pattern.push_str("[^/]+");
+                i += end + 1;
+            } else {
+                // Malformed: treat the rest as literal
+                pattern.push_str(&regex::escape(&path[i..]));
+                break;
+            }
+        } else if bytes[i] == b'/' && i + 1 < len && bytes[i + 1] == b':' {
+            // Colon-prefix parameter: /:word → /[^/]+
+            pattern.push('/');
+            i += 2; // skip '/' and ':'
+            let start = i;
+            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            if i > start {
+                pattern.push_str("[^/]+");
+            } else {
+                // ':' not followed by identifier chars; treat as literal
+                pattern.push(':');
+            }
         } else {
-            // Find the next '{' and escape the static segment before it
-            let next = path[i..].find('{').map(|p| i + p).unwrap_or(len);
-            pattern.push_str(&regex::escape(&path[i..next]));
-            i = next;
+            // Find the next special character '{', '<', or '/' and escape the static segment.
+            // '/' needs to be a boundary because /:word must be detected at the slash.
+            // However, when the current position IS '/' (not followed by ':'), we must
+            // advance at least one byte to avoid an infinite loop.
+            let next = path[i..]
+                .find(['{', '<', '/'])
+                .map(|p| i + p)
+                .unwrap_or(len);
+            // If next == i, the current char is '/' but not followed by ':', so consume it.
+            let end = if next == i { i + 1 } else { next };
+            pattern.push_str(&regex::escape(&path[i..end]));
+            i = end;
         }
     }
     // Allow an optional query string after the path (e.g. '/connect?token=abc').
@@ -3616,6 +3648,58 @@ log('# /headers endpoint')
         assert!(
             has_url_match(source, &regex),
             "has_url_match should match '/connect' without query parameter"
+        );
+    }
+
+    // TC-10: angle-bracket + colon mixed path "/<dynamic>/:bookingUid" matches "/v2/abc123"
+    #[test]
+    fn url_match_tc10_angle_bracket_and_colon_param_regex_matches_concrete_path() {
+        // Given: path "/<dynamic>/:bookingUid" with angle-bracket and colon style parameters
+        // When: route_path_to_regex converts both <dynamic> and :bookingUid to [^/]+
+        // Then: the regex matches "/v2/abc123"
+        let regex = route_path_to_regex("/<dynamic>/:bookingUid").expect("should compile");
+        assert!(
+            regex.is_match("/v2/abc123"),
+            "should match '/v2/abc123' for path '/<dynamic>/:bookingUid'"
+        );
+    }
+
+    // TC-11: colon-style path "/:id/profile" matches "/42/profile"
+    #[test]
+    fn url_match_tc11_colon_param_regex_matches_concrete_path() {
+        // Given: path "/:id/profile" with colon-style parameter
+        // When: route_path_to_regex converts :id to [^/]+
+        // Then: the regex matches "/42/profile"
+        let regex = route_path_to_regex("/:id/profile").expect("should compile");
+        assert!(
+            regex.is_match("/42/profile"),
+            "should match '/42/profile' for path '/:id/profile'"
+        );
+    }
+
+    // TC-12: angle-bracket path "/<dynamic>" matches "/v2"
+    #[test]
+    fn url_match_tc12_angle_bracket_param_regex_matches_concrete_segment() {
+        // Given: path "/<dynamic>" with angle-bracket style parameter
+        // When: route_path_to_regex converts <dynamic> to [^/]+
+        // Then: the regex matches "/v2"
+        let regex = route_path_to_regex("/<dynamic>").expect("should compile");
+        assert!(
+            regex.is_match("/v2"),
+            "should match '/v2' for path '/<dynamic>'"
+        );
+    }
+
+    // TC-13: brace-style path "/users/{id}" still matches "/users/42" (regression)
+    #[test]
+    fn url_match_tc13_brace_param_regression_still_matches() {
+        // Given: path "/users/{id}" with existing brace-style parameter
+        // When: route_path_to_regex converts {id} to [^/]+
+        // Then: the regex matches "/users/42" (regression guard)
+        let regex = route_path_to_regex("/users/{id}").expect("should compile");
+        assert!(
+            regex.is_match("/users/42"),
+            "should match '/users/42' for path '/users/{{id}}'"
         );
     }
 
