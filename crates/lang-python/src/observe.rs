@@ -2987,6 +2987,12 @@ pub fn extract_routes(source: &str, file_path: &str) -> Vec<Route> {
     let mut routes = Vec::new();
     let mut seen = HashSet::new();
 
+    // Pre-compile the colon-to-brace regex for Flask parameter normalization.
+    // Placed here (outside the match loop) to satisfy clippy::regex_creation_in_loops.
+    static COLON_PARAM_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let colon_param_re =
+        COLON_PARAM_RE.get_or_init(|| regex::Regex::new(r":(\w+)").expect("invalid regex"));
+
     while let Some(m) = matches.next() {
         let mut obj: Option<String> = None;
         let mut method: Option<String> = None;
@@ -3027,11 +3033,19 @@ pub fn extract_routes(source: &str, file_path: &str) -> Vec<Route> {
 
             // Resolve prefix from router variable (Blueprint url_prefix)
             let prefix = router_prefixes.get(&obj).map(|s| s.as_str()).unwrap_or("");
-            let full_path = if prefix.is_empty() {
+            let raw_full_path = if prefix.is_empty() {
                 sub_path
             } else {
                 format!("{prefix}{sub_path}")
             };
+
+            // Normalize Flask `<type:param>` / `<param>` syntax to `{param}` style.
+            // Step 1: `normalize_django_path` converts `<int:id>` → `:id` and `<id>` → `:id`.
+            // Step 2: convert `:param` segments → `{param}` (matches route_path_to_regex expectations).
+            let colon_normalized = normalize_django_path(&raw_full_path);
+            let full_path = colon_param_re
+                .replace_all(&colon_normalized, "{$1}")
+                .into_owned();
 
             // Extract `methods` keyword argument from the decorator call's argument_list.
             // path_node.parent() is the argument_list node.
@@ -3460,6 +3474,81 @@ def data_func():
             assert_eq!(r.path, "/data");
             assert_eq!(r.handler_name, "data_func");
         }
+    }
+
+    // FL-RT-05: @app.route('/users/<int:id>') → path = "/users/{id}"
+    #[test]
+    fn fl_rt_05_route_with_int_type_param_normalized_to_brace_style() {
+        // Given: Flask app route with typed parameter `<int:id>`
+        let source = r#"
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/users/<int:id>')
+def get_user(id):
+    return {}
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: path is normalized to "/users/{id}" (braces, type prefix stripped)
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(
+            routes[0].path, "/users/{id}",
+            "Flask <int:id> should be normalized to {{id}}"
+        );
+    }
+
+    // FL-RT-06: @app.route('/files/<path:filepath>') → path = "/files/{filepath}"
+    #[test]
+    fn fl_rt_06_route_with_path_type_param_normalized_to_brace_style() {
+        // Given: Flask app route with path-type parameter `<path:filepath>`
+        let source = r#"
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/files/<path:filepath>')
+def serve_file(filepath):
+    return {}
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: path is normalized to "/files/{filepath}"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(
+            routes[0].path, "/files/{filepath}",
+            "Flask <path:filepath> should be normalized to {{filepath}}"
+        );
+    }
+
+    // FL-RT-07: @app.route('/api/<anything>') (no type prefix) → path = "/api/{anything}"
+    #[test]
+    fn fl_rt_07_route_with_untyped_param_normalized_to_brace_style() {
+        // Given: Flask app route with untyped parameter `<anything>`
+        let source = r#"
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/api/<anything>')
+def catch_all(anything):
+    return {}
+"#;
+
+        // When: extract_routes(source, "main.py")
+        let routes = extract_routes(source, "main.py");
+
+        // Then: path is normalized to "/api/{anything}"
+        assert_eq!(routes.len(), 1, "expected 1 route, got {:?}", routes);
+        assert_eq!(
+            routes[0].path, "/api/{anything}",
+            "Flask <anything> (untyped) should be normalized to {{anything}}"
+        );
     }
 }
 

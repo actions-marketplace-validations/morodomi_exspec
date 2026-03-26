@@ -394,36 +394,110 @@ fn route_path_to_regex(path: &str) -> Option<regex::Regex> {
     regex::Regex::new(&pattern).ok()
 }
 
-/// Return `true` if any quoted string literal in `source` matches `path_regex`.
+/// Return `true` if any quoted string literal in `source` contains a path that
+/// matches `path_regex`.
 ///
 /// Scans for single- or double-quoted string tokens and tests each extracted
-/// value against the regex. No tree-sitter parsing is needed; simple scanning
-/// is sufficient for HTTP client call patterns like `'/csrf-token'`.
+/// value against the regex.  Additionally, each `/`-prefixed substring within
+/// a token is also tested, so that a URL embedded inside a larger string
+/// literal (e.g. `"# this isn't a comment /headers"`) can still be matched.
+///
+/// Line-comment stripping: before scanning quotes, each line has its comment
+/// suffix removed.  Python `#` and C-style `//` are treated as comment markers
+/// only when they appear *outside* a string literal on that line.
 fn has_url_match(source: &str, path_regex: &regex::Regex) -> bool {
-    let chars: Vec<char> = source.chars().collect();
+    for line in source.lines() {
+        let stripped = strip_line_comment(line);
+        let chars: Vec<char> = stripped.chars().collect();
+        let len = chars.len();
+        let mut i = 0;
+        while i < len {
+            let quote = chars[i];
+            if quote == '\'' || quote == '"' {
+                // Collect characters until the matching closing quote (no escape handling needed
+                // for path literals).
+                let mut j = i + 1;
+                while j < len && chars[j] != quote {
+                    j += 1;
+                }
+                if j < len {
+                    let token: String = chars[i + 1..j].iter().collect();
+                    if token_matches_path_regex(&token, path_regex) {
+                        return true;
+                    }
+                    i = j + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Test whether a quoted-string `token` matches the given path regex.
+///
+/// First tests the token as a whole.  If that fails, also tests each
+/// `/`-prefixed substring so that a URL path embedded within a larger string
+/// literal (e.g. `"# this isn't a comment /headers"`) is still detectable.
+fn token_matches_path_regex(token: &str, path_regex: &regex::Regex) -> bool {
+    if path_regex.is_match(token) {
+        return true;
+    }
+    // Also try every slash-prefixed slice within the token.
+    let mut start = 0;
+    while let Some(rel) = token[start..].find('/') {
+        let abs = start + rel;
+        let candidate = &token[abs..];
+        // Take the longest prefix that looks like a URL path segment
+        // (up to the first whitespace, quote, or closing bracket).
+        let end = candidate
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ')')
+            .unwrap_or(candidate.len());
+        if path_regex.is_match(&candidate[..end]) {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
+}
+
+/// Strip the comment suffix from a single line, respecting string literals.
+///
+/// Scans left-to-right; when inside a quoted string, `#` and `//` are NOT
+/// treated as comment markers. Outside strings, the first `#` or `//`
+/// encountered truncates the line at that position.
+fn strip_line_comment(line: &str) -> &str {
+    let chars: Vec<char> = line.chars().collect();
     let len = chars.len();
     let mut i = 0;
     while i < len {
-        let quote = chars[i];
-        if quote == '\'' || quote == '"' {
-            // Collect characters until the matching closing quote (no escape handling needed
-            // for path literals).
-            let mut j = i + 1;
-            while j < len && chars[j] != quote {
-                j += 1;
+        let c = chars[i];
+        // Enter a quoted string — skip until the matching closing quote.
+        if c == '\'' || c == '"' {
+            let quote = c;
+            i += 1;
+            while i < len && chars[i] != quote {
+                i += 1;
             }
-            if j < len {
-                let token: String = chars[i + 1..j].iter().collect();
-                if path_regex.is_match(&token) {
-                    return true;
-                }
-                i = j + 1;
-                continue;
+            // skip the closing quote (if found)
+            if i < len {
+                i += 1;
             }
+            continue;
+        }
+        // Python-style `#` comment or C-style `//` comment
+        if c == '#' || (c == '/' && i + 1 < len && chars[i + 1] == '/') {
+            let byte_offset: usize = line
+                .char_indices()
+                .nth(i)
+                .map(|(b, _)| b)
+                .unwrap_or(line.len());
+            return &line[..byte_offset];
         }
         i += 1;
     }
-    false
+    line
 }
 
 /// Common observe pipeline: discover files → read test sources → map → report → output.
@@ -3434,6 +3508,85 @@ def test_verify_auth(client):
         assert!(
             has_url_match(source, &regex),
             "has_url_match should return true for Python source containing '/api/auth/verify'"
+        );
+    }
+
+    // TC-05-unit: Python source with `# can't find` comment + '/headers' string → has_url_match returns true
+    #[test]
+    fn url_match_tc05_has_url_match_python_comment_with_apostrophe_does_not_break_scan() {
+        // Given: Python source where a line-comment contains an apostrophe (`# can't find`)
+        //        and a subsequent line contains the string literal '/headers'
+        // When: has_url_match is called with the regex for "^/headers$"
+        // Then: returns true (comment must not corrupt the quote-scanner)
+        let source = r#"
+# can't find the headers endpoint
+def test_headers(client):
+    response = client.get('/headers')
+    assert response.status_code == 200
+"#;
+        let regex = regex::Regex::new(r"^/headers$").expect("should compile");
+        assert!(
+            has_url_match(source, &regex),
+            "has_url_match should return true: '/headers' exists after a Python comment with apostrophe"
+        );
+    }
+
+    // TC-06-unit: PHP source with `// don't do this` comment + '/csrf-token' string → has_url_match returns true
+    #[test]
+    fn url_match_tc06_has_url_match_php_line_comment_with_apostrophe_does_not_break_scan() {
+        // Given: PHP source where a line-comment contains an apostrophe (`// don't do this`)
+        //        and a subsequent line contains the string literal '/csrf-token'
+        // When: has_url_match is called with the regex for "^/csrf\-token$"
+        // Then: returns true (// comment must not corrupt the quote-scanner)
+        let source = r#"
+// don't do this
+class CsrfTokenTest extends TestCase {
+    public function test_csrf_token(): void {
+        $response = $this->get('/csrf-token');
+        $response->assertStatus(200);
+    }
+}
+"#;
+        let regex = regex::Regex::new(r"^/csrf\-token$").expect("should compile");
+        assert!(
+            has_url_match(source, &regex),
+            "has_url_match should return true: '/csrf-token' exists after PHP // comment with apostrophe"
+        );
+    }
+
+    // TC-07a-unit: `#` inside double-quoted string is NOT treated as comment → URL still matched
+    #[test]
+    fn url_match_tc07a_has_url_match_hash_in_double_quoted_string_is_not_comment() {
+        // Given: source containing `log("# this isn't a comment /headers")`
+        //        where `#` appears inside a double-quoted string literal (not a comment)
+        //        and the string also contains the path `/headers`
+        // When: has_url_match is called with the regex for "^/headers$"
+        // Then: returns true (# inside string literal must not trigger comment stripping)
+        // Note: raw string literal uses r##"..."## to allow `'` inside without Rust prefix conflict
+        let source = r##"
+log("# this isn't a comment /headers")
+"##;
+        let regex = regex::Regex::new(r"^/headers$").expect("should compile");
+        assert!(
+            has_url_match(source, &regex),
+            "has_url_match should return true: '/headers' is inside a double-quoted string, not a comment"
+        );
+    }
+
+    // TC-07b-unit: `#` inside single-quoted string is NOT treated as comment → URL still matched
+    #[test]
+    fn url_match_tc07b_has_url_match_hash_in_single_quoted_string_is_not_comment() {
+        // Given: source containing `log('# /headers endpoint')`
+        //        where `#` appears inside a single-quoted string literal
+        // When: has_url_match is called with the regex for "^/headers$"
+        // Then: returns true (# inside single-quoted string must not trigger comment stripping)
+        let source = r#"
+log('# /headers endpoint')
+"#;
+        let regex = regex::Regex::new(r"^/headers$").expect("should compile");
+        assert!(
+            has_url_match(source, &regex),
+            "has_url_match should return true: '/headers' is inside a single-quoted string, not a comment"
         );
     }
 
