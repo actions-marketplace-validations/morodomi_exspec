@@ -384,7 +384,8 @@ fn route_path_to_regex(path: &str) -> Option<regex::Regex> {
             i = next;
         }
     }
-    pattern.push('$');
+    // Allow an optional query string after the path (e.g. '/connect?token=abc').
+    pattern.push_str("(\\?.*)?$");
 
     // Reject patterns that are only anchors (path was empty after processing)
     if pattern == "^$" {
@@ -3587,6 +3588,34 @@ log('# /headers endpoint')
         assert!(
             has_url_match(source, &regex),
             "has_url_match should return true: '/headers' is inside a single-quoted string, not a comment"
+        );
+    }
+
+    // TC-08: URL with query parameter matches route path
+    #[test]
+    fn url_match_tc08_query_parameter_does_not_prevent_match() {
+        // Given: source containing '/connect?token=abc' (query parameter appended)
+        // When: has_url_match with regex for "^/connect...$"
+        // Then: true (query string must not prevent matching)
+        let source = r#"$this->get('/connect?token=abc')"#;
+        let regex = route_path_to_regex("/connect").expect("should compile");
+        assert!(
+            has_url_match(source, &regex),
+            "has_url_match should match '/connect?token=abc' against route '/connect'"
+        );
+    }
+
+    // TC-09: URL without query parameter still matches (regression guard)
+    #[test]
+    fn url_match_tc09_no_query_parameter_still_matches() {
+        // Given: source containing '/connect' (no query parameter)
+        // When: has_url_match with regex for "^/connect...$"
+        // Then: true
+        let source = r#"$this->get('/connect')"#;
+        let regex = route_path_to_regex("/connect").expect("should compile");
+        assert!(
+            has_url_match(source, &regex),
+            "has_url_match should match '/connect' without query parameter"
         );
     }
 
