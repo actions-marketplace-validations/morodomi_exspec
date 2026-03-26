@@ -66,7 +66,7 @@ Goal: 自社プロダクト (private) で dogfooding し、実用上の FP/FN �
 | P2 | #127 Python barrel suppression per-(test, prod) scope | Precision refinement |
 | P2 | Rust crate root barrel re-export resolution | tokio/clap hard-case improvement。ship criteria には不要 |
 | P2 | GitHub Action marketplace | CI 統合。ユーザー獲得 |
-| P2 | Closure route coverage via route name + URL path matching | Laravel `route('name')` + Flask/Django direct URL in test client calls。21 unmappable routes in sr108 |
+| P2 | Closure route coverage via route name + URL path matching | Laravel `route('name')` + Flask/Django direct URL in test client calls。21 unmappable routes in dogfooding project |
 | P2 | Route gap_reasons expansion (no_error_test, low_assertion_density) | #211 の gap_reasons フレームワーク上に構築。route ごとのテスト品質分析 |
 | P3 | #93 PHP PSR-4 multi-segment namespace resolution | GT audit FP にmulti-segment起因なし |
 | P3 | #132 Phase 19 DISCOVERED (performance, maintainability) | Internal cleanup |
