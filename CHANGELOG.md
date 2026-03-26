@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.5.2 (2026-03-27)
+
+Route coverage dogfooding across 6 OSS projects (httpbin, Monica, Koel, conduit, cal.com, fastapi-users). 3 bug fixes + 5 features for route coverage matching.
+
+### Features
+
+- **Route coverage status + gap_reasons**: Observe output now includes per-route `status` (covered/gap/unmappable) and `gap_reasons` array. (#211)
+- **Closure route coverage via URL path matching**: Test source files are scanned for URL string literals to match routes without handler-based mapping. (#212)
+- **Flask Blueprint route extraction**: Flask `@bp.route()` with Blueprint `url_prefix` support. (#210)
+- **PHP Laravel route extraction**: `Route::get/post/...` extraction from `routes/*.php`. (#208)
+- **Laravel route-to-test coverage mapping**: Controller class name matching for route coverage. (#209)
+- **Multi-style route parameter support**: `<dynamic>`, `<word>`, `:param` styles now handled in addition to `{param}`. cal.com coverage 3.9%->54.1%. (#218)
+
+### Bug Fixes
+
+- **Comment-aware URL path matching**: Line comments (`#`, `//`) with apostrophes no longer corrupt the quote scanner. httpbin coverage 9.9%->39.5%. (#213)
+- **Flask route parameter normalization**: `<int:id>` -> `{id}` via `normalize_django_path` + colon-to-brace conversion. (#213)
+- **Query parameter tolerance**: URL paths with query strings (`/connect?token=abc`) now match route paths. Koel coverage +9 routes. (#217)
+
+### Dogfooding Results
+
+| Project | Language | Coverage |
+|---------|----------|----------|
+| httpbin | Flask | 32/81 (39.5%) |
+| Koel | Laravel | 65/96 (67.7%) |
+| cal.com | Next.js/NestJS | 193/357 (54.1%) |
+| fastapi-users | FastAPI | 14/18 (77.8%) |
+
+Precision 100% on all tested projects (0 false positives).
+
+### Internal
+
+- 1285 tests (up from 1255 in v0.5.1).
+
 ## v0.5.1 (2026-03-26)
 
 Internal dogfooding across 6 private projects. Major FP reduction and observe recall improvements.
