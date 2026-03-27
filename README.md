@@ -1,8 +1,8 @@
 # exspec
 
-Static test quality linter. Finds assertion-free tests, mock overuse, and untested routes -- fast, multi-language, zero runtime cost.
+Static test quality linter. Verifies that tests are structurally sound as executable specifications -- fast, multi-language, zero runtime cost.
 
-> **v0.6.0**. Dogfooded across 17 projects / 4 languages / ~52,000 tests. Rule IDs and config format are stable.
+> **v0.6.0**. Dogfooded across 15 projects / 4 languages / ~40,000 tests. Rule IDs and config format are stable.
 
 ## Why exspec?
 
@@ -14,7 +14,7 @@ Static test quality linter. Finds assertion-free tests, mock overuse, and untest
 
 exspec catches bad test patterns that coverage tools miss: tests with no assertions, excessive mocking, giant test functions, and untested API routes. See [docs/philosophy.md](docs/philosophy.md) for the design rationale.
 
-Validated against 17 real-world OSS projects (~52,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
+Validated against 15 real-world OSS projects (~40,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
 
 ## Install
 
@@ -68,7 +68,7 @@ Score: BLOCK 1 | WARN 1 | INFO 0 | PASS 8
 Use `--format terminal` for concise human-readable output:
 
 ```
-exspec v0.1.2 -- 8 test files, 10 test functions
+exspec v0.6.0 -- 8 test files, 10 test functions
 BLOCK tests/test_example.py:5 T001 assertion-free: test has no assertions
 WARN  tests/test_example.py:20 T002 mock-overuse: 6 mocks (6 classes), threshold: 5 mocks / 3 classes
 Score: BLOCK 1 | WARN 1 | INFO 0 | PASS 8
@@ -113,7 +113,7 @@ exspec observe --lang rust --format json .  # JSON for CI
 ### What it does
 
 1. **File mapping**: Maps test files to production files via filename convention (Layer 1) and import tracing (Layer 2)
-2. **Route coverage** (TypeScript/NestJS): Detects controller routes and shows which have test coverage
+2. **Route coverage** (NestJS, Flask, FastAPI, Laravel, Django): Detects routes and shows which have test coverage
 3. **Gap detection**: Lists unmapped production files (potential test gaps)
 
 ### Observe flags
@@ -140,7 +140,7 @@ See [docs/dogfooding-results.md](docs/dogfooding-results.md) for full details.
 
 ## Gradual Adoption
 
-exspec works out of the box. Only **T001** (assertion-free) is BLOCK severity -- the rest are WARN or INFO and won't fail your CI.
+exspec runs immediately with sensible defaults. Only **T001** (assertion-free) is BLOCK severity -- the rest are WARN or INFO and won't fail your CI. Helper-heavy codebases (e.g., Laravel with Mockery) may need `custom_patterns` tuning for T001; run `exspec init` to auto-detect these.
 
 Tier 2 rules (T101-T110) are all INFO severity: advisory signals, not hard gates. Disable any that don't fit your project:
 
@@ -238,7 +238,7 @@ See [docs/known-constraints.md](docs/known-constraints.md) for details, workarou
 | ripgrep | Rust | 16 | 0 | ~330 tests in macros |
 | Koel | PHP | 206 | 19 | Mockery expects |
 
-### Route coverage dogfooding (6 projects, Precision 100%)
+### Route coverage dogfooding (4 projects, Precision 100%)
 
 | Project | Framework | Routes | Covered | Coverage |
 |---------|-----------|--------|---------|----------|

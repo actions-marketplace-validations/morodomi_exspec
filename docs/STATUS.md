@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-v0.5.0-dev. Rust P=100%, R=50.8% (tokio hard-case) / R=91.7% (tower post-#199, ship criteria PASS). PHP **stable** P~100%, R=88.6% (per-language ship criteria R>=85% PASS).
+v0.6.0. All 4 languages stable. `exspec init` shipped. Route coverage dogfooded on 6 OSS projects (Precision 100%).
 
 observe TypeScript: P=100%, R=91% (stable). Python: P=98.2%, R=96.8% (stable). Rust: **P=100%**, R=50.8% (tokio 52-file GT) / R=14.3% (clap 91-file GT) / **R=91.7% (tower 24-file GT, post-#199, ship criteria PASS)** (tower: stable. tokio/clap: hard-case experimental). PHP: **P~100%, R=88.6%** (808/912, **stable**. per-language ship criteria P>=98% R>=85% PASS. structural ceiling: 104 FN = parent class/IoC/string literal patterns). Lint: 17 active rules, 4 languages, same-file helper tracing enabled. Default output: ai-prompt.
 
