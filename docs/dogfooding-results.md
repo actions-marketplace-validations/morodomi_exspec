@@ -1,6 +1,6 @@
 # Dogfooding Results
 
-Latest: 2026-03-25, exspec v0.5.0-dev (post-#199 barrel self-match fix, tower R=91.7%)
+Latest: 2026-03-27, exspec v0.6.0
 Initial: 2026-03-09, exspec v0.1.0 (commit 5957cd0)
 
 ## Rust observe post-#199 barrel self-match (2026-03-25)

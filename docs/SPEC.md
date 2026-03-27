@@ -488,10 +488,10 @@ INFO tests/test_api.py  T008 no-contract (no Pydantic/Pandera)
 
 ## Output Format Specification
 
-### Terminal (default)
+### Terminal
 
 ```
-exspec v0.1.0 -- 42 test files, 187 test functions
+exspec v0.6.0 -- 42 test files, 187 test functions
 
 BLOCK tests/test_api.py:78       T001 assertion-free
 WARN  tests/test_predict.py:45   T002 mock-overuse (6 mocks across 4 classes)

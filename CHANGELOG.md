@@ -18,7 +18,7 @@ New `exspec init` subcommand for zero-friction onboarding.
 
 ## v0.5.2 (2026-03-27)
 
-Route coverage dogfooding across 6 OSS projects (httpbin, Monica, Koel, conduit, cal.com, fastapi-users). 3 bug fixes + 5 features for route coverage matching.
+Route coverage dogfooding across 6 OSS projects (4 with sufficient tests: httpbin, Koel, cal.com, fastapi-users). 3 bug fixes + 5 features for route coverage matching.
 
 ### Features
 

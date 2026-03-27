@@ -1,8 +1,8 @@
 # exspec
 
-Static test quality linter. Verifies that tests are structurally sound as executable specifications -- fast, multi-language, zero runtime cost.
+Static test quality linter. Verifies that tests are structurally sound as executable specifications -- fast, multi-language, zero LLM cost.
 
-> **v0.6.0**. Dogfooded across 15 projects / 4 languages / ~40,000 tests. Rule IDs and config format are stable.
+> **v0.6.0**. Dogfooded across 14 OSS projects / 4 languages / ~40,000 tests. Rule IDs and config format are stable.
 
 ## Why exspec?
 
@@ -14,7 +14,7 @@ Static test quality linter. Verifies that tests are structurally sound as execut
 
 exspec catches bad test patterns that coverage tools miss: tests with no assertions, excessive mocking, giant test functions, and untested API routes. See [docs/philosophy.md](docs/philosophy.md) for the design rationale.
 
-Validated against 15 real-world OSS projects (~40,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
+Validated against 14 real-world OSS projects (~40,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
 
 ## Install
 
@@ -222,7 +222,7 @@ See [docs/known-constraints.md](docs/known-constraints.md) for details, workarou
 
 ## Validation
 
-### Lint dogfooding (11 projects, ~52k tests)
+### Lint dogfooding (11 projects, ~40k tests)
 
 | Project | Language | Tests | BLOCK | Primary Cause |
 |---------|----------|-------|-------|---------------|
