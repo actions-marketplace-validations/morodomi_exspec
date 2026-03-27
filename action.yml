@@ -1,4 +1,4 @@
-name: 'exspec'
+name: 'exspec-lint'
 description: 'Static test quality linter for executable specifications'
 branding:
   icon: 'check-circle'
