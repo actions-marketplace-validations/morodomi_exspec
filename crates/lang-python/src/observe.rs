@@ -1005,7 +1005,7 @@ impl PythonExtractor {
                             {
                                 continue;
                             }
-                            let sym_slice = &[sym.clone()];
+                            let sym_slice = std::slice::from_ref(sym);
                             let before = all_matched.clone();
                             exspec_core::observe::collect_import_matches(
                                 self,
