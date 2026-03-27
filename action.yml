@@ -1,0 +1,54 @@
+name: 'exspec'
+description: 'Static test quality linter for executable specifications'
+branding:
+  icon: 'check-circle'
+  color: 'green'
+inputs:
+  path:
+    description: 'Path to analyze'
+    default: '.'
+  lang:
+    description: 'Language to analyze (python, typescript, php, rust)'
+    required: true
+  format:
+    description: 'Output format (terminal, json, sarif, ai-prompt)'
+    default: 'terminal'
+  strict:
+    description: 'Fail on WARN violations (not just BLOCK)'
+    default: 'false'
+  version:
+    description: 'exspec version to install (e.g., "0.6.0", or "latest")'
+    default: 'latest'
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.cargo/bin/exspec
+        key: exspec-${{ inputs.version }}-${{ runner.os }}
+    - name: Install exspec
+      shell: bash
+      run: |
+        if command -v exspec &>/dev/null; then
+          echo "exspec already installed (cached)"
+        elif [ "${{ inputs.version }}" = "latest" ]; then
+          cargo install exspec
+        else
+          cargo install "exspec@${{ inputs.version }}"
+        fi
+    - name: Run exspec
+      shell: bash
+      run: |
+        ARGS="--lang ${{ inputs.lang }} --format ${{ inputs.format }}"
+        if [ "${{ inputs.strict }}" = "true" ]; then
+          ARGS="$ARGS --strict"
+        fi
+        exspec $ARGS "${{ inputs.path }}"

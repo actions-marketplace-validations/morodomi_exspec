@@ -9,9 +9,9 @@
 
 By default, only BLOCK violations (T001) cause a non-zero exit. Use `--strict` to also fail on WARN.
 
-## GitHub Actions (SARIF)
+## GitHub Actions
 
-Upload results to GitHub Code Scanning for inline PR annotations:
+### Using the action
 
 ```yaml
 # .github/workflows/exspec.yml
@@ -22,8 +22,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo install exspec
-      - run: exspec --format sarif . > results.sarif
+      - uses: morodomi/exspec@v1
+        with:
+          lang: python
+```
+
+### Action inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `lang` | (required) | Language: `python`, `typescript`, `php`, `rust` |
+| `path` | `.` | Path to analyze |
+| `format` | `terminal` | Output format: `terminal`, `json`, `sarif`, `ai-prompt` |
+| `strict` | `false` | Fail on WARN (not just BLOCK) |
+| `version` | `latest` | exspec version to install |
+
+### SARIF (inline PR annotations)
+
+```yaml
+      - uses: morodomi/exspec@v1
+        with:
+          lang: python
+          format: sarif
+        continue-on-error: true
       - uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif
@@ -31,11 +52,11 @@ jobs:
 
 ## Simple CI (exit code)
 
-For any CI system:
+For any CI system (without the action):
 
 ```yaml
 - run: cargo install exspec
-- run: exspec .
+- run: exspec --lang python .
 ```
 
 Use `--strict` to also fail on WARN:

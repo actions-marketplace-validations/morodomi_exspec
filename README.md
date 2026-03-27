@@ -28,6 +28,35 @@ Or install from source:
 cargo install --git https://github.com/morodomi/exspec.git
 ```
 
+## GitHub Actions
+
+```yaml
+# .github/workflows/exspec.yml
+name: Test Quality
+on: [pull_request]
+jobs:
+  exspec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: morodomi/exspec@v1
+        with:
+          lang: python
+```
+
+For SARIF upload (inline PR annotations):
+
+```yaml
+      - uses: morodomi/exspec@v1
+        with:
+          lang: python
+          format: sarif
+        continue-on-error: true
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+```
+
 ## Quick Start
 
 ```bash
