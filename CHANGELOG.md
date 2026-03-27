@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.0 (2026-03-27)
+
+New `exspec init` subcommand for zero-friction onboarding.
+
+### Features
+
+- **`exspec init`**: Auto-detect project languages and frameworks, generate optimal `.exspec.toml`. (#220)
+  - **Language detection**: Python (pyproject.toml/requirements.txt/setup.py), TypeScript (package.json), PHP (composer.json), Rust (Cargo.toml)
+  - **Framework detection**: pytest, Django, Flask, FastAPI, Jest, Vitest, NestJS, PHPUnit, Laravel, Pest
+  - **Auto custom_patterns**: Laravel (expects/shouldReceive/shouldBeCalled), Pest (expect(), pytest (mock.assert_*)
+  - **Flags**: `--dry-run` (preview without writing), `--force` (overwrite existing config)
+
+### Internal
+
+- 1303 tests (up from 1285 in v0.5.2).
+
 ## v0.5.2 (2026-03-27)
 
 Route coverage dogfooding across 6 OSS projects (httpbin, Monica, Koel, conduit, cal.com, fastapi-users). 3 bug fixes + 5 features for route coverage matching.
