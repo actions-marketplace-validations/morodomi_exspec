@@ -2,7 +2,7 @@
 
 ## 1. One Sentence
 
-Tests are executable specifications. exspec statically verifies whether tests are structurally sound as specifications -- fast, language-agnostic, zero LLM cost.
+Tests are executable specifications. exspec statically verifies whether tests are structurally sound as specifications -- fast, multi-language, zero LLM cost.
 
 ## 2. Goal / Non-Goals
 
