@@ -930,68 +930,10 @@ def test_invalid_input():
 - TypeScript: `.toThrow()`, `.toThrowError()`, `.rejects`
 - PHP/Rust: has_error_test = true 固定 (deferred)
 
-### T104: hardcoded-only
+### T104: hardcoded-only (REMOVED)
 
-テスト関数内のアサーションが全てハードコードリテラルのみで、変数参照がない。
-
-**Default**: INFO
-**Threshold**: なし (binary)
-
-#### Python -- Violation
-
-```python
-# fixtures/python/t104_violation.py
-def test_add():
-    assert add(1, 2) == 3
-    assert add(0, 0) == 0
-```
-
-#### Python -- Pass
-
-```python
-# fixtures/python/t104_pass_variable.py
-def test_add():
-    result = add(1, 2)
-    assert result == 3
-```
-
-```python
-# fixtures/python/t104_pass_computed.py
-def test_roundtrip():
-    data = b"hello"
-    assert decode(encode(data)) == data
-```
-
-#### TypeScript -- Violation
-
-```typescript
-// fixtures/typescript/t104_violation.test.ts
-test('add', () => {
-  expect(add(1, 2)).toBe(3);
-  expect(add(0, 0)).toBe(0);
-});
-```
-
-#### TypeScript -- Pass
-
-```typescript
-// fixtures/typescript/t104_pass_variable.test.ts
-test('add', () => {
-  const result = add(1, 2);
-  expect(result).toBe(3);
-});
-```
-
-#### Detection
-
-**Node API** (not .scm query) -- callee除外ロジックがquery predicatesでは表現困難なため、Rustで直接ASTウォーク。
-
-`has_non_callee_identifier()` で assertion ノード内を再帰ウォーク:
-1. `identifier` → builtin定数 (Python: True/False/None, TS: undefined/null) でなければ非hardcoded
-2. `call` → `function` フィールドはスキップ (callee)、`arguments` のみ再帰
-3. TypeScript: `has_non_callee_identifier_in_callee_chain()` で `expect(x).toBe(y)` の callee chain を辿りながら各 level の arguments をチェック
-
-**スコープ外**: PHP/Rust: hardcoded_only = false 固定 (deferred)
+> Deprecated and removed in Phase 5.5. Replaced by T106 (duplicate-literal-assertion).
+> See STATUS.md for removal rationale.
 
 ### T105: deterministic-no-metamorphic
 

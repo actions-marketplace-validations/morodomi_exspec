@@ -1,20 +1,20 @@
 # exspec
 
-Static analyzer for test design quality. Verifies that tests function as executable specifications -- fast, language-agnostic, zero LLM cost.
+Static test quality linter. Finds assertion-free tests, mock overuse, and untested routes -- fast, multi-language, zero runtime cost.
 
-> **Public beta** (v0.5.0). Dogfooded across 12 projects / 4 languages / ~40,000 tests. Not production-ready -- rule IDs, severity levels, and config format may change.
+> **v0.6.0**. Dogfooded across 17 projects / 4 languages / ~52,000 tests. Rule IDs and config format are stable.
 
 ## Why exspec?
 
-| Tool | Focus | exspec's Niche |
-|------|-------|----------------|
-| SonarQube | Code coverage | Test **design** quality |
-| Mutation testing | Fault detection (slow) | **Static** analysis (fast) |
-| similarity | Duplicate detection | Specification quality |
+| Tool | What it measures | exspec's angle |
+|------|-----------------|----------------|
+| SonarQube | Code quality + coverage metrics | Test **structural** quality (assertion density, mock ratio, test size) |
+| Mutation testing | Test kill rate (slow, runtime) | **Static** analysis (fast, no runtime) |
+| Coverage (lcov) | Line/branch coverage | Test-to-code **mapping** + route gap detection |
 
-exspec checks whether your tests are well-designed *specifications*, not just code that runs. It enforces 4 properties: **What not How**, **Living Documentation**, **Compositional**, **Single Source of Truth**. See [docs/philosophy.md](docs/philosophy.md) for the full rationale.
+exspec catches bad test patterns that coverage tools miss: tests with no assertions, excessive mocking, giant test functions, and untested API routes. See [docs/philosophy.md](docs/philosophy.md) for the design rationale.
 
-Validated against 12 real-world OSS projects (~40,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
+Validated against 17 real-world OSS projects (~52,000 tests across Python, TypeScript, PHP, Rust). See [Validation](#validation) below.
 
 ## Install
 
@@ -32,7 +32,7 @@ cargo install --git https://github.com/morodomi/exspec.git
 
 ```bash
 exspec .                              # Analyze current directory
-exspec init --lang python,typescript  # Generate .exspec.toml
+exspec init                           # Auto-detect and generate .exspec.toml
 exspec --lang python .                # Analyze specific language
 exspec --strict .                     # WARN also fails
 ```
@@ -140,15 +140,18 @@ See [docs/dogfooding-results.md](docs/dogfooding-results.md) for full details.
 
 ## Gradual Adoption
 
-Start with Tier 1 only. Disable Tier 2 until your codebase is clean:
+exspec works out of the box. Only **T001** (assertion-free) is BLOCK severity -- the rest are WARN or INFO and won't fail your CI.
+
+Tier 2 rules (T101-T110) are all INFO severity: advisory signals, not hard gates. Disable any that don't fit your project:
 
 ```toml
-# .exspec.toml
-[rules]
-disable = ["T101", "T102", "T103", "T105", "T106", "T107", "T108", "T109", "T110"]
+# .exspec.toml -- only disable what's noisy for you
+[rules.severity]
+T108 = "off"  # disable wait-and-see if sleep is intentional
+T109 = "off"  # disable undescriptive-test-name
 ```
 
-Once Tier 1 passes, enable Tier 2 rules one at a time. Use inline suppression for known exceptions:
+Use inline suppression for known exceptions:
 
 ```python
 # exspec-ignore: T002
@@ -219,20 +222,30 @@ See [docs/known-constraints.md](docs/known-constraints.md) for details, workarou
 
 ## Validation
 
-Dogfooded across 11 projects (~40k tests):
+### Lint dogfooding (11 projects, ~52k tests)
 
 | Project | Language | Tests | BLOCK | Primary Cause |
 |---------|----------|-------|-------|---------------|
-| exspec (self) | Rust | 10 | 0 | N/A |
+| exspec (self) | Rust | 1,303 | 0 | N/A |
 | requests | Python | 339 | 10 | helper delegation |
 | fastapi | Python | 2,155 | 15 | helper delegation |
+| django | Python | 1,048 | 22 | helper delegation |
 | nestjs | TypeScript | 2,679 | 13 | helper delegation |
 | laravel | PHP | 11,044 | 222 | helper delegation |
 | symfony | PHP | 17,204 | 616 | helper delegation |
-| ripgrep | Rust | 16 | 0 | ~330 tests in macros (not detected) |
 | tokio | Rust | 1,594 | 257 | select! token_tree |
 | clap | Rust | 1,455 | 71 | helper delegation |
-| django | Python | 1,048 | 22 | helper delegation |
+| ripgrep | Rust | 16 | 0 | ~330 tests in macros |
+| Koel | PHP | 206 | 19 | Mockery expects |
+
+### Route coverage dogfooding (6 projects, Precision 100%)
+
+| Project | Framework | Routes | Covered | Coverage |
+|---------|-----------|--------|---------|----------|
+| httpbin | Flask | 81 | 32 | 39.5% |
+| Koel | Laravel | 96 | 65 | 67.7% |
+| cal.com | NestJS | 357 | 193 | 54.1% |
+| fastapi-users | FastAPI | 18 | 14 | 77.8% |
 
 Full results: [docs/dogfooding-results.md](docs/dogfooding-results.md)
 

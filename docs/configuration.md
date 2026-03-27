@@ -5,7 +5,9 @@ exspec is configured via `.exspec.toml` in your project root.
 ## Generate a starter config
 
 ```bash
-exspec init --lang python,typescript
+exspec init              # Auto-detect languages and frameworks
+exspec init --dry-run    # Preview without writing
+exspec init --force      # Overwrite existing config
 ```
 
 ## Full example
@@ -105,7 +107,7 @@ Custom patterns use substring matching. A test function containing any of these 
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `max_fan_out_percent` | float | `20.0` | Max percentage of test files a single production file can be mapped to before being excluded. Set to `100.0` to effectively disable. |
+| `max_fan_out_percent` | float | `6.5` | Max percentage of test files a single production file can be mapped to before being excluded. Set to `100.0` to effectively disable. |
 
 The fan-out filter prevents high-frequency utility classes (e.g., `Str.php`, `Collection.php`) from being mapped to every test that imports them incidentally. Production files exceeding the threshold have their test mappings cleared.
 
@@ -113,7 +115,7 @@ Use `--no-fan-out-filter` CLI flag to disable the filter entirely.
 
 ```toml
 [observe]
-max_fan_out_percent = 10.0  # stricter threshold (default: 20.0)
+max_fan_out_percent = 10.0  # stricter threshold (default: 6.5)
 ```
 
 ### `[output]`
