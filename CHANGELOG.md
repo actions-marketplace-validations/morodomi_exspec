@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.0.0 (2026-03-27)
+
+First stable release. GitHub Action for CI integration. Documentation consistency overhaul.
+
+### Features
+
+- **GitHub Action**: `uses: morodomi/exspec@v1` with inputs for lang, path, format, strict, version. Includes cargo caching. (#220)
+- **CI workflow**: Self-dogfooding CI pipeline (test + clippy + fmt + exspec). (#220)
+
+### Documentation
+
+- CONSTITUTION: "language-agnostic" -> "multi-language" (accurate for 4-language support)
+- README: honest project counts (14 projects / ~40k tests), tagline aligned with CONSTITUTION
+- README: GitHub Actions usage examples with SARIF integration
+- Comprehensive consistency review (Codex + Socrates adversarial review, 3 rounds)
+
+### Stability
+
+- Rule IDs (T001-T110), config format (.exspec.toml), and output formats (JSON/SARIF/terminal/ai-prompt) are now stable
+- Breaking changes to these will follow semver (major version bump)
+
 ## v0.6.0 (2026-03-27)
 
 New `exspec init` subcommand for zero-friction onboarding.
